@@ -1,0 +1,71 @@
+{
+  "id": "doemitz-altstadt",
+  "source": {
+    "api_base": "https://api.openstreetmap.org/api/0.6",
+    "attribution": "© OpenStreetMap contributors",
+    "attribution_url": "https://www.openstreetmap.org/copyright",
+    "license": "ODbL 1.0",
+    "license_url": "https://opendatacommons.org/licenses/odbl/1-0/"
+  },
+  "bounds_lonlat": [
+    11.2428,
+    53.1398,
+    11.2546,
+    53.1455
+  ],
+  "raw_files": [
+    {
+      "name": "map.osm",
+      "url": "https://api.openstreetmap.org/api/0.6/map?bbox=11.2428,53.1398,11.2546,53.1455",
+      "sha256": "8d89218bac24d7fffa017b67ec9c18ea1185dfe464df53e26bb1a16a4bfa1806"
+    },
+    {
+      "name": "relation-1809795.osm",
+      "url": "https://api.openstreetmap.org/api/0.6/relation/1809795/full",
+      "sha256": "ae4495fdad4e730716658651c0ba206481715f993d1968e10ad2ba805988346f"
+    }
+  ],
+  "counts": {
+    "roads": 146,
+    "buildings": 645,
+    "water": 3
+  },
+  "geometry_issues": [],
+  "reference": {
+    "description": "Goethestraße zwischen Rathausplatz und Fritz-Reuter-Straße",
+    "way_id": 25642325,
+    "node_ids": [
+      500046230,
+      277309010
+    ],
+    "maximum_relative_error": 0.02,
+    "local_points_m": [
+      [
+        -36.62322878069244,
+        -228.2474663639441
+      ],
+      [
+        -9.586443159467308,
+        -205.35134554747492
+      ]
+    ],
+    "geodesic_m": 35.4159,
+    "projected_m": 35.4291,
+    "relative_error_percent": 0.0373
+  },
+  "recorded_on": "2026-11-19",
+  "tools": {
+    "python": "3.12.10",
+    "pyproj": "3.7.2",
+    "proj": "9.5.1",
+    "shapely": "2.1.2",
+    "geos": "3.13.1"
+  },
+  "export_sha256": {
+    "buildings.geojson": "010258e0fd3ff4dcf496642c1a8cd1c5a49f8c8cb5e8559a83252819ad72ff06",
+    "import-report.json": "7a9c6951156fa6278fa776b3d1eb85730383f56bf25a1af717fe50b90162e3a4",
+    "roads.geojson": "e9db56835c9b0669dd868aa2daf6897e1c33942b8e9fdc9a5809c76e9f048761",
+    "scene.json": "d25b63c6c9fe0594dd640d6ffc130639662f23d7930d009139ffe931d266c58f",
+    "water.geojson": "c287ac73a804229b22e50bc969f302be9d5675908bdba85d904d15061f108d4a"
+  }
+}
