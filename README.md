@@ -1,6 +1,6 @@
 # Dömitz – Living City
 
-Eine stilisierte 3D-Stadtsimulation für Windows im Maßstab 1:1. Sprint 1 beginnt mit einem Ausschnitt der Dömitzer Altstadt einschließlich Festung und Elbufer.
+Eine stilisierte 3D-Stadtsimulation für Windows im Maßstab 1:1. Der erste Ausschnitt umfasst die Dömitzer Altstadt einschließlich Festung und Elbufer.
 
 ## Geodaten unter Windows erzeugen
 
@@ -28,9 +28,10 @@ Kartendaten © OpenStreetMap contributors, ODbL 1.0. [OpenStreetMap – Urheberr
 
 ## Projektstand
 
-Das Git-Repository und der Geodatenimport sind eingerichtet. Für das UE5-Projekt ist der Start mit der C++-Vorlage Third Person vorgesehen. [Unreal-Einrichtung](unreal/README.md)
+Das Unreal-Projekt öffnet die Altstadt-Karte als Startlevel. Im Editor startet **Play** die Third-Person-Figur an der Goethestraße. Dort lassen sich in Sprint 2 die ersten erhöhten Gehwege begehen. Die Demo verwendet einfache Gebäudekörper und eine flache Testgrundfläche. [Unreal-Projekt](unreal/DoemitzLivingCity/DoemitzLivingCity.uproject) · [Unreal-Einrichtung und Kartenimport](unreal/README.md)
 
 - [Produktanforderungen](docs/PRD.md)
 - [Technische Architektur](docs/ARCHITECTURE.md)
 - [Datenquellen und Exportvertrag](docs/GEO_DATA.md)
 - [Sprint 1 und Abnahme](docs/SPRINT_01.md)
+- [Sprint 2 – Straßen, Gehwege und erstes Fahrzeug](docs/SPRINT_02.md)

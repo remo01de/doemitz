@@ -1,0 +1,21 @@
+{
+  "scene_id": "doemitz-altstadt",
+  "sidewalk_widths_m": {
+    "osm:way:25642325": 1.6
+  },
+  "vehicle": {
+    "id": "altstadt_compact_01",
+    "route_id": "altstadt_goethestrasse_loop",
+    "road_ids": [
+      "osm:way:25642325",
+      "osm:way:40824867",
+      "osm:way:25642221",
+      "osm:way:157877530",
+      "osm:way:372055118",
+      "osm:way:25642335"
+    ],
+    "speed_kmh": 18,
+    "start_distance_m": 72,
+    "corner_trim_m": 4
+  }
+}

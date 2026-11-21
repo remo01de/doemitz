@@ -8,6 +8,7 @@ __pycache__/
 
 # Unreal Engine und Visual Studio
 /unreal/**/Binaries/
+/unreal/**/Build/Windows/FileOpenOrder/
 /unreal/**/DerivedDataCache/
 /unreal/**/Intermediate/
 /unreal/**/Saved/

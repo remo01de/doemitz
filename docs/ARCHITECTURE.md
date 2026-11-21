@@ -4,8 +4,8 @@
 
 1. Python lädt einen begrenzten OSM-Ausschnitt einschließlich benötigter Multipolygon-Bestandteile. Der Offline-Build filtert die Sprint-Layer, beschneidet sie auf den Ausschnitt und prüft die Geometrie.
 2. Die Pipeline projiziert die Geometrie nach ETRS89 / UTM 33N und verschiebt sie zu einem versionierten lokalen Ursprung. `scene.json` ist die Übergabe an die Weltgenerierung. [Koordinaten und Datenvertrag](GEO_DATA.md)
-3. Die geplante Mesh-Stufe erzeugt aus Flächen und Straßenachsen Gelände, Gebäudekörper und Straßen. Sie berücksichtigt Polygonlöcher, erzeugt Kollisionen und dokumentiert abgeleitete Gebäudehöhen und Fahrbahnbreiten.
-4. Ein Editor-Import soll die erzeugten Assets anhand ihrer IDs aktualisieren. World Partition verwaltet die räumliche Zuordnung der Actors. Projektweit bleibt `X = Nord`, `Y = Ost` und `Z = Höhe` beim Übergang in das linkshändige Unreal-System. Jeder Meter wird zu 100 Unreal Units. Die Achsenabbildung vertauscht die beiden horizontalen Achsen gegenüber `[Ost, Nord]` und muss bei Flächennormalen und Dreiecksreihenfolge berücksichtigt werden.
+3. Die Mesh-Stufe erzeugt aus Flächen und Straßenachsen eine flache Testgrundfläche, Wasser, Gebäudekörper und Straßen. Sie trennt Straßenmaterialien über überschneidungsfreie Flächen und ergänzt im konfigurierten Pilotabschnitt erhöhte Gehwege. Sie trianguliert Flächen mit ihren Polygonlöchern und vermerkt die Herkunft der Höhen und Breiten im Mesh-Export.
+4. Der Editor-Import aktualisiert die generierten Assets und Actors. Der 1:1-Übergang verwendet `X = Nord`, `Y = Ost` und `Z = Höhe` mit 100 Unreal Units pro Meter. Der Koordinatentausch berücksichtigt die Dreiecksreihenfolge beim Übergang in das linkshändige Unreal-System. Die Altstadt-Karte verwendet World Partition. Die zusammengefassten Meshes der ersten Fassung bleiben für den gesamten Ausschnitt geladen. Boden, Gebäudewände und Dächer kollidieren in Unreal.
 
 ## Unreal-Laufzeit
 
