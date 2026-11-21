@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Economy/DoemitzEconomyDataAsset.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "DoemitzSimulationSubsystem.generated.h"
 
@@ -64,7 +65,19 @@ struct DOEMITZLIVINGCITY_API FDoemitzPlaceDefinition
 	FName Kind;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation")
+	FName EconomyCategory;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation")
 	FVector AccessLocation = FVector::ZeroVector;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation")
+	FName EntranceId;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation")
+	FVector EntranceLocation = FVector::ZeroVector;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation")
+	FString EntranceSource;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation")
 	bool bAlwaysOpen = false;
@@ -317,8 +330,67 @@ public:
 		const TArray<FDoemitzVehicleDefinition>& InVehicles,
 		const TArray<FDoemitzCrossingDefinition>& InCrossings = TArray<FDoemitzCrossingDefinition>());
 
+	void ConfigureEconomy(const UDoemitzEconomyDataAsset* InEconomyData);
+
 	UFUNCTION(BlueprintPure, Category = "Simulation", meta = (WorldContext = "WorldContextObject"))
 	static UDoemitzSimulationSubsystem* Get(const UObject* WorldContextObject);
+
+	UFUNCTION(BlueprintPure, Category = "Economy")
+	static FString FormatCentsEur(int64 AmountCents);
+
+	UFUNCTION(BlueprintPure, Category = "Economy")
+	int64 GetPlayerMoneyCents() const { return PlayerMoneyCents; }
+
+	UFUNCTION(BlueprintCallable, Category = "Economy")
+	void SetPlayerMoneyCentsForTest(int64 NewAmountCents);
+
+	UFUNCTION(BlueprintPure, Category = "Economy")
+	int32 GetLedgerCount() const { return LedgerEntries.Num(); }
+
+	UFUNCTION(BlueprintPure, Category = "Economy")
+	TArray<FDoemitzLedgerEntry> GetLedgerEntries() const { return LedgerEntries; }
+
+	UFUNCTION(BlueprintPure, Category = "Economy")
+	int32 GetInventoryQuantity(FName ItemId) const;
+
+	UFUNCTION(BlueprintPure, Category = "Economy")
+	TArray<FDoemitzInventoryItem> GetAllInventoryItems() const;
+
+	UFUNCTION(BlueprintPure, Category = "Economy")
+	TArray<FDoemitzItemDefinition> GetItemsForPlace(FName PlaceId) const;
+
+	UFUNCTION(BlueprintCallable, Category = "Economy")
+	bool BuyItem(FName PlaceId, FName ItemId, int32 Quantity = 1);
+
+	UFUNCTION(BlueprintPure, Category = "Economy")
+	bool GetJobForPlace(FName PlaceId, FDoemitzJobDefinition& OutJob) const;
+
+	UFUNCTION(BlueprintPure, Category = "Economy")
+	FName GetActiveJobId() const { return ActiveJobId; }
+
+	UFUNCTION(BlueprintPure, Category = "Economy")
+	bool IsWorkingShift() const { return bIsWorkingShift; }
+
+	UFUNCTION(BlueprintCallable, Category = "Economy")
+	bool AcceptJob(FName PlaceId);
+
+	UFUNCTION(BlueprintPure, Category = "Economy")
+	bool CanStartWorkShift(FName PlaceId, FString& OutReason) const;
+
+	UFUNCTION(BlueprintCallable, Category = "Economy")
+	bool StartWorkShift(FName PlaceId);
+
+	UFUNCTION(BlueprintPure, Category = "Economy")
+	bool GetPlaceRevenue(FName PlaceId, int64& OutDailyCents, int64& OutWeeklyCents) const;
+
+	UFUNCTION(BlueprintPure, Category = "Simulation")
+	bool GetPlaceDefinition(FName PlaceId, FDoemitzPlaceDefinition& OutPlace) const;
+
+	UFUNCTION(BlueprintPure, Category = "Simulation")
+	bool FindNearestEntrance(const FVector& QueryLocation, double MaxRadiusCm, FDoemitzPlaceDefinition& OutPlace, double& OutDistanceCm) const;
+
+	UFUNCTION(BlueprintPure, Category = "Simulation")
+	FString GetPlaceOpeningStatusText(FName PlaceId) const;
 
 	UFUNCTION(BlueprintPure, Category = "Simulation")
 	double GetTimeOfDayMinutes() const { return TimeOfDayMinutes; }
@@ -473,6 +545,13 @@ private:
 	void UpdateTraffic(double DeltaSeconds);
 	void ReleaseJunctionReservation(FVehicleRecord& Record);
 
+	void AppendLedgerEntry(FName PlaceId, int64 AmountCents, const FString& Description);
+	void AddPlaceRevenue(FName PlaceId, int64 AmountCents);
+	void RecordCitizenShoppingRevenue(FName CitizenId, FName PlaceId);
+	void UpdateActiveWorkShift();
+	void FinishWorkShift();
+	void ResetEconomyToDefaults();
+
 	bool bIsConfigured = false;
 	double TimeOfDayMinutes = 470.0;
 	double TimeScale = 60.0;
@@ -484,6 +563,24 @@ private:
 	double CoarseUpdateIntervalSeconds = 1.0;
 	FString LastNotification;
 	double NotificationRemainingSeconds = 0.0;
+
+	static constexpr int32 MaxLedgerEntries = 200;
+	int32 EconomySeed = 202609;
+	int64 StartingMoneyCents = 0;
+	int64 PlayerMoneyCents = 0;
+	int32 NextTransactionId = 1;
+	FName ActiveJobId;
+	bool bIsWorkingShift = false;
+	FName ActiveShiftPlaceId;
+	double ShiftActualStartMinute = 0.0;
+	double PreShiftTimeScale = 60.0;
+	TMap<FName, TArray<FDoemitzItemDefinition>> AssortmentsByCategory;
+	TMap<FName, FDoemitzJobDefinition> JobsById;
+	TMap<FName, FName> JobIdByPlace;
+	TArray<FDoemitzLedgerEntry> LedgerEntries;
+	TMap<FName, int32> PlayerInventory;
+	TMap<FName, FDoemitzPlaceRevenue> PlaceRevenues;
+	TSet<FName> CitizenDailyShoppingRecorded;
 
 	TMap<FName, FDoemitzPlaceDefinition> PlacesById;
 	TMap<FName, FDoemitzCitizenRoute> RoutesByKey;

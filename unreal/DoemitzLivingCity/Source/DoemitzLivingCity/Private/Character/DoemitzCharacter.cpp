@@ -2,6 +2,12 @@
 
 #include "EnhancedInputComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
+#include "Interaction/DoemitzInteractionComponent.h"
+
+ADoemitzCharacter::ADoemitzCharacter()
+{
+	InteractionComponent = CreateDefaultSubobject<UDoemitzInteractionComponent>(TEXT("InteractionComponent"));
+}
 
 void ADoemitzCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 {

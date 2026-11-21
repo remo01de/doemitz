@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Economy/DoemitzEconomyDataAsset.h"
 #include "GameFramework/SaveGame.h"
 #include "Simulation/DoemitzSimulationSubsystem.h"
 #include "DoemitzSaveGame.generated.h"
@@ -74,7 +75,7 @@ class DOEMITZLIVINGCITY_API UDoemitzSaveGame : public USaveGame
 	GENERATED_BODY()
 
 public:
-	static constexpr int32 CurrentSchemaVersion = 3;
+	static constexpr int32 CurrentSchemaVersion = 4;
 
 	UPROPERTY(BlueprintReadWrite, Category = "SaveGame")
 	int32 SaveSchemaVersion = CurrentSchemaVersion;
@@ -108,4 +109,22 @@ public:
 
 	UPROPERTY()
 	TArray<FDoemitzSavedVehicle> Vehicles;
+
+	UPROPERTY(BlueprintReadWrite, Category = "SaveGame")
+	int64 PlayerMoneyCents = 0;
+
+	UPROPERTY(BlueprintReadWrite, Category = "SaveGame")
+	int32 NextTransactionId = 1;
+
+	UPROPERTY(BlueprintReadWrite, Category = "SaveGame")
+	FName ActiveJobId;
+
+	UPROPERTY()
+	TArray<FDoemitzLedgerEntry> LedgerEntries;
+
+	UPROPERTY()
+	TArray<FDoemitzInventoryItem> InventoryItems;
+
+	UPROPERTY()
+	TArray<FDoemitzPlaceRevenue> PlaceRevenues;
 };

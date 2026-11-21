@@ -242,6 +242,511 @@ void UDoemitzSimulationSubsystem::ConfigureTrafficNetwork(
 		TrafficSeed, RoadEdgesById.Num(), VehicleRecords.Num(), Crossings.Num());
 }
 
+void UDoemitzSimulationSubsystem::ConfigureEconomy(const UDoemitzEconomyDataAsset* InEconomyData)
+{
+	AssortmentsByCategory.Reset();
+	JobsById.Reset();
+	JobIdByPlace.Reset();
+	EconomySeed = 202609;
+	StartingMoneyCents = 0;
+
+	if (InEconomyData)
+	{
+		EconomySeed = InEconomyData->EconomySeed;
+		StartingMoneyCents = FMath::Max<int64>(0, InEconomyData->StartingMoneyCents);
+		for (const FDoemitzAssortmentDefinition& Group : InEconomyData->Assortments)
+		{
+			if (!Group.Category.IsNone() && !Group.Items.IsEmpty())
+			{
+				AssortmentsByCategory.Add(Group.Category, Group.Items);
+			}
+		}
+		for (const FDoemitzJobDefinition& Job : InEconomyData->Jobs)
+		{
+			if (!Job.JobId.IsNone() && !Job.PlaceId.IsNone())
+			{
+				JobsById.Add(Job.JobId, Job);
+				JobIdByPlace.Add(Job.PlaceId, Job.JobId);
+			}
+		}
+	}
+
+	ResetEconomyToDefaults();
+	UE_LOG(LogTemp, Display, TEXT("Doemitz economy configured: start=%s, %d categories, %d jobs (seed=%d)"),
+		*FormatCentsEur(StartingMoneyCents), AssortmentsByCategory.Num(), JobsById.Num(), EconomySeed);
+}
+
+void UDoemitzSimulationSubsystem::ResetEconomyToDefaults()
+{
+	PlayerMoneyCents = StartingMoneyCents;
+	NextTransactionId = 1;
+	ActiveJobId = NAME_None;
+	bIsWorkingShift = false;
+	ActiveShiftPlaceId = NAME_None;
+	ShiftActualStartMinute = 0.0;
+	LedgerEntries.Reset();
+	PlayerInventory.Reset();
+	PlaceRevenues.Reset();
+	CitizenDailyShoppingRecorded.Reset();
+}
+
+FString UDoemitzSimulationSubsystem::FormatCentsEur(int64 AmountCents)
+{
+	const bool bNegative = AmountCents < 0;
+	const uint64 AbsCents = bNegative ? static_cast<uint64>(-AmountCents) : static_cast<uint64>(AmountCents);
+	const uint64 Euros = AbsCents / 100;
+	const uint64 Cents = AbsCents % 100;
+	return FString::Printf(TEXT("%s%llu,%02llu EUR"), bNegative ? TEXT("-") : TEXT(""), Euros, Cents);
+}
+
+void UDoemitzSimulationSubsystem::SetPlayerMoneyCentsForTest(int64 NewAmountCents)
+{
+	PlayerMoneyCents = FMath::Max<int64>(0, NewAmountCents);
+}
+
+void UDoemitzSimulationSubsystem::AppendLedgerEntry(FName PlaceId, int64 AmountCents, const FString& Description)
+{
+	FDoemitzLedgerEntry Entry;
+	Entry.TransactionId = NextTransactionId++;
+	Entry.DayNumber = DayNumber;
+	Entry.DayOfWeek = DayOfWeek;
+	Entry.MinuteOfDay = TimeOfDayMinutes;
+	Entry.PlaceId = PlaceId;
+	Entry.AmountCents = AmountCents;
+	Entry.Description = Description;
+	LedgerEntries.Add(MoveTemp(Entry));
+	if (LedgerEntries.Num() > MaxLedgerEntries)
+	{
+		LedgerEntries.RemoveAt(0, LedgerEntries.Num() - MaxLedgerEntries);
+	}
+}
+
+void UDoemitzSimulationSubsystem::AddPlaceRevenue(FName PlaceId, int64 AmountCents)
+{
+	if (PlaceId.IsNone() || AmountCents <= 0)
+	{
+		return;
+	}
+	FDoemitzPlaceRevenue& Rev = PlaceRevenues.FindOrAdd(PlaceId);
+	Rev.PlaceId = PlaceId;
+	Rev.DailyRevenueCents += AmountCents;
+	Rev.WeeklyRevenueCents += AmountCents;
+}
+
+int32 UDoemitzSimulationSubsystem::GetInventoryQuantity(FName ItemId) const
+{
+	const int32* Qty = PlayerInventory.Find(ItemId);
+	return Qty ? *Qty : 0;
+}
+
+TArray<FDoemitzInventoryItem> UDoemitzSimulationSubsystem::GetAllInventoryItems() const
+{
+	TArray<FDoemitzInventoryItem> Result;
+	Result.Reserve(PlayerInventory.Num());
+	for (const TPair<FName, int32>& Pair : PlayerInventory)
+	{
+		if (Pair.Value > 0)
+		{
+			FDoemitzInventoryItem Item;
+			Item.ItemId = Pair.Key;
+			Item.Quantity = Pair.Value;
+			Result.Add(Item);
+		}
+	}
+	Result.Sort([](const FDoemitzInventoryItem& A, const FDoemitzInventoryItem& B) {
+		return A.ItemId.LexicalLess(B.ItemId);
+	});
+	return Result;
+}
+
+TArray<FDoemitzItemDefinition> UDoemitzSimulationSubsystem::GetItemsForPlace(FName PlaceId) const
+{
+	const FDoemitzPlaceDefinition* Place = PlacesById.Find(PlaceId);
+	if (!Place)
+	{
+		return {};
+	}
+	const FName Cat = !Place->EconomyCategory.IsNone() ? Place->EconomyCategory : Place->Kind;
+	if (const TArray<FDoemitzItemDefinition>* Items = AssortmentsByCategory.Find(Cat))
+	{
+		return *Items;
+	}
+	if (const TArray<FDoemitzItemDefinition>* Fallback = AssortmentsByCategory.Find(Place->Kind))
+	{
+		return *Fallback;
+	}
+	return {};
+}
+
+bool UDoemitzSimulationSubsystem::BuyItem(FName PlaceId, FName ItemId, int32 Quantity)
+{
+	if (Quantity <= 0 || PlaceId.IsNone() || ItemId.IsNone())
+	{
+		return false;
+	}
+	const FDoemitzPlaceDefinition* Place = PlacesById.Find(PlaceId);
+	if (!Place)
+	{
+		return false;
+	}
+	if (!IsPlaceOpenNow(PlaceId))
+	{
+		SetNotification(FString::Printf(TEXT("%s ist geschlossen (%s)"), *Place->DisplayName, *GetPlaceOpeningStatusText(PlaceId)));
+		return false;
+	}
+
+	const TArray<FDoemitzItemDefinition> Items = GetItemsForPlace(PlaceId);
+	const FDoemitzItemDefinition* FoundItem = Items.FindByPredicate([ItemId](const FDoemitzItemDefinition& Item) {
+		return Item.ItemId == ItemId;
+	});
+	if (!FoundItem || FoundItem->PriceCents <= 0)
+	{
+		return false;
+	}
+
+	const int64 TotalCost = FoundItem->PriceCents * static_cast<int64>(Quantity);
+	if (PlayerMoneyCents < TotalCost)
+	{
+		SetNotification(FString::Printf(
+			TEXT("Nicht genug Geld fuer %s (%s benoetigt, Konto %s)"),
+			*FoundItem->DisplayName,
+			*FormatCentsEur(TotalCost),
+			*FormatCentsEur(PlayerMoneyCents)));
+		return false;
+	}
+
+	PlayerMoneyCents -= TotalCost;
+	PlayerInventory.FindOrAdd(ItemId) += Quantity;
+	AddPlaceRevenue(PlaceId, TotalCost);
+	AppendLedgerEntry(
+		PlaceId,
+		-TotalCost,
+		FString::Printf(TEXT("Kauf %dx %s (%s)"), Quantity, *FoundItem->DisplayName, *Place->DisplayName));
+	SetNotification(FString::Printf(
+		TEXT("Gekauft: %dx %s (-%s)"),
+		Quantity,
+		*FoundItem->DisplayName,
+		*FormatCentsEur(TotalCost)));
+	return true;
+}
+
+bool UDoemitzSimulationSubsystem::GetJobForPlace(FName PlaceId, FDoemitzJobDefinition& OutJob) const
+{
+	if (const FName* JobId = JobIdByPlace.Find(PlaceId))
+	{
+		if (const FDoemitzJobDefinition* Job = JobsById.Find(*JobId))
+		{
+			OutJob = *Job;
+			return true;
+		}
+	}
+	return false;
+}
+
+bool UDoemitzSimulationSubsystem::AcceptJob(FName PlaceId)
+{
+	FDoemitzJobDefinition Job;
+	if (!GetJobForPlace(PlaceId, Job))
+	{
+		return false;
+	}
+	if (!IsPlaceOpenNow(PlaceId))
+	{
+		SetNotification(TEXT("Stelle kann nur waehrend der Oeffnungszeiten angenommen werden"));
+		return false;
+	}
+	ActiveJobId = Job.JobId;
+	SetNotification(FString::Printf(
+		TEXT("Stelle angenommen: %s (%s/Std.)"),
+		*Job.Title,
+		*FormatCentsEur(Job.HourlyWageCents)));
+	return true;
+}
+
+bool UDoemitzSimulationSubsystem::CanStartWorkShift(FName PlaceId, FString& OutReason) const
+{
+	if (bIsWorkingShift)
+	{
+		OutReason = TEXT("Schicht laeuft bereits");
+		return false;
+	}
+	FDoemitzJobDefinition Job;
+	if (!GetJobForPlace(PlaceId, Job))
+	{
+		OutReason = TEXT("Keine Stelle an diesem Ort");
+		return false;
+	}
+	if (ActiveJobId != Job.JobId)
+	{
+		OutReason = TEXT("Stelle noch nicht angenommen");
+		return false;
+	}
+	if (!Job.WorkDays.Contains(DayOfWeek))
+	{
+		OutReason = TEXT("Heute kein Arbeitstag");
+		return false;
+	}
+	const double EarliestStart = FMath::Max(0.0, static_cast<double>(Job.ShiftStartMinute) - 30.0);
+	if (TimeOfDayMinutes < EarliestStart)
+	{
+		const int32 H = Job.ShiftStartMinute / 60;
+		const int32 M = Job.ShiftStartMinute % 60;
+		OutReason = FString::Printf(TEXT("Schicht beginnt erst um %02d:%02d"), H, M);
+		return false;
+	}
+	if (TimeOfDayMinutes >= static_cast<double>(Job.ShiftEndMinute))
+	{
+		OutReason = TEXT("Heutige Schicht bereits vorbei");
+		return false;
+	}
+	OutReason = TEXT("Bereit");
+	return true;
+}
+
+bool UDoemitzSimulationSubsystem::StartWorkShift(FName PlaceId)
+{
+	FString Reason;
+	if (!CanStartWorkShift(PlaceId, Reason))
+	{
+		SetNotification(Reason);
+		return false;
+	}
+	FDoemitzJobDefinition Job;
+	if (!GetJobForPlace(PlaceId, Job))
+	{
+		return false;
+	}
+
+	bIsWorkingShift = true;
+	ActiveShiftPlaceId = PlaceId;
+	ShiftActualStartMinute = FMath::Max(TimeOfDayMinutes, static_cast<double>(Job.ShiftStartMinute));
+	PreShiftTimeScale = TimeScale > 0.0 ? TimeScale : 60.0;
+	TimeScale = 900.0; // 15x fast-forward during shift
+
+	if (UWorld* World = GetWorld())
+	{
+		if (APlayerController* PC = World->GetFirstPlayerController())
+		{
+			PC->SetIgnoreMoveInput(true);
+			if (APawn* Pawn = PC->GetPawn())
+			{
+				Pawn->SetActorHiddenInGame(true);
+			}
+		}
+	}
+
+	const int32 EndH = Job.ShiftEndMinute / 60;
+	const int32 EndM = Job.ShiftEndMinute % 60;
+	SetNotification(FString::Printf(TEXT("Schicht gestartet (%s bis %02d:%02d, 15x)"), *Job.Title, EndH, EndM));
+	return true;
+}
+
+void UDoemitzSimulationSubsystem::UpdateActiveWorkShift()
+{
+	if (!bIsWorkingShift)
+	{
+		return;
+	}
+	const FDoemitzJobDefinition* Job = JobsById.Find(ActiveJobId);
+	if (!Job)
+	{
+		FinishWorkShift();
+		return;
+	}
+	if (TimeOfDayMinutes >= static_cast<double>(Job->ShiftEndMinute))
+	{
+		FinishWorkShift();
+	}
+}
+
+void UDoemitzSimulationSubsystem::FinishWorkShift()
+{
+	if (!bIsWorkingShift)
+	{
+		return;
+	}
+	bIsWorkingShift = false;
+	TimeScale = FMath::Max(60.0, PreShiftTimeScale);
+
+	if (UWorld* World = GetWorld())
+	{
+		if (APlayerController* PC = World->GetFirstPlayerController())
+		{
+			PC->SetIgnoreMoveInput(false);
+			if (APawn* Pawn = PC->GetPawn())
+			{
+				Pawn->SetActorHiddenInGame(false);
+			}
+		}
+	}
+
+	if (const FDoemitzJobDefinition* Job = JobsById.Find(ActiveJobId))
+	{
+		const double ScheduledMinutes = FMath::Max(1.0, static_cast<double>(Job->ShiftEndMinute - Job->ShiftStartMinute));
+		const double WorkedMinutes = FMath::Clamp(static_cast<double>(Job->ShiftEndMinute) - ShiftActualStartMinute, 0.0, ScheduledMinutes);
+		const int64 PayCents = FMath::RoundToInt64((static_cast<double>(Job->HourlyWageCents) * WorkedMinutes) / 60.0);
+		if (PayCents > 0)
+		{
+			PlayerMoneyCents += PayCents;
+			AppendLedgerEntry(
+				Job->PlaceId,
+				PayCents,
+				FString::Printf(TEXT("Lohn: %s (%.0f/%.0f min)"), *Job->Title, WorkedMinutes, ScheduledMinutes));
+		}
+		const bool bLate = ShiftActualStartMinute > static_cast<double>(Job->ShiftStartMinute) + 0.5;
+		SetNotification(FString::Printf(
+			TEXT("Schicht beendet: +%s%s"),
+			*FormatCentsEur(PayCents),
+			bLate ? TEXT(" (anteilig wegen Verspaetung)") : TEXT("")));
+	}
+	ActiveShiftPlaceId = NAME_None;
+}
+
+void UDoemitzSimulationSubsystem::RecordCitizenShoppingRevenue(FName CitizenId, FName PlaceId)
+{
+	if (CitizenId.IsNone() || PlaceId.IsNone() || !IsPlaceOpenNow(PlaceId))
+	{
+		return;
+	}
+	const FName DailyKey(*FString::Printf(TEXT("%s@%s"), *CitizenId.ToString(), *PlaceId.ToString()));
+	if (CitizenDailyShoppingRecorded.Contains(DailyKey))
+	{
+		return;
+	}
+	const TArray<FDoemitzItemDefinition> Items = GetItemsForPlace(PlaceId);
+	if (Items.IsEmpty())
+	{
+		return;
+	}
+	CitizenDailyShoppingRecorded.Add(DailyKey);
+	const uint32 Hash = DeterministicHash(
+		EconomySeed,
+		CitizenId,
+		DayNumber * 131 + static_cast<int32>(FCrc::StrCrc32(*PlaceId.ToString())));
+	const FDoemitzItemDefinition& Picked = Items[static_cast<int32>(Hash % static_cast<uint32>(Items.Num()))];
+	const int32 Qty = 1 + static_cast<int32>((Hash >> 8) % 2);
+	AddPlaceRevenue(PlaceId, Picked.PriceCents * static_cast<int64>(Qty));
+}
+
+bool UDoemitzSimulationSubsystem::GetPlaceRevenue(FName PlaceId, int64& OutDailyCents, int64& OutWeeklyCents) const
+{
+	if (const FDoemitzPlaceRevenue* Rev = PlaceRevenues.Find(PlaceId))
+	{
+		OutDailyCents = Rev->DailyRevenueCents;
+		OutWeeklyCents = Rev->WeeklyRevenueCents;
+		return true;
+	}
+	OutDailyCents = 0;
+	OutWeeklyCents = 0;
+	return PlacesById.Contains(PlaceId);
+}
+
+bool UDoemitzSimulationSubsystem::GetPlaceDefinition(FName PlaceId, FDoemitzPlaceDefinition& OutPlace) const
+{
+	if (const FDoemitzPlaceDefinition* Place = PlacesById.Find(PlaceId))
+	{
+		OutPlace = *Place;
+		return true;
+	}
+	return false;
+}
+
+bool UDoemitzSimulationSubsystem::FindNearestEntrance(
+	const FVector& QueryLocation,
+	double MaxRadiusCm,
+	FDoemitzPlaceDefinition& OutPlace,
+	double& OutDistanceCm) const
+{
+	const FDoemitzPlaceDefinition* BestPlace = nullptr;
+	double BestDist = MaxRadiusCm;
+	bool bBestIsNonHome = false;
+
+	for (const TPair<FName, FDoemitzPlaceDefinition>& Pair : PlacesById)
+	{
+		const FDoemitzPlaceDefinition& Place = Pair.Value;
+		const FVector EntLoc = !Place.EntranceLocation.IsNearlyZero() ? Place.EntranceLocation : Place.AccessLocation;
+		if (FMath::Abs(QueryLocation.Z - EntLoc.Z) > 260.0)
+		{
+			continue;
+		}
+		const double Dist2D = FVector::Dist2D(QueryLocation, EntLoc);
+		if (Dist2D > MaxRadiusCm)
+		{
+			continue;
+		}
+		const bool bIsNonHome = Place.Kind != FName(TEXT("home"));
+		if (!BestPlace ||
+			(bIsNonHome && !bBestIsNonHome && Dist2D <= BestDist + 40.0) ||
+			(bIsNonHome == bBestIsNonHome && Dist2D < BestDist))
+		{
+			BestPlace = &Place;
+			BestDist = Dist2D;
+			bBestIsNonHome = bIsNonHome;
+		}
+	}
+
+	if (BestPlace)
+	{
+		OutPlace = *BestPlace;
+		OutDistanceCm = BestDist;
+		return true;
+	}
+	OutDistanceCm = MaxRadiusCm;
+	return false;
+}
+
+FString UDoemitzSimulationSubsystem::GetPlaceOpeningStatusText(FName PlaceId) const
+{
+	static const TCHAR* ShortNames[7] = {
+		TEXT("Mo"), TEXT("Di"), TEXT("Mi"), TEXT("Do"), TEXT("Fr"), TEXT("Sa"), TEXT("So")
+	};
+	const FDoemitzPlaceDefinition* Place = PlacesById.Find(PlaceId);
+	if (!Place)
+	{
+		return TEXT("unbekannt");
+	}
+	if (Place->bAlwaysOpen || Place->WeeklyOpeningHours.IsEmpty())
+	{
+		return TEXT("geoeffnet 24/7");
+	}
+	const int32 CurDay = FMath::Clamp(DayOfWeek, 0, 6);
+	const double CurMin = FMath::Fmod(FMath::Max(0.0, TimeOfDayMinutes), 1440.0);
+
+	if (Place->WeeklyOpeningHours.IsValidIndex(CurDay))
+	{
+		for (const FDoemitzTimeInterval& Iv : Place->WeeklyOpeningHours[CurDay].Intervals)
+		{
+			if (CurMin >= static_cast<double>(Iv.StartMinute) && CurMin < static_cast<double>(Iv.EndMinute))
+			{
+				return FString::Printf(TEXT("geoeffnet bis %02d:%02d"), Iv.EndMinute / 60, Iv.EndMinute % 60);
+			}
+		}
+	}
+
+	// Find next opening interval across the next 7 days
+	for (int32 Offset = 0; Offset < 7; ++Offset)
+	{
+		const int32 CheckDay = (CurDay + Offset) % 7;
+		if (!Place->WeeklyOpeningHours.IsValidIndex(CheckDay))
+		{
+			continue;
+		}
+		for (const FDoemitzTimeInterval& Iv : Place->WeeklyOpeningHours[CheckDay].Intervals)
+		{
+			if (Offset == 0 && static_cast<double>(Iv.StartMinute) <= CurMin)
+			{
+				continue;
+			}
+			return FString::Printf(
+				TEXT("geschlossen, oeffnet %s %02d:%02d"),
+				ShortNames[CheckDay],
+				Iv.StartMinute / 60,
+				Iv.StartMinute % 60);
+		}
+	}
+	return TEXT("geschlossen");
+}
+
 FString UDoemitzSimulationSubsystem::GetDayOfWeekShortName() const
 {
 	static const TCHAR* ShortNames[7] = {
@@ -1146,6 +1651,10 @@ void UDoemitzSimulationSubsystem::UpdateCitizen(FCitizenRecord& Record, double D
 	if (!Record.State.bIsMoving)
 	{
 		Record.State.CurrentActivity = DesiredEntry.Activity;
+		if (DesiredEntry.Activity == EDoemitzCitizenActivity::Shopping)
+		{
+			RecordCitizenShoppingRevenue(Record.State.CitizenId, Record.State.CurrentPlaceId);
+		}
 		return;
 	}
 
@@ -1162,6 +1671,10 @@ void UDoemitzSimulationSubsystem::UpdateCitizen(FCitizenRecord& Record, double D
 		if (!Record.ActiveRoute.IsEmpty())
 		{
 			Record.State.WorldLocation = Record.ActiveRoute.Last();
+		}
+		if (DesiredEntry.Activity == EDoemitzCitizenActivity::Shopping)
+		{
+			RecordCitizenShoppingRevenue(Record.State.CitizenId, Record.State.CurrentPlaceId);
 		}
 		return;
 	}
@@ -1212,12 +1725,26 @@ void UDoemitzSimulationSubsystem::Tick(float DeltaTime)
 		TimeOfDayMinutes -= 1440.0;
 		DayNumber += 1;
 		DayOfWeek = (DayOfWeek + 1) % 7;
+		CitizenDailyShoppingRecorded.Reset();
+		for (TPair<FName, FDoemitzPlaceRevenue>& Pair : PlaceRevenues)
+		{
+			Pair.Value.DailyRevenueCents = 0;
+			if (DayOfWeek == 0)
+			{
+				Pair.Value.WeeklyRevenueCents = 0;
+			}
+		}
 		if (DayOfWeek == 0)
 		{
 			CalendarWeek += 1;
 		}
+		if (bIsWorkingShift)
+		{
+			FinishWorkShift();
+		}
 	}
 
+	UpdateActiveWorkShift();
 	UpdateCitizenLodPool();
 
 	for (TPair<FName, FCitizenRecord>& Pair : CitizenRecords)
@@ -1276,7 +1803,16 @@ bool UDoemitzSimulationSubsystem::SaveCityState(const FString& SlotName)
 	SaveObj->DayOfWeek = DayOfWeek;
 	SaveObj->CalendarWeek = CalendarWeek;
 	SaveObj->TimeOfDayMinutes = TimeOfDayMinutes;
-	SaveObj->TimeScale = TimeScale;
+	SaveObj->TimeScale = bIsWorkingShift ? PreShiftTimeScale : TimeScale;
+	SaveObj->PlayerMoneyCents = PlayerMoneyCents;
+	SaveObj->NextTransactionId = NextTransactionId;
+	SaveObj->ActiveJobId = ActiveJobId;
+	SaveObj->LedgerEntries = LedgerEntries;
+	SaveObj->InventoryItems = GetAllInventoryItems();
+	for (const TPair<FName, FDoemitzPlaceRevenue>& Pair : PlaceRevenues)
+	{
+		SaveObj->PlaceRevenues.Add(Pair.Value);
+	}
 
 	if (UWorld* World = GetWorld())
 	{
@@ -1367,6 +1903,25 @@ bool UDoemitzSimulationSubsystem::LoadCityState(const FString& SlotName)
 
 	const bool bMigratingFromV1 = (SaveObj->SaveSchemaVersion == 1);
 	const bool bMigratingFromPreV3 = (SaveObj->SaveSchemaVersion < 3);
+	const bool bMigratingFromPreV4 = (SaveObj->SaveSchemaVersion < 4);
+
+	if (bIsWorkingShift)
+	{
+		bIsWorkingShift = false;
+		ActiveShiftPlaceId = NAME_None;
+		if (UWorld* World = GetWorld())
+		{
+			if (APlayerController* PC = World->GetFirstPlayerController())
+			{
+				PC->SetIgnoreMoveInput(false);
+				if (APawn* Pawn = PC->GetPawn())
+				{
+					Pawn->SetActorHiddenInGame(false);
+				}
+			}
+		}
+	}
+
 	DayNumber = FMath::Max(1, SaveObj->DayNumber);
 	if (bMigratingFromPreV3)
 	{
@@ -1380,6 +1935,39 @@ bool UDoemitzSimulationSubsystem::LoadCityState(const FString& SlotName)
 	}
 	TimeOfDayMinutes = FMath::Fmod(FMath::Max(0.0, SaveObj->TimeOfDayMinutes), 1440.0);
 	TimeScale = FMath::Clamp(SaveObj->TimeScale, 0.0, 3600.0);
+
+	if (bMigratingFromPreV4)
+	{
+		ResetEconomyToDefaults();
+	}
+	else
+	{
+		PlayerMoneyCents = FMath::Max<int64>(0, SaveObj->PlayerMoneyCents);
+		NextTransactionId = FMath::Max(1, SaveObj->NextTransactionId);
+		ActiveJobId = SaveObj->ActiveJobId;
+		LedgerEntries = SaveObj->LedgerEntries;
+		if (LedgerEntries.Num() > MaxLedgerEntries)
+		{
+			LedgerEntries.RemoveAt(0, LedgerEntries.Num() - MaxLedgerEntries);
+		}
+		PlayerInventory.Reset();
+		for (const FDoemitzInventoryItem& Item : SaveObj->InventoryItems)
+		{
+			if (!Item.ItemId.IsNone() && Item.Quantity > 0)
+			{
+				PlayerInventory.Add(Item.ItemId, Item.Quantity);
+			}
+		}
+		PlaceRevenues.Reset();
+		for (const FDoemitzPlaceRevenue& Rev : SaveObj->PlaceRevenues)
+		{
+			if (!Rev.PlaceId.IsNone())
+			{
+				PlaceRevenues.Add(Rev.PlaceId, Rev);
+			}
+		}
+		CitizenDailyShoppingRecorded.Reset();
+	}
 
 	TSet<FName> RestoredCitizenIds;
 	for (const FDoemitzSavedCitizen& Saved : SaveObj->Citizens)
@@ -1549,7 +2137,7 @@ bool UDoemitzSimulationSubsystem::LoadCityState(const FString& SlotName)
 		}
 	}
 
-	if (bMigratingFromPreV3)
+	if (bMigratingFromPreV4)
 	{
 		UE_LOG(LogTemp, Display, TEXT("Migrated SaveGame v%d -> v%d for slot '%s'"),
 			SaveObj->SaveSchemaVersion, UDoemitzSaveGame::CurrentSchemaVersion, *SlotName);

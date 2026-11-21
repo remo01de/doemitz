@@ -21,6 +21,7 @@ py -3.12 -m venv .venv
 | `roads.geojson` | Straßen- und Wegeachsen in WGS84 |
 | `buildings.geojson` | Gebäudegrundrisse in WGS84 |
 | `water.geojson` | Wasserflächen in WGS84 |
+| `pois.geojson` | Points of Interest (`shop`, `amenity`, `office`, `tourism`) in WGS84 |
 | `scene.json` | Kartengeometrie in lokalen Metern und Umriss der flachen Testlandschaft |
 | `import-report.json` | Quellprüfsummen, Featurezahlen, Geometriehinweise und Maßstabsprüfung |
 
@@ -40,3 +41,5 @@ Das Unreal-Projekt öffnet die Altstadt-Karte als Startlevel. Im Editor startet 
 - [Sprint 5 – SaveGame-System und Zeitsteuerung](docs/SPRINT_05.md)
 - [Sprint 6 – Stilisierte Altstadt-Architektur, Straßenlaternen und Vegetation](docs/SPRINT_06.md)
 - [Sprint 7 – Performance-Basis und vernetzter Straßenverkehr](docs/SPRINT_07.md)
+- [Sprint 8 – Wochenkalender, mehr Einwohner und Fußgängerüberwege](docs/SPRINT_08.md)
+- [Sprint 9 – Wirtschaft und Interaktion an Gebäudeeingängen](docs/SPRINT_09.md)

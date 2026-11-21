@@ -1,0 +1,86 @@
+{
+  "scene_id": "doemitz-altstadt",
+  "economy_seed": 202609,
+  "starting_money_cents": 12500,
+  "starting_money_source": "assumed_starting_balance",
+  "assortments": [
+    {
+      "category": "pharmacy",
+      "items": [
+        { "id": "item_pflaster", "name": "Pflasterset", "price_cents": 395, "price_source": "assumed_fictional_price" },
+        { "id": "item_kraeutertee", "name": "Erkaeltungstee", "price_cents": 490, "price_source": "assumed_fictional_price" },
+        { "id": "item_vitamin_c", "name": "Vitamin-C-Tabletten", "price_cents": 650, "price_source": "assumed_fictional_price" },
+        { "id": "item_handcreme", "name": "Pflegecreme", "price_cents": 520, "price_source": "assumed_fictional_price" }
+      ]
+    },
+    {
+      "category": "shop",
+      "items": [
+        { "id": "item_brot", "name": "Landbrot", "price_cents": 340, "price_source": "assumed_fictional_price" },
+        { "id": "item_apfelsaft", "name": "Mecklenburger Apfelsaft", "price_cents": 280, "price_source": "assumed_fictional_price" },
+        { "id": "item_notizbuch", "name": "Notizbuch", "price_cents": 690, "price_source": "assumed_fictional_price" },
+        { "id": "item_regenschirm", "name": "Taschenschirm", "price_cents": 1490, "price_source": "assumed_fictional_price" },
+        { "id": "item_fahrradschloss", "name": "Fahrradschloss", "price_cents": 1990, "price_source": "assumed_fictional_price" }
+      ]
+    },
+    {
+      "category": "gastronomy",
+      "items": [
+        { "id": "item_kaffee", "name": "Filterkaffee", "price_cents": 320, "price_source": "assumed_fictional_price" },
+        { "id": "item_kuchen", "name": "Stueck Apfelkuchen", "price_cents": 420, "price_source": "assumed_fictional_price" },
+        { "id": "item_softeis", "name": "DDR-Softeis", "price_cents": 250, "price_source": "assumed_fictional_price" },
+        { "id": "item_fischbroetchen", "name": "Elb-Fischbroetchen", "price_cents": 580, "price_source": "assumed_fictional_price" }
+      ]
+    },
+    {
+      "category": "tourism",
+      "items": [
+        { "id": "item_stadtplan", "name": "Altstadt-Faltplan", "price_cents": 350, "price_source": "assumed_fictional_price" },
+        { "id": "item_postkarte", "name": "Ansichtskarte Festung Doemitz", "price_cents": 150, "price_source": "assumed_fictional_price" },
+        { "id": "item_festungsfuehrer", "name": "Festungsfuehrer", "price_cents": 890, "price_source": "assumed_fictional_price" }
+      ]
+    }
+  ],
+  "jobs": [
+    {
+      "id": "job_kaufhaus_verkauf",
+      "place_id": "place_kaufhaus",
+      "title": "Verkaufshilfe Kaufhaus",
+      "shift_start_minute": 540,
+      "shift_end_minute": 780,
+      "hourly_wage_cents": 1450,
+      "work_days": [0, 1, 2, 3, 4, 5],
+      "wage_source": "assumed_fictional_wage"
+    },
+    {
+      "id": "job_touristeninfo_service",
+      "place_id": "poi:osm:node:2874556071",
+      "title": "Gaesteservice Touristeninformation",
+      "shift_start_minute": 600,
+      "shift_end_minute": 840,
+      "hourly_wage_cents": 1550,
+      "work_days": [0, 1, 2, 3, 4],
+      "wage_source": "assumed_fictional_wage"
+    },
+    {
+      "id": "job_elbcafe_service",
+      "place_id": "poi:osm:way:1352322155",
+      "title": "Servicekraft Elb-Cafe",
+      "shift_start_minute": 660,
+      "shift_end_minute": 900,
+      "hourly_wage_cents": 1400,
+      "work_days": [0, 3, 4, 5, 6],
+      "wage_source": "assumed_fictional_wage"
+    },
+    {
+      "id": "job_apotheke_bote",
+      "place_id": "poi:osm:node:1794647095",
+      "title": "Botendienst Fritz-Reuter-Apotheke",
+      "shift_start_minute": 510,
+      "shift_end_minute": 720,
+      "hourly_wage_cents": 1500,
+      "work_days": [0, 1, 2, 3, 4],
+      "wage_source": "assumed_fictional_wage"
+    }
+  ]
+}

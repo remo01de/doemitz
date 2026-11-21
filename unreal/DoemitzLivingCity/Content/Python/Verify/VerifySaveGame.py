@@ -64,7 +64,7 @@ def check(_delta_seconds):
             if not anna.get_editor_property("is_moving") or anna.get_editor_property("route_progress_cm") < 200.0:
                 return
 
-            # Pause and capture reference state before saving.
+            # Pause and perform economy actions before saving so v4 economy persistence is also verified.
             sub.set_time_scale(0.0)
             saved_min = sub.get_time_of_day_minutes()
             saved_player_loc = pawn.get_actor_location()
@@ -72,13 +72,26 @@ def check(_delta_seconds):
             saved_anna_loc = anna.get_editor_property("world_location")
             saved_anna_moving = anna.get_editor_property("is_moving")
 
+            # Perform an open-hours purchase and accept a job before saving
+            sub.set_time_of_day_minutes(600.0)
+            saved_min = sub.get_time_of_day_minutes()
+            if not sub.buy_item("poi:osm:node:1794647095", "item_pflaster", 1):
+                raise RuntimeError("pre-save BuyItem failed")
+            if not sub.accept_job("place_kaufhaus"):
+                raise RuntimeError("pre-save AcceptJob failed")
+            saved_money = sub.get_player_money_cents()
+            saved_qty = sub.get_inventory_quantity("item_pflaster")
+            saved_job = str(sub.get_active_job_id())
+            saved_rev_daily, _ = sub.get_place_revenue("poi:osm:node:1794647095")
+
             if not sub.save_city_state(slot_name):
                 raise RuntimeError("SaveCityState returned False")
             if not sub.does_save_exist(slot_name):
                 raise RuntimeError("Save slot does not exist after SaveCityState")
 
-            # Mutate world state heavily before loading back.
+            # Mutate world & economy state heavily before loading back.
             sub.set_time_of_day_minutes(15.0)
+            sub.set_player_money_cents_for_test(99999)
             dn.update_lighting_from_simulation()
             if dn.is_daytime():
                 raise RuntimeError("expected night lighting after mutating time to 00:15")
@@ -96,6 +109,7 @@ def check(_delta_seconds):
             restored_car_dist = car.get_distance_along_route()
             restored_anna = get_state(sub, "citizen_anna_01")
             restored_anna_loc = restored_anna.get_editor_property("world_location")
+            restored_rev_daily, _ = sub.get_place_revenue("poi:osm:node:1794647095")
 
             if abs(restored_min - saved_min) > 0.5:
                 raise RuntimeError(f"restored time mismatch: {restored_min} vs {saved_min}")
@@ -109,30 +123,40 @@ def check(_delta_seconds):
                 raise RuntimeError("citizen moving state was not restored")
             if (restored_anna_loc - saved_anna_loc).length() > 5.0:
                 raise RuntimeError("citizen location was not restored")
+            if sub.get_player_money_cents() != saved_money:
+                raise RuntimeError(f"money mismatch: {sub.get_player_money_cents()} vs {saved_money}")
+            if sub.get_inventory_quantity("item_pflaster") != saved_qty:
+                raise RuntimeError("inventory quantity was not restored")
+            if str(sub.get_active_job_id()) != saved_job:
+                raise RuntimeError("active job was not restored")
+            if restored_rev_daily != saved_rev_daily:
+                raise RuntimeError(f"place revenue mismatch: {restored_rev_daily} vs {saved_rev_daily}")
 
-            # Also verify SaveSchemaVersion 2 -> 3 migration (weekday defaults to Monday, 30 citizens valid)
-            v2_slot = "DoemitzVerifyV2Migration"
-            v2_save = unreal.GameplayStatics.create_save_game_object(unreal.DoemitzSaveGame)
-            v2_save.set_editor_property("save_schema_version", 2)
-            v2_save.set_editor_property("day_number", 4)
-            v2_save.set_editor_property("time_of_day_minutes", 600.0)
-            v2_save.set_editor_property("time_scale", 60.0)
-            if not unreal.GameplayStatics.save_game_to_slot(v2_save, v2_slot, 0):
-                raise RuntimeError("failed to write synthetic v2 save")
-            sub.set_day_number(5)
-            if not sub.load_city_state(v2_slot):
-                raise RuntimeError("LoadCityState failed to migrate SaveSchemaVersion 2")
-            if sub.get_day_number() != 4 or sub.get_day_of_week() != 0 or abs(sub.get_time_of_day_minutes() - 600.0) > 1.0:
+            # Also verify SaveSchemaVersion 3 -> 4 migration (starting balance 12500 ct, empty inventory)
+            v3_slot = "DoemitzVerifyV3Migration"
+            v3_save = unreal.GameplayStatics.create_save_game_object(unreal.DoemitzSaveGame)
+            v3_save.set_editor_property("save_schema_version", 3)
+            v3_save.set_editor_property("day_number", 4)
+            v3_save.set_editor_property("day_of_week", 3)
+            v3_save.set_editor_property("calendar_week", 1)
+            v3_save.set_editor_property("time_of_day_minutes", 600.0)
+            v3_save.set_editor_property("time_scale", 60.0)
+            if not unreal.GameplayStatics.save_game_to_slot(v3_save, v3_slot, 0):
+                raise RuntimeError("failed to write synthetic v3 save")
+            if not sub.load_city_state(v3_slot):
+                raise RuntimeError("LoadCityState failed to migrate SaveSchemaVersion 3")
+            if sub.get_day_number() != 4 or sub.get_day_of_week() != 3:
+                raise RuntimeError(f"v3 migration did not restore day/dow: {sub.get_day_number()}/{sub.get_day_of_week()}")
+            if sub.get_player_money_cents() != 12500 or sub.get_inventory_quantity("item_pflaster") != 0:
                 raise RuntimeError(
-                    f"v2 migration did not restore day/Monday/time: day={sub.get_day_number()} dow={sub.get_day_of_week()} min={sub.get_time_of_day_minutes()}"
+                    f"v3 migration did not initialize economy defaults: money={sub.get_player_money_cents()}, inv={sub.get_inventory_quantity('item_pflaster')}"
                 )
-            if sub.get_citizen_count() != 30:
-                raise RuntimeError(f"expected 30 citizens after v2 migration, got {sub.get_citizen_count()}")
-            unreal.GameplayStatics.delete_game_in_slot(v2_slot, 0)
+            unreal.GameplayStatics.delete_game_in_slot(v3_slot, 0)
 
             finish(
-                f"DOEMITZ_SAVEGAME_PIE_OK: v3 saved & restored time={restored_min:.1f}m, "
-                f"30 citizens, player/vehicle states, daytime lighting, and v2->v3 migration verified",
+                f"DOEMITZ_SAVEGAME_PIE_OK: v4 saved & restored time={restored_min:.1f}m, "
+                f"money={saved_money}ct, inv={saved_qty}, job={saved_job}, rev={saved_rev_daily}ct, "
+                f"30 citizens, player/vehicle states, and v3->v4 migration verified",
                 True,
             )
             phase = "done"

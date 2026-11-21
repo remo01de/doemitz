@@ -4,6 +4,7 @@
 #include "Blueprint/UserWidget.h"
 #include "DoemitzClockWidget.generated.h"
 
+class UBorder;
 class UTextBlock;
 
 UCLASS()
@@ -21,6 +22,12 @@ public:
 	UFUNCTION(BlueprintPure, Category = "UI")
 	FString GetStatusTextString() const { return LastStatusString; }
 
+	UFUNCTION(BlueprintPure, Category = "UI")
+	FString GetMoneyTextString() const { return LastMoneyString; }
+
+	UFUNCTION(BlueprintPure, Category = "UI")
+	FString GetInteractionPromptString() const { return LastPromptString; }
+
 protected:
 	virtual TSharedRef<SWidget> RebuildWidget() override;
 	virtual void NativeConstruct() override;
@@ -34,9 +41,20 @@ private:
 	TObjectPtr<UTextBlock> StatusText;
 
 	UPROPERTY(Transient)
+	TObjectPtr<UTextBlock> MoneyText;
+
+	UPROPERTY(Transient)
 	TObjectPtr<UTextBlock> NoticeText;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UBorder> PromptPanel;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UTextBlock> PromptText;
 
 	FString LastClockString;
 	FString LastStatusString;
+	FString LastMoneyString;
 	FString LastNoticeString;
+	FString LastPromptString;
 };

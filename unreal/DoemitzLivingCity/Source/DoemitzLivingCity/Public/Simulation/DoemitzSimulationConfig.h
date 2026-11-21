@@ -6,6 +6,7 @@
 #include "DoemitzSimulationConfig.generated.h"
 
 class UDoemitzClockWidget;
+class UDoemitzEconomyDataAsset;
 class UStaticMesh;
 
 UCLASS()
@@ -59,6 +60,9 @@ private:
 
 	UPROPERTY(EditInstanceOnly, Category = "Traffic")
 	TArray<FDoemitzCrossingDefinition> Crossings;
+
+	UPROPERTY(EditInstanceOnly, Category = "Economy")
+	TObjectPtr<UDoemitzEconomyDataAsset> EconomyData;
 
 	UPROPERTY(EditAnywhere, Category = "UI")
 	TSubclassOf<UDoemitzClockWidget> ClockWidgetClass;

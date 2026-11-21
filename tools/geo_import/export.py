@@ -219,18 +219,29 @@ def build(config: dict, raw_dir: Path, output_dir: Path) -> None:
             ]
     validate(local_layers)
     crossings = []
+    entrances = []
     for node_id in sorted(dataset.node_tags):
         ntags = dataset.node_tags[node_id]
-        if ntags.get("highway") == "crossing" and node_id in dataset.nodes:
-            lon, lat = dataset.nodes[node_id]
-            if bounds.covers(Point(lon, lat)):
-                east, north = frame.xy(lon, lat)
-                crossings.append({
-                    "id": f"osm:node:{node_id}",
-                    "position_m": [round(east, 4), round(north, 4)],
-                    "crossing": ntags.get("crossing", "unmarked"),
-                    "markings": ntags.get("crossing:markings", ""),
-                })
+        if node_id not in dataset.nodes:
+            continue
+        lon, lat = dataset.nodes[node_id]
+        if not bounds.covers(Point(lon, lat)):
+            continue
+        if ntags.get("highway") == "crossing":
+            east, north = frame.xy(lon, lat)
+            crossings.append({
+                "id": f"osm:node:{node_id}",
+                "position_m": [round(east, 4), round(north, 4)],
+                "crossing": ntags.get("crossing", "unmarked"),
+                "markings": ntags.get("crossing:markings", ""),
+            })
+        if ntags.get("entrance") not in (None, "", "no"):
+            east, north = frame.xy(lon, lat)
+            entrances.append({
+                "id": f"osm:node:{node_id}",
+                "position_m": [round(east, 4), round(north, 4)],
+                "entrance": ntags["entrance"],
+            })
     reference = reference_measurement(config["reference"], dataset, frame, local_layers["roads"])
     source = config["source"]
     scene = {
@@ -250,6 +261,7 @@ def build(config: dict, raw_dir: Path, output_dir: Path) -> None:
         "license_url": source["license_url"],
         "layers": local_layers,
         "crossings": crossings,
+        "entrances": entrances,
     }
     counts = {layer: len(features) for layer, features in layers.items()}
     files = []

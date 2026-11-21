@@ -1,11 +1,16 @@
 param(
     [string] $EngineRoot = 'C:\Program Files\Epic Games\UE_5.8',
     [string[]] $Scripts = @(
+        'VerifySprint.py',
+        'VerifySidewalk.py',
+        'VerifyCitizens.py',
         'VerifyDayNightHud.py',
         'VerifyTrafficNetwork.py',
         'VerifyCalendar.py',
         'VerifyCitizenLod.py',
         'VerifyCrossing.py',
+        'VerifyInteraction.py',
+        'VerifyEconomy.py',
         'VerifySaveGame.py'
     )
 )
@@ -19,11 +24,16 @@ $logDir = Join-Path (Split-Path -Parent $project) 'Saved\Logs'
 New-Item -ItemType Directory -Path $logDir -Force | Out-Null
 
 $expectedMarkers = @{
+    'VerifySprint.py'         = 'DOEMITZ_SPRINT_PIE_OK:'
+    'VerifySidewalk.py'       = 'DOEMITZ_SIDEWALK_PIE_OK:'
+    'VerifyCitizens.py'       = 'DOEMITZ_CITIZENS_PIE_OK:'
     'VerifyDayNightHud.py'    = 'DOEMITZ_DAYNIGHT_HUD_PIE_OK:'
     'VerifyTrafficNetwork.py' = 'DOEMITZ_TRAFFIC_NETWORK_PIE_OK:'
     'VerifyCalendar.py'       = 'DOEMITZ_CALENDAR_PIE_OK:'
     'VerifyCitizenLod.py'     = 'DOEMITZ_CITIZEN_LOD_PIE_OK:'
     'VerifyCrossing.py'       = 'DOEMITZ_CROSSING_PIE_OK:'
+    'VerifyInteraction.py'    = 'DOEMITZ_INTERACTION_PIE_OK:'
+    'VerifyEconomy.py'        = 'DOEMITZ_ECONOMY_PIE_OK:'
     'VerifySaveGame.py'       = 'DOEMITZ_SAVEGAME_PIE_OK:'
 }
 

@@ -16,6 +16,7 @@ from shapely.ops import nearest_points
 from tools.geo_import.export import geometry_parts, write_json
 from tools.mesh_generator.architecture import ROOF_STYLES, WALL_STYLES, add_stylized_building
 from tools.mesh_generator.citizens import build_citizens
+from tools.mesh_generator.economy import build_economy
 from tools.mesh_generator.props import add_street_lamps, add_stylized_trees
 from tools.mesh_generator.road_graph import build_road_graph
 from tools.mesh_generator.traffic import build_vehicle_route
@@ -25,6 +26,7 @@ ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_SCENE = ROOT / "data/processed/doemitz-altstadt/scene.json"
 STREET_LAYOUT = ROOT / "data/manifests/doemitz-altstadt-streets.json"
 CITIZENS_LAYOUT = ROOT / "data/manifests/doemitz-altstadt-citizens.json"
+ECONOMY_LAYOUT = ROOT / "data/manifests/doemitz-altstadt-economy.json"
 PALETTE = {
     "Terrain": (0.22, 0.42, 0.14),
     "Water": (0.06, 0.34, 0.42),
@@ -198,6 +200,7 @@ def add_streets(meshes, roads, bounds, obstacles, base_m, sidewalk_widths, defau
 def build(
     scene, report, sidewalk_widths=None, vehicle_config=None,
     citizens_config=None, default_sidewalk_widths=None, traffic_network_config=None,
+    economy_config=None,
 ):
     if scene["schema_version"] != 1 or scene["coordinates"]["local_axes"] != ["east", "north"]:
         raise ValueError("expected scene schema 1 with local [east, north] coordinates")
@@ -295,7 +298,11 @@ def build(
             obstacles, base_m + ROAD_ELEVATION_M, base_m + ROAD_ELEVATION_M + CURB_HEIGHT_M,
             pois=scene["layers"].get("pois"),
             crossings=road_graph.get("crossings"),
+            entrances=scene.get("entrances"),
         )
+    economy = None
+    if economy_config and citizens:
+        economy = build_economy(economy_config, citizens["places"])
     reference = report["reference"]
     if scene["id"] != report["id"]:
         raise ValueError("scene and report belong to different areas")
@@ -328,6 +335,7 @@ def build(
         "traffic_network": traffic_network,
         "vehicle": vehicle,
         "citizens": citizens,
+        "economy": economy,
         "sidewalks": {
             "width_source": "estimated_from_pilot_layout",
             "widths_m": sidewalk_widths,
@@ -370,9 +378,15 @@ def main():
         citizens_layout = json.loads(CITIZENS_LAYOUT.read_text(encoding="utf-8"))
         if scene["id"] == citizens_layout["scene_id"]:
             citizens_config = citizens_layout
+    economy_config = None
+    if ECONOMY_LAYOUT.exists():
+        economy_layout = json.loads(ECONOMY_LAYOUT.read_text(encoding="utf-8"))
+        if scene["id"] == economy_layout["scene_id"]:
+            economy_config = economy_layout
     package = build(
         scene, report, layout.get("sidewalk_widths_m"), layout.get("vehicle"),
         citizens_config, layout.get("default_sidewalk_widths_m"), layout.get("traffic_network"),
+        economy_config,
     )
     package["source_scene_sha256"] = sha256(scene_bytes).hexdigest()
     destination = args.scene.with_name("unreal-city-meshes.json")
@@ -383,11 +397,18 @@ def main():
         print(
             f"Citizens: {len(cit['citizens'])}, places: {len(cit['places'])}, "
             f"routes: {len(cit['routes'])} ({cit.get('routes_using_crossings', 0)} via crossings), "
+            f"entrances: {cit.get('entrance_sources', {})}, "
             f"opening_hours_sources: {cit.get('opening_hours_sources', {})}"
         )
         if osm_oh:
             osm_summary = ", ".join(f"{p['name']} ({p['raw']})" for p in osm_oh)
             print(f"OSM opening_hours ({len(osm_oh)}): {osm_summary}")
+    if package.get("economy"):
+        econ = package["economy"]
+        print(
+            f"Economy: start={econ['starting_money_cents']} ct ({econ['starting_money_source']}), "
+            f"{econ['item_count']} items, {econ['job_count']} jobs (seed={econ['economy_seed']})"
+        )
     print(f"{len(package['meshes'])} meshes, "
           f"{sum(len(mesh['triangles']) for mesh in package['meshes'].values())} triangles: {destination}")
 

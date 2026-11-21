@@ -1,9 +1,11 @@
 #include "Simulation/DoemitzSimulationConfig.h"
 
 #include "Blueprint/UserWidget.h"
+#include "Character/DoemitzCharacter.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "InputCoreTypes.h"
+#include "Interaction/DoemitzInteractionComponent.h"
 #include "Settings/DoemitzGraphicsSettings.h"
 #include "UI/DoemitzClockWidget.h"
 
@@ -20,6 +22,7 @@ void ADoemitzSimulationConfig::BeginPlay()
 	if (UDoemitzSimulationSubsystem* Subsystem = GetWorld()->GetSubsystem<UDoemitzSimulationSubsystem>())
 	{
 		Subsystem->ConfigureSimulation(StartMinute, TimeScale, Places, Routes, Citizens);
+		Subsystem->ConfigureEconomy(EconomyData);
 		Subsystem->ConfigureCitizenPool(CitizenMeshVariants, CitizenLodRadiusCm);
 		if (!RoadEdges.IsEmpty() && !Vehicles.IsEmpty())
 		{
@@ -79,7 +82,30 @@ void ADoemitzSimulationConfig::HandleHotkeys()
 		return;
 	}
 
-	if (PC->WasInputKeyJustPressed(EKeys::F5))
+	if (PC->WasInputKeyJustPressed(EKeys::E))
+	{
+		if (ADoemitzCharacter* Character = Cast<ADoemitzCharacter>(PC->GetPawn()))
+		{
+			if (UDoemitzInteractionComponent* Interaction = Character->GetInteractionComponent())
+			{
+				Interaction->TryInteract();
+			}
+		}
+	}
+	else if (PC->WasInputKeyJustPressed(EKeys::Escape))
+	{
+		if (ADoemitzCharacter* Character = Cast<ADoemitzCharacter>(PC->GetPawn()))
+		{
+			if (UDoemitzInteractionComponent* Interaction = Character->GetInteractionComponent())
+			{
+				if (Interaction->IsMenuOpen())
+				{
+					Interaction->CloseMenu();
+				}
+			}
+		}
+	}
+	else if (PC->WasInputKeyJustPressed(EKeys::F5))
 	{
 		Subsystem->SaveCityState();
 	}

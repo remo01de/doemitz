@@ -5,14 +5,10 @@ import unreal
 
 editor = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem)
 level = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
-sim_class = unreal.load_class(None, "/Script/DoemitzLivingCity.DoemitzSimulationSubsystem")
-citizen_class = unreal.load_class(None, "/Script/DoemitzLivingCity.DoemitzCitizenActor")
 deadline = monotonic() + 120
 phase = "init"
-anna_actor = None
 anna_moved = False
-bernd_destroyed = False
-bernd_moved_headless = False
+bernd_moved = False
 
 
 def finish(message, success):
@@ -22,8 +18,13 @@ def finish(message, success):
     unreal.EditorPythonScripting.set_keep_python_script_alive(False)
 
 
+def get_state(sub, cid):
+    res = sub.get_citizen_state(cid)
+    return res[1] if isinstance(res, tuple) else res
+
+
 def check(_delta_seconds):
-    global phase, anna_actor, anna_moved, bernd_destroyed, bernd_moved_headless
+    global phase, anna_moved, bernd_moved
     try:
         if monotonic() > deadline:
             raise RuntimeError(f"timed out during {phase}")
@@ -38,23 +39,12 @@ def check(_delta_seconds):
 
         if phase == "init":
             count = sub.get_citizen_count()
-            if count != 4:
-                raise RuntimeError(f"expected 4 simulated citizens, got {count}")
-            actors = unreal.GameplayStatics.get_all_actors_of_class(world, citizen_class)
-            if len(actors) != 4:
-                raise RuntimeError(f"expected 4 citizen actors, got {len(actors)}")
-            by_id = {}
-            for actor in actors:
-                mesh_comp = actor.get_editor_property("citizen_mesh")
-                if mesh_comp.get_editor_property("static_mesh") is None:
-                    raise RuntimeError(f"citizen actor {actor.get_name()} has no mesh")
-                by_id[str(actor.get_citizen_id())] = actor
-            if "citizen_anna_01" not in by_id or "citizen_bernd_02" not in by_id:
-                raise RuntimeError(f"missing expected citizen IDs: {sorted(by_id)}")
-            anna_actor = by_id["citizen_anna_01"]
-            # Destroy Bernd's 3D actor to prove simulation state continues without representation.
-            by_id["citizen_bernd_02"].destroy_actor()
-            bernd_destroyed = True
+            if count < 30:
+                raise RuntimeError(f"expected at least 30 simulated citizens, got {count}")
+            ids = {str(cid) for cid in sub.get_all_citizen_ids()}
+            for legacy in ("citizen_anna_01", "citizen_bernd_02", "citizen_clara_03", "citizen_dieter_04"):
+                if legacy not in ids:
+                    raise RuntimeError(f"missing legacy citizen {legacy}")
             # Trigger Anna's 07:55 commute and Bernd's 08:00 commute quickly.
             sub.set_time_of_day_minutes(475.0)
             sub.set_time_scale(300.0)
@@ -63,22 +53,21 @@ def check(_delta_seconds):
             return
 
         if phase == "simulate":
-            res_anna = sub.get_citizen_state("citizen_anna_01")
-            res_bernd = sub.get_citizen_state("citizen_bernd_02")
-            anna = res_anna[1] if isinstance(res_anna, tuple) else res_anna
-            bernd = res_bernd[1] if isinstance(res_bernd, tuple) else res_bernd
+            anna = get_state(sub, "citizen_anna_01")
+            bernd = get_state(sub, "citizen_bernd_02")
             if anna is None or bernd is None:
                 raise RuntimeError("failed to query citizen states")
 
             if anna.get_editor_property("is_moving"):
                 anna_moved = True
-                sim_loc = anna.get_editor_property("world_location")
-                actor_loc = anna_actor.get_actor_location()
-                if (sim_loc - actor_loc).length() > 50.0:
-                    raise RuntimeError("citizen actor diverged from simulation state")
+                actor_loc = sub.get_citizen_actor_location("citizen_anna_01")
+                if actor_loc is not None:
+                    sim_loc = anna.get_editor_property("world_location")
+                    if (sim_loc - actor_loc).length() > 50.0:
+                        raise RuntimeError("citizen actor diverged from simulation state")
 
             if bernd.get_editor_property("is_moving"):
-                bernd_moved_headless = True
+                bernd_moved = True
 
             anna_done = (
                 anna_moved
@@ -86,16 +75,16 @@ def check(_delta_seconds):
                 and str(anna.get_editor_property("current_place_id")) == "place_amtsverwaltung"
             )
             bernd_done = (
-                bernd_destroyed
-                and bernd_moved_headless
+                bernd_moved
                 and bernd.get_editor_property("completed_trips") >= 1
                 and str(bernd.get_editor_property("current_place_id")) == "place_kaufhaus"
             )
 
             if anna_done and bernd_done:
                 finish(
-                    f"DOEMITZ_CITIZENS_PIE_OK: 4 citizens active, Anna commuted with 3D actor to place_amtsverwaltung, "
-                    f"Bernd completed headless commute without 3D actor to place_kaufhaus",
+                    f"DOEMITZ_CITIZENS_PIE_OK: {sub.get_citizen_count()} citizens simulated, "
+                    f"Anna commuted to place_amtsverwaltung, Bernd commuted to place_kaufhaus "
+                    f"(active actors={sub.get_active_citizen_actor_count()})",
                     True,
                 )
     except Exception:

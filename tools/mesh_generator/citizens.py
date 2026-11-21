@@ -355,7 +355,7 @@ def _validate_schedule(citizen_id: str, schedule: list[dict], places_by_id: dict
 
 def build_citizens(
     config, roads, buildings, sidewalks, obstacles, road_elevation_m, sidewalk_elevation_m,
-    pois=None, crossings=None,
+    pois=None, crossings=None, entrances=None,
 ):
     """Validate citizen manifest, expand population from OSM POIs/buildings, and compile routes."""
     clock = config.get("clock", {})
@@ -401,8 +401,48 @@ def build_citizens(
     places_by_id = {}
     opening_hours_sources = Counter()
     osm_opening_hours_places = []
+    entrance_sources = Counter()
 
-    def register_place(place_id, name, building_id, kind, geom, osm_oh=None, on_pilot=False):
+    entrance_priority = {"main": 0, "yes": 1, "home": 1, "shop": 1, "staircase": 2, "service": 3}
+    osm_entrances = [
+        (
+            e["id"],
+            Point(float(e["position_m"][0]), float(e["position_m"][1])),
+            str(e.get("entrance", "yes")),
+            entrance_priority.get(str(e.get("entrance", "yes")).lower(), 2),
+        )
+        for e in sorted(entrances or [], key=lambda item: item["id"])
+    ]
+
+    def resolve_entrance(place_id, building_id, geom, access_pt, access_elevation):
+        ref_geom = buildings_by_id.get(building_id, geom)
+        candidates = []
+        for eid, ept, etype, prio in osm_entrances:
+            d = ref_geom.distance(ept)
+            if d <= 3.0:
+                candidates.append((prio, d, eid, ept, etype))
+        if candidates:
+            candidates.sort(key=lambda item: (item[0], item[1], item[2]))
+            _, _, eid, ept, etype = candidates[0]
+            z = sidewalk_elevation_m if (not walkable_access.is_empty and walkable_access.distance(ept) <= 3.0) else road_elevation_m
+            entrance_sources["osm"] += 1
+            return {
+                "id": f"entrance:{place_id}",
+                "position_m": [round(ept.x, 4), round(ept.y, 4), round(z, 4)],
+                "source": "osm",
+                "osm_node_id": eid,
+                "entrance_type": etype,
+            }
+        entrance_sources["assumed_sidewalk_access"] += 1
+        return {
+            "id": f"entrance:{place_id}",
+            "position_m": [round(access_pt.x, 4), round(access_pt.y, 4), round(access_elevation, 4)],
+            "source": "assumed_sidewalk_access",
+            "osm_node_id": "",
+            "entrance_type": "assumed",
+        }
+
+    def register_place(place_id, name, building_id, kind, geom, osm_oh=None, on_pilot=False, economy_category=None):
         if place_id in places_by_id:
             return places_by_id[place_id]
         if on_pilot:
@@ -424,15 +464,18 @@ def build_citizens(
         if oh["source"] == "osm":
             osm_opening_hours_places.append({"id": place_id, "name": name, "raw": oh["raw"]})
 
+        entrance = resolve_entrance(place_id, building_id, geom, access_pt, elevation)
         compiled = {
             "id": place_id,
             "name": name,
             "building_id": building_id,
             "kind": kind,
+            "economy_category": economy_category or kind,
             "along_m": round(along_m, 4) if along_m is not None else None,
             "side": side,
             "on_pilot": on_pilot,
             "access_m": [round(access_pt.x, 4), round(access_pt.y, 4), round(elevation, 4)],
+            "entrance": entrance,
             "opening_hours": oh,
         }
         places_out.append(compiled)
@@ -489,9 +532,10 @@ def build_citizens(
 
         place_id = poi["id"]
         display_name = _poi_display_name(props, kind, place_id)
+        econ_cat = "pharmacy" if props.get("amenity") == "pharmacy" else kind
         compiled = register_place(
             place_id, display_name, building_id, kind,
-            poi_geom, osm_oh=props.get("opening_hours"), on_pilot=False,
+            poi_geom, osm_oh=props.get("opening_hours"), on_pilot=False, economy_category=econ_cat,
         )
         if kind in {"work", "shop", "gastronomy", "tourism"}:
             work_poi_ids.append(compiled["id"])
@@ -691,6 +735,7 @@ def build_citizens(
         },
         "opening_hours_sources": dict(sorted(opening_hours_sources.items())),
         "osm_opening_hours_places": osm_opening_hours_places,
+        "entrance_sources": dict(sorted(entrance_sources.items())),
         "routes_using_crossings": routes_using_crossings,
         "places": [
             {k: v for k, v in place.items() if k not in {"along_m", "side", "on_pilot"}}

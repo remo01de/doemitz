@@ -383,8 +383,68 @@ def place_vehicle(existing, config):
     unreal.log(f"DOEMITZ_TRAFFIC_IMPORT_OK: {config['id']}, {config['route_id']}, {config['length_m']:.1f} m")
 
 
+def build_economy_data_asset(economy_config):
+    if not economy_config:
+        return None
+    asset_class = unreal.load_class(None, "/Script/DoemitzLivingCity.DoemitzEconomyDataAsset")
+    if not asset_class:
+        raise RuntimeError("Build the DoemitzLivingCityEditor target before importing economy data")
+
+    path = f"{ASSETS}/DA_DoemitzEconomy"
+    asset = EDITOR.load_asset(path) if EDITOR.does_asset_exist(path) else None
+    if asset is None:
+        factory = unreal.DataAssetFactory()
+        factory.set_editor_property("data_asset_class", asset_class)
+        asset = TOOLS.create_asset("DA_DoemitzEconomy", ASSETS, asset_class, factory)
+    if asset is None:
+        raise RuntimeError(f"Could not create economy data asset {path}")
+
+    asset.set_editor_property("economy_seed", int(economy_config["economy_seed"]))
+    asset.set_editor_property("starting_money_cents", int(economy_config["starting_money_cents"]))
+    asset.set_editor_property("starting_money_source", str(economy_config["starting_money_source"]))
+
+    assortment_structs = []
+    for group in economy_config.get("assortments", []):
+        grp = unreal.DoemitzAssortmentDefinition()
+        grp.set_editor_property("category", group["category"])
+        item_structs = []
+        for item in group.get("items", []):
+            it = unreal.DoemitzItemDefinition()
+            it.set_editor_property("item_id", item["id"])
+            it.set_editor_property("display_name", item["name"])
+            it.set_editor_property("price_cents", int(item["price_cents"]))
+            it.set_editor_property("price_source", str(item["price_source"]))
+            item_structs.append(it)
+        grp.set_editor_property("items", item_structs)
+        assortment_structs.append(grp)
+    asset.set_editor_property("assortments", assortment_structs)
+
+    job_structs = []
+    for job in economy_config.get("jobs", []):
+        jb = unreal.DoemitzJobDefinition()
+        jb.set_editor_property("job_id", job["id"])
+        jb.set_editor_property("place_id", job["place_id"])
+        jb.set_editor_property("title", job["title"])
+        jb.set_editor_property("shift_start_minute", int(job["shift_start_minute"]))
+        jb.set_editor_property("shift_end_minute", int(job["shift_end_minute"]))
+        jb.set_editor_property("hourly_wage_cents", int(job["hourly_wage_cents"]))
+        jb.set_editor_property("work_days", [int(d) for d in job["work_days"]])
+        jb.set_editor_property("wage_source", str(job["wage_source"]))
+        job_structs.append(jb)
+    asset.set_editor_property("jobs", job_structs)
+
+    if not EDITOR.save_loaded_asset(asset):
+        raise RuntimeError(f"Could not save economy data asset {path}")
+    unreal.log(
+        f"DOEMITZ_ECONOMY_IMPORT_OK: start={economy_config['starting_money_cents']} ct, "
+        f"{len(assortment_structs)} categories, {len(job_structs)} jobs -> {path}"
+    )
+    return asset
+
+
 def place_citizens(
-    existing, config, road_edge_structs=None, vehicle_structs=None, crossing_structs=None, traffic_seed=202607,
+    existing, config, road_edge_structs=None, vehicle_structs=None, crossing_structs=None,
+    traffic_seed=202607, economy_asset=None,
 ):
     config_name = "Altstadt Simulation Config"
     if not config:
@@ -427,7 +487,17 @@ def place_citizens(
         place_struct.set_editor_property("display_name", entry["name"])
         place_struct.set_editor_property("building_id", entry["building_id"])
         place_struct.set_editor_property("kind", entry["kind"])
+        place_struct.set_editor_property("economy_category", entry.get("economy_category", entry["kind"]))
         place_struct.set_editor_property("access_location", pos)
+        entrance = entry.get("entrance") or {}
+        if entrance:
+            place_struct.set_editor_property("entrance_id", entrance["id"])
+            place_struct.set_editor_property("entrance_location", ue_position(entrance["position_m"]))
+            place_struct.set_editor_property("entrance_source", str(entrance.get("source", "")))
+        else:
+            place_struct.set_editor_property("entrance_id", f"entrance:{entry['id']}")
+            place_struct.set_editor_property("entrance_location", pos)
+            place_struct.set_editor_property("entrance_source", "assumed_sidewalk_access")
 
         oh = entry.get("opening_hours") or {}
         place_struct.set_editor_property("always_open", bool(oh.get("always_open", False)))
@@ -499,6 +569,8 @@ def place_citizens(
     sim_actor.set_editor_property("citizens", citizen_structs)
     sim_actor.set_editor_property("citizen_mesh_variants", variant_meshes)
     sim_actor.set_editor_property("citizen_lod_radius_cm", 15000.0)
+    if economy_asset is not None:
+        sim_actor.set_editor_property("economy_data", economy_asset)
     if road_edge_structs is not None and vehicle_structs is not None:
         sim_actor.set_editor_property("traffic_seed", traffic_seed)
         sim_actor.set_editor_property("road_edges", road_edge_structs)
@@ -544,8 +616,10 @@ def import_level(package):
     road_edge_structs, vehicle_structs, crossing_structs, traffic_seed = place_traffic_network(
         existing, package.get("road-graph"), package.get("traffic_network"), package.get("vehicle"),
     )
+    economy_asset = build_economy_data_asset(package.get("economy"))
     place_citizens(
-        existing, package.get("citizens"), road_edge_structs, vehicle_structs, crossing_structs, traffic_seed,
+        existing, package.get("citizens"), road_edge_structs, vehicle_structs, crossing_structs,
+        traffic_seed, economy_asset,
     )
 
     start = ue_position(package["start_m"])
