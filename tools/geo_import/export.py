@@ -15,7 +15,7 @@ from tools.validation.scene import reference_measurement, validate
 
 LAYERS = ("roads", "buildings", "water")
 AREA_TAGS = ("building", "building:levels", "height", "name", "natural", "water", "waterway")
-ROAD_TAGS = ("highway", "name", "bridge", "tunnel", "layer", "lanes", "width", "surface", "oneway")
+ROAD_TAGS = ("highway", "name", "bridge", "tunnel", "layer", "lanes", "width", "surface", "oneway", "maxspeed")
 
 
 def geometry_parts(geometry, geometry_type: str):
@@ -148,6 +148,28 @@ def build(config: dict, raw_dir: Path, output_dir: Path) -> None:
         ]
         for layer, features in layers.items()
     }
+    node_id_by_local = {}
+    for feature in local_layers["roads"]:
+        way_id = int(feature["id"].rsplit(":", 1)[1])
+        way = dataset.ways.get(way_id)
+        if way is None:
+            continue
+        for nid in osm.node_ids(way):
+            if nid in dataset.nodes:
+                east, north = frame.xy(*dataset.nodes[nid])
+                node_id_by_local.setdefault((round(east, 4), round(north, 4)), f"osm:node:{nid}")
+    for feature in local_layers["roads"]:
+        geom = feature["geometry"]
+        if geom["type"] == "LineString":
+            feature["node_ids"] = [
+                node_id_by_local.get((round(pt[0], 4), round(pt[1], 4)))
+                for pt in geom["coordinates"]
+            ]
+        elif geom["type"] == "MultiLineString":
+            feature["node_ids"] = [
+                [node_id_by_local.get((round(pt[0], 4), round(pt[1], 4))) for pt in line]
+                for line in geom["coordinates"]
+            ]
     validate(local_layers)
     reference = reference_measurement(config["reference"], dataset, frame, local_layers["roads"])
     source = config["source"]

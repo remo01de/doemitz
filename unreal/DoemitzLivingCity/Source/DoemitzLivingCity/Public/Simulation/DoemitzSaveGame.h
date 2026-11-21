@@ -50,10 +50,22 @@ struct FDoemitzSavedVehicle
 	FName VehicleId;
 
 	UPROPERTY()
+	FName EdgeId;
+
+	UPROPERTY()
 	double DistanceCm = 0.0;
 
 	UPROPERTY()
+	double SpeedCmPerSecond = 0.0;
+
+	UPROPERTY()
+	int32 JunctionDecisions = 0;
+
+	UPROPERTY()
 	int32 CompletedLaps = 0;
+
+	UPROPERTY()
+	FVector WorldLocation = FVector::ZeroVector;
 };
 
 UCLASS()
@@ -62,16 +74,18 @@ class DOEMITZLIVINGCITY_API UDoemitzSaveGame : public USaveGame
 	GENERATED_BODY()
 
 public:
-	UPROPERTY()
-	int32 SaveSchemaVersion = 1;
+	static constexpr int32 CurrentSchemaVersion = 2;
 
-	UPROPERTY()
+	UPROPERTY(BlueprintReadWrite, Category = "SaveGame")
+	int32 SaveSchemaVersion = CurrentSchemaVersion;
+
+	UPROPERTY(BlueprintReadWrite, Category = "SaveGame")
 	int32 DayNumber = 1;
 
-	UPROPERTY()
+	UPROPERTY(BlueprintReadWrite, Category = "SaveGame")
 	double TimeOfDayMinutes = 470.0;
 
-	UPROPERTY()
+	UPROPERTY(BlueprintReadWrite, Category = "SaveGame")
 	double TimeScale = 60.0;
 
 	UPROPERTY()

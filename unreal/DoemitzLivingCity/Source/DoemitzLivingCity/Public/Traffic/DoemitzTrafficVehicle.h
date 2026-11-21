@@ -34,13 +34,16 @@ public:
 	FName GetVehicleId() const { return VehicleId; }
 
 	UFUNCTION(BlueprintPure, Category = "Traffic")
-	double GetDistanceAlongRoute() const { return Motion.Distance; }
+	double GetDistanceAlongRoute() const;
 
 	UFUNCTION(BlueprintPure, Category = "Traffic")
 	int32 GetCompletedLaps() const { return Motion.CompletedLaps; }
 
 	UFUNCTION(BlueprintCallable, Category = "Traffic")
 	void RestoreMotionState(double NewDistanceCm, int32 NewCompletedLaps);
+
+	UFUNCTION(BlueprintCallable, Category = "Traffic")
+	void SyncFromSimulation();
 
 protected:
 	virtual void BeginPlay() override;
@@ -67,5 +70,6 @@ private:
 	UPROPERTY(EditInstanceOnly, Category = "Traffic")
 	TArray<FVector> RoutePoints;
 
+	bool bDrivenBySubsystem = false;
 	FDoemitzVehicleMotion Motion;
 };

@@ -6,6 +6,15 @@ from pathlib import Path
 
 import unreal
 from doemitz_citizen_mesh import stylized_citizen
+from doemitz_prop_meshes import (
+    street_bench,
+    street_bollard,
+    street_lamp_glow,
+    street_lamp_metal,
+    street_planter,
+    stylized_bush,
+    stylized_tree,
+)
 from doemitz_vehicle_mesh import compact_car
 
 
@@ -132,10 +141,10 @@ def material(name, color):
     elif name == "WindowGlass":
         roughness_val = 0.14
         metallic_val = 0.25
-    elif name == "LampMetal":
+    elif name in {"LampMetal", "PropLampMetal", "PropBollard"}:
         roughness_val = 0.42
         metallic_val = 0.75
-    elif name == "LanternGlow":
+    elif name in {"LanternGlow", "PropLanternGlow"}:
         roughness_val = 0.25
         emissive_color = (3.8, 2.6, 1.0)
 
@@ -225,6 +234,124 @@ def place(existing, name, actor_class, position, rotation=None):
     return actor
 
 
+def place_instanced_props(existing, prop_instances):
+    hism_class = unreal.load_class(None, "/Script/DoemitzLivingCity.DoemitzInstancedPropActor")
+    if not hism_class:
+        raise RuntimeError("Build the DoemitzLivingCityEditor target before importing HISM props")
+
+    def make_transforms(entries, has_scale=False):
+        result = []
+        for entry in entries:
+            pos = ue_position(entry[:3])
+            rot = unreal.Rotator(0.0, float(entry[3]), 0.0)
+            s = float(entry[4]) if has_scale else 1.0
+            result.append(unreal.Transform(pos, rot, unreal.Vector(s, s, s)))
+        return result
+
+    groups = [
+        ("Altstadt HISM Lamps Metal", "PropLampMetal", street_lamp_metal(), make_transforms(prop_instances.get("street_lamps", []))),
+        ("Altstadt HISM Lamps Glow", "PropLanternGlow", street_lamp_glow(), make_transforms(prop_instances.get("street_lamps", []))),
+        ("Altstadt HISM Benches", "PropBench", street_bench(), make_transforms(prop_instances.get("benches", []))),
+        ("Altstadt HISM Planters", "PropPlanter", street_planter(), make_transforms(prop_instances.get("planters", []))),
+        ("Altstadt HISM Bollards", "PropBollard", street_bollard(), make_transforms(prop_instances.get("bollards", []))),
+    ]
+
+    for variant in range(3):
+        tree_entries = [e for e in prop_instances.get("trees", []) if int(e[5]) == variant]
+        groups.append((f"Altstadt HISM Trees {variant}", f"PropTree_{variant}", stylized_tree(variant), make_transforms(tree_entries, has_scale=True)))
+        bush_entries = [e for e in prop_instances.get("bushes", []) if int(e[5]) == variant]
+        groups.append((f"Altstadt HISM Bushes {variant}", f"PropBush_{variant}", stylized_bush(variant), make_transforms(bush_entries, has_scale=True)))
+
+    active_labels = set()
+    total_instances = 0
+    for label, mesh_name, mesh_data, transforms in groups:
+        if not transforms:
+            continue
+        active_labels.add(label)
+        actor = place(existing, label, hism_class, unreal.Vector())
+        hism_comp = actor.get_editor_property("hism_component")
+        hism_comp.set_static_mesh(static_mesh(mesh_name, mesh_data))
+        actor.set_instances(transforms)
+        total_instances += len(transforms)
+
+    for label, actor in list(existing.items()):
+        if label.startswith("Altstadt HISM ") and label not in active_labels:
+            if not ACTORS.destroy_actor(actor):
+                raise RuntimeError(f"Could not remove obsolete HISM prop actor {label}")
+    unreal.log(f"DOEMITZ_HISM_IMPORT_OK: {len(active_labels)} HISM actors, {total_instances} instances")
+
+
+def place_traffic_network(existing, road_graph, traffic_network, legacy_vehicle):
+    vehicle_class = unreal.load_class(None, "/Script/DoemitzLivingCity.DoemitzTrafficVehicle")
+    if not vehicle_class:
+        raise RuntimeError("Build the DoemitzLivingCityEditor target before importing traffic vehicles")
+
+    if not traffic_network or not road_graph:
+        place_vehicle(existing, legacy_vehicle)
+        return [], [], 202607
+
+    # Remove legacy single test vehicle if present
+    legacy_actor = existing.get("Altstadt Test Vehicle")
+    if legacy_actor and not ACTORS.destroy_actor(legacy_actor):
+        raise RuntimeError("Could not remove obsolete Altstadt Test Vehicle")
+
+    edges_by_id = {edge["id"]: edge for edge in road_graph["edges"]}
+    edge_structs = []
+    for edge in road_graph["edges"]:
+        edef = unreal.DoemitzRoadEdgeDefinition()
+        edef.set_editor_property("edge_id", edge["id"])
+        edef.set_editor_property("from_node_id", edge["from_node"])
+        edef.set_editor_property("to_node_id", edge["to_node"])
+        edef.set_editor_property("one_way", bool(edge["oneway"]))
+        edef.set_editor_property("dead_end", bool(edge["dead_end"]))
+        edef.set_editor_property("width_cm", float(edge["width_m"]) * 100.0)
+        edef.set_editor_property("speed_limit_cm_per_second", float(edge["speed_kmh"]) / 0.036)
+        edef.set_editor_property("points", list(map(ue_position, edge["points_m"])))
+        edge_structs.append(edef)
+
+    vehicle_structs = []
+    active_labels = set()
+    for entry in traffic_network["vehicles"]:
+        vid = entry["id"]
+        vdef = unreal.DoemitzVehicleDefinition()
+        vdef.set_editor_property("vehicle_id", vid)
+        vdef.set_editor_property("start_edge_id", entry["start_edge_id"])
+        vdef.set_editor_property("start_distance_cm", float(entry["start_distance_m"]) * 100.0)
+        vehicle_structs.append(vdef)
+
+        edge = edges_by_id[entry["start_edge_id"]]
+        p0 = ue_position(edge["points_m"][0])
+        p1 = ue_position(edge["points_m"][1])
+        heading = p1 - p0
+        yaw = degrees(atan2(heading.y, heading.x))
+        label = f"Altstadt Vehicle - {vid}"
+        active_labels.add(label)
+        actor = place(existing, label, vehicle_class, p0, unreal.Rotator(yaw=yaw))
+        actor.get_editor_property("vehicle_mesh").set_static_mesh(
+            static_mesh(f"CompactCar_{vid}", compact_car(entry.get("body_color")))
+        )
+        actor.set_editor_property("vehicle_id", vid)
+        actor.set_editor_property("route_id", "")
+        actor.set_editor_property("route_points", [])
+
+    for actor in list(ACTORS.get_all_level_actors()):
+        if actor.get_class() == vehicle_class and actor.get_actor_label() not in active_labels:
+            unreal.log(f"Destroying obsolete vehicle actor: {actor.get_actor_label()}")
+            if not ACTORS.destroy_actor(actor):
+                raise RuntimeError(f"Could not remove obsolete vehicle actor {actor.get_actor_label()}")
+    remaining_vehicles = [
+        (a.get_actor_label(), str(a.get_editor_property("vehicle_id")))
+        for a in ACTORS.get_all_level_actors() if a.get_class() == vehicle_class
+    ]
+    unreal.log(f"Remaining vehicle actors in level: {remaining_vehicles}")
+
+    unreal.log(
+        f"DOEMITZ_TRAFFIC_NETWORK_IMPORT_OK: {len(vehicle_structs)} vehicles, "
+        f"{len(edge_structs)} road edges (seed={traffic_network['seed']})"
+    )
+    return edge_structs, vehicle_structs, int(traffic_network["seed"])
+
+
 def place_vehicle(existing, config):
     name = "Altstadt Test Vehicle"
     if not config:
@@ -248,7 +375,7 @@ def place_vehicle(existing, config):
     unreal.log(f"DOEMITZ_TRAFFIC_IMPORT_OK: {config['id']}, {config['route_id']}, {config['length_m']:.1f} m")
 
 
-def place_citizens(existing, config):
+def place_citizens(existing, config, road_edge_structs=None, vehicle_structs=None, traffic_seed=202607):
     config_name = "Altstadt Simulation Config"
     if not config:
         for label, actor in list(existing.items()):
@@ -332,6 +459,10 @@ def place_citizens(existing, config):
     sim_actor.set_editor_property("places", place_structs)
     sim_actor.set_editor_property("routes", route_structs)
     sim_actor.set_editor_property("citizens", citizen_structs)
+    if road_edge_structs is not None and vehicle_structs is not None:
+        sim_actor.set_editor_property("traffic_seed", traffic_seed)
+        sim_actor.set_editor_property("road_edges", road_edge_structs)
+        sim_actor.set_editor_property("vehicles", vehicle_structs)
     unreal.log(
         f"DOEMITZ_CITIZENS_IMPORT_OK: {len(citizen_structs)} citizens, "
         f"{len(place_structs)} places, {len(route_structs)} routes"
@@ -364,12 +495,15 @@ def import_level(package):
         component.set_static_mesh(asset)
         profile = "BlockAll" if package["meshes"][name]["collision"] else "NoCollision"
         component.set_collision_profile_name(profile)
-    for actor in existing.values():
+    for actor in list(existing.values()):
         if isinstance(actor, unreal.StaticMeshActor) and actor not in mesh_actors.values():
             if not ACTORS.destroy_actor(actor):
                 raise RuntimeError(f"Could not remove obsolete generated actor {actor.get_actor_label()}")
-    place_vehicle(existing, package.get("vehicle"))
-    place_citizens(existing, package.get("citizens"))
+    place_instanced_props(existing, package.get("props", {}).get("instances", {}))
+    road_edge_structs, vehicle_structs, traffic_seed = place_traffic_network(
+        existing, package.get("road-graph"), package.get("traffic_network"), package.get("vehicle"),
+    )
+    place_citizens(existing, package.get("citizens"), road_edge_structs, vehicle_structs, traffic_seed)
 
     start = ue_position(package["start_m"])
     first, second = (ue_position([*point, 0]) for point in package["reference_points_m"])

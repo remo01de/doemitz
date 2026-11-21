@@ -39,3 +39,4 @@ Das Unreal-Projekt öffnet die Altstadt-Karte als Startlevel. Im Editor startet 
 - [Sprint 4 – Tag-/Nachtwechsel und UMG-Uhrzeit-/Status-HUD](docs/SPRINT_04.md)
 - [Sprint 5 – SaveGame-System und Zeitsteuerung](docs/SPRINT_05.md)
 - [Sprint 6 – Stilisierte Altstadt-Architektur, Straßenlaternen und Vegetation](docs/SPRINT_06.md)
+- [Sprint 7 – Performance-Basis und vernetzter Straßenverkehr](docs/SPRINT_07.md)

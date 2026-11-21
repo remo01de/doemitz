@@ -4,6 +4,7 @@
 #include "Components/BoxComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/World.h"
+#include "Simulation/DoemitzSimulationSubsystem.h"
 
 bool FDoemitzVehicleMotion::Initialize(const TArray<FVector>& Route, double StartDistance)
 {
@@ -50,6 +51,7 @@ void FDoemitzVehicleMotion::Advance(double TravelDistance)
 ADoemitzTrafficVehicle::ADoemitzTrafficVehicle()
 {
 	PrimaryActorTick.bCanEverTick = true;
+	PrimaryActorTick.TickGroup = TG_PostUpdateWork;
 
 	VehicleMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("VehicleMesh"));
 	SetRootComponent(VehicleMesh);
@@ -68,11 +70,24 @@ ADoemitzTrafficVehicle::ADoemitzTrafficVehicle()
 void ADoemitzTrafficVehicle::BeginPlay()
 {
 	Super::BeginPlay();
+
+	if (const UDoemitzSimulationSubsystem* Subsystem = UDoemitzSimulationSubsystem::Get(this))
+	{
+		FDoemitzVehicleState State;
+		if (!VehicleId.IsNone() && Subsystem->GetVehicleState(VehicleId, State))
+		{
+			bDrivenBySubsystem = true;
+			SetActorLocationAndRotation(State.WorldLocation, State.WorldRotation);
+			UE_LOG(LogTemp, Display, TEXT("Traffic vehicle %s linked to road-graph simulation on %s"),
+				*VehicleId.ToString(), *State.CurrentEdgeId.ToString());
+			return;
+		}
+	}
+
 	if (VehicleId.IsNone() || RouteId.IsNone() || !FMath::IsFinite(SpeedCmPerSecond) ||
 		SpeedCmPerSecond <= 0.0 || !Motion.Initialize(RoutePoints, StartDistanceCm))
 	{
-		UE_LOG(LogTemp, Error, TEXT("Traffic vehicle %s has invalid route configuration"), *GetName());
-		SetActorTickEnabled(false);
+		// May be linked on first tick if ADoemitzSimulationConfig::BeginPlay runs after this actor
 		return;
 	}
 
@@ -81,9 +96,55 @@ void ADoemitzTrafficVehicle::BeginPlay()
 		*VehicleId.ToString(), *RouteId.ToString(), Motion.Length / 100.0);
 }
 
+double ADoemitzTrafficVehicle::GetDistanceAlongRoute() const
+{
+	if (bDrivenBySubsystem)
+	{
+		if (const UDoemitzSimulationSubsystem* Subsystem = UDoemitzSimulationSubsystem::Get(this))
+		{
+			FDoemitzVehicleState State;
+			if (Subsystem->GetVehicleState(VehicleId, State))
+			{
+				return State.DistanceOnEdgeCm;
+			}
+		}
+	}
+	return Motion.Distance;
+}
+
+void ADoemitzTrafficVehicle::SyncFromSimulation()
+{
+	if (const UDoemitzSimulationSubsystem* Subsystem = UDoemitzSimulationSubsystem::Get(this))
+	{
+		FDoemitzVehicleState State;
+		if (!VehicleId.IsNone() && Subsystem->GetVehicleState(VehicleId, State))
+		{
+			bDrivenBySubsystem = true;
+			SetActorLocationAndRotation(State.WorldLocation, State.WorldRotation);
+		}
+	}
+}
+
 void ADoemitzTrafficVehicle::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
+
+	if (const UDoemitzSimulationSubsystem* Subsystem = UDoemitzSimulationSubsystem::Get(this))
+	{
+		FDoemitzVehicleState State;
+		if (!VehicleId.IsNone() && Subsystem->GetVehicleState(VehicleId, State))
+		{
+			bDrivenBySubsystem = true;
+			SetActorLocationAndRotation(State.WorldLocation, State.WorldRotation);
+			return;
+		}
+	}
+
+	if (Motion.Length <= 0.0)
+	{
+		return;
+	}
+
 	const double TravelDistance = SpeedCmPerSecond * DeltaSeconds;
 	const FTransform NextPose = Motion.Sample(RoutePoints, Motion.Distance + TravelDistance);
 
@@ -111,6 +172,11 @@ void ADoemitzTrafficVehicle::Tick(float DeltaSeconds)
 
 void ADoemitzTrafficVehicle::RestoreMotionState(double NewDistanceCm, int32 NewCompletedLaps)
 {
+	if (bDrivenBySubsystem)
+	{
+		SyncFromSimulation();
+		return;
+	}
 	if (Motion.Length <= 0.0 || !FMath::IsFinite(NewDistanceCm) || NewDistanceCm < 0.0)
 	{
 		return;

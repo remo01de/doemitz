@@ -17,6 +17,7 @@ from tools.geo_import.export import geometry_parts, write_json
 from tools.mesh_generator.architecture import ROOF_STYLES, WALL_STYLES, add_stylized_building
 from tools.mesh_generator.citizens import build_citizens
 from tools.mesh_generator.props import add_street_lamps, add_stylized_trees
+from tools.mesh_generator.road_graph import build_road_graph
 from tools.mesh_generator.traffic import build_vehicle_route
 
 
@@ -194,7 +195,10 @@ def add_streets(meshes, roads, bounds, obstacles, base_m, sidewalk_widths, defau
     return width_sources, sidewalks
 
 
-def build(scene, report, sidewalk_widths=None, vehicle_config=None, citizens_config=None, default_sidewalk_widths=None):
+def build(
+    scene, report, sidewalk_widths=None, vehicle_config=None,
+    citizens_config=None, default_sidewalk_widths=None, traffic_network_config=None,
+):
     if scene["schema_version"] != 1 or scene["coordinates"]["local_axes"] != ["east", "north"]:
         raise ValueError("expected scene schema 1 with local [east, north] coordinates")
     if scene["coordinates"]["unit"] != "meter" or scene["terrain"]["kind"] != "flat_placeholder":
@@ -245,10 +249,39 @@ def build(scene, report, sidewalk_widths=None, vehicle_config=None, citizens_con
             or road["properties"]["highway"] in default_sidewalk_widths
         )
     }
-    lamp_lights, lamps_placed, benches_placed, bollards_placed = add_street_lamps(
+    lamp_lights, street_prop_instances = add_street_lamps(
         meshes, roads, sidewalks, base_m, base_m + ROAD_ELEVATION_M + CURB_HEIGHT_M, detailed_road_ids,
     )
-    trees_placed = add_stylized_trees(meshes, bounds, excluded_for_trees, base_m)
+    vegetation_instances = add_stylized_trees(meshes, bounds, excluded_for_trees, base_m)
+    prop_instances = {**street_prop_instances, **vegetation_instances}
+    road_graph = build_road_graph(roads, road_width, base_m + ROAD_ELEVATION_M)
+    traffic_network = None
+    if traffic_network_config:
+        edges_by_id = {edge["id"]: edge for edge in road_graph["edges"]}
+        compiled_vehicles = []
+        seen_vehicle_ids = set()
+        for entry in traffic_network_config.get("vehicles", []):
+            vid = entry["id"]
+            edge_id = entry["start_edge_id"]
+            if not vid or vid in seen_vehicle_ids:
+                raise ValueError(f"duplicate or invalid traffic vehicle id: {vid}")
+            edge = edges_by_id.get(edge_id)
+            if edge is None or edge["dead_end"]:
+                raise ValueError(f"traffic vehicle {vid} references invalid or dead-end edge {edge_id}")
+            start_m = float(entry.get("start_distance_m", 5.0))
+            if not 0.0 <= start_m < edge["length_m"]:
+                raise ValueError(f"traffic vehicle {vid} start_distance_m {start_m} out of range for {edge_id}")
+            seen_vehicle_ids.add(vid)
+            compiled_vehicles.append({
+                "id": vid,
+                "start_edge_id": edge_id,
+                "start_distance_m": round(start_m, 3),
+                "body_color": entry.get("body_color", [0.72, 0.22, 0.16]),
+            })
+        traffic_network = {
+            "seed": int(traffic_network_config.get("seed", 202607)),
+            "vehicles": compiled_vehicles,
+        }
     vehicle = None
     if vehicle_config:
         vehicle = build_vehicle_route(
@@ -289,6 +322,8 @@ def build(scene, report, sidewalk_widths=None, vehicle_config=None, citizens_con
         "start_m": [start.x, start.y, base_m + 1.0],
         "roof_probe_m": [roof_probe.x, roof_probe.y, base_m],
         "sidewalk_probe_m": sidewalk_probe,
+        "road-graph": road_graph,
+        "traffic_network": traffic_network,
         "vehicle": vehicle,
         "citizens": citizens,
         "sidewalks": {
@@ -299,11 +334,13 @@ def build(scene, report, sidewalk_widths=None, vehicle_config=None, citizens_con
         "height_sources": dict(height_sources),
         "width_sources": dict(width_sources),
         "props": {
-            "street_lamps": lamps_placed,
+            "street_lamps": len(prop_instances["street_lamps"]),
             "lamp_lights_m": lamp_lights,
-            "benches": benches_placed,
-            "bollards": bollards_placed,
-            "trees_and_bushes": trees_placed,
+            "benches": len(prop_instances["benches"]),
+            "planters": len(prop_instances["planters"]),
+            "bollards": len(prop_instances["bollards"]),
+            "trees_and_bushes": len(prop_instances["trees"]) + len(prop_instances["bushes"]),
+            "instances": prop_instances,
         },
         "meshes": {
             name: {
@@ -333,7 +370,7 @@ def main():
             citizens_config = citizens_layout
     package = build(
         scene, report, layout.get("sidewalk_widths_m"), layout.get("vehicle"),
-        citizens_config, layout.get("default_sidewalk_widths_m"),
+        citizens_config, layout.get("default_sidewalk_widths_m"), layout.get("traffic_network"),
     )
     package["source_scene_sha256"] = sha256(scene_bytes).hexdigest()
     destination = args.scene.with_name("unreal-city-meshes.json")

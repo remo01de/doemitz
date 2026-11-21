@@ -134,6 +134,90 @@ struct DOEMITZLIVINGCITY_API FDoemitzCitizenState
 	int32 CompletedTrips = 0;
 };
 
+USTRUCT(BlueprintType)
+struct DOEMITZLIVINGCITY_API FDoemitzRoadEdgeDefinition
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic")
+	FName EdgeId;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic")
+	FName FromNodeId;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic")
+	FName ToNodeId;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic")
+	bool bOneWay = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic")
+	bool bDeadEnd = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic", meta = (Units = "cm"))
+	double WidthCm = 600.0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic", meta = (Units = "cm/s"))
+	double SpeedLimitCmPerSecond = 833.33;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic")
+	TArray<FVector> Points;
+};
+
+USTRUCT(BlueprintType)
+struct DOEMITZLIVINGCITY_API FDoemitzVehicleDefinition
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic")
+	FName VehicleId;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic")
+	FName StartEdgeId;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic", meta = (Units = "cm"))
+	double StartDistanceCm = 0.0;
+};
+
+USTRUCT(BlueprintType)
+struct DOEMITZLIVINGCITY_API FDoemitzVehicleState
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
+	FName VehicleId;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
+	FName CurrentEdgeId;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
+	FName NextEdgeId;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
+	double DistanceOnEdgeCm = 0.0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
+	double CurrentSpeedCmPerSecond = 0.0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
+	FVector WorldLocation = FVector::ZeroVector;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
+	FRotator WorldRotation = FRotator::ZeroRotator;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
+	int32 JunctionDecisions = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
+	bool bYieldingForRightOfWay = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
+	bool bYieldingForVehicle = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
+	bool bYieldingForPedestrian = false;
+};
+
 UCLASS()
 class DOEMITZLIVINGCITY_API UDoemitzSimulationSubsystem : public UTickableWorldSubsystem
 {
@@ -151,6 +235,11 @@ public:
 		const TArray<FDoemitzPlaceDefinition>& InPlaces,
 		const TArray<FDoemitzCitizenRoute>& InRoutes,
 		const TArray<FDoemitzCitizenDefinition>& InCitizens);
+
+	void ConfigureTrafficNetwork(
+		int32 InTrafficSeed,
+		const TArray<FDoemitzRoadEdgeDefinition>& InRoadEdges,
+		const TArray<FDoemitzVehicleDefinition>& InVehicles);
 
 	UFUNCTION(BlueprintPure, Category = "Simulation", meta = (WorldContext = "WorldContextObject"))
 	static UDoemitzSimulationSubsystem* Get(const UObject* WorldContextObject);
@@ -179,6 +268,24 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Simulation")
 	TArray<FName> GetAllCitizenIds() const;
 
+	UFUNCTION(BlueprintPure, Category = "Traffic")
+	int32 GetVehicleCount() const { return VehicleRecords.Num(); }
+
+	UFUNCTION(BlueprintPure, Category = "Traffic")
+	int32 GetRoadEdgeCount() const { return RoadEdgesById.Num(); }
+
+	UFUNCTION(BlueprintPure, Category = "Traffic")
+	bool GetVehicleState(FName VehicleId, FDoemitzVehicleState& OutState) const;
+
+	UFUNCTION(BlueprintPure, Category = "Traffic")
+	TArray<FName> GetAllVehicleIds() const;
+
+	UFUNCTION(BlueprintPure, Category = "Traffic")
+	FName GetJunctionReservation(FName NodeId) const;
+
+	UFUNCTION(BlueprintCallable, Category = "Traffic")
+	bool SetVehicleEdgePositionForTest(FName VehicleId, FName EdgeId, double DistanceOnEdgeCm, double SpeedCmPerSecond = 0.0);
+
 	UFUNCTION(BlueprintCallable, Category = "SaveGame")
 	bool SaveCityState(const FString& SlotName = TEXT("DoemitzQuicksave"));
 
@@ -204,20 +311,49 @@ private:
 		double ActiveRouteLength = 0.0;
 	};
 
+	struct FRoadEdgeRecord
+	{
+		FDoemitzRoadEdgeDefinition Definition;
+		TArray<double> SegmentEnds;
+		double LengthCm = 0.0;
+		FVector2D StartDir2D = FVector2D(1.0, 0.0);
+		FVector2D EndDir2D = FVector2D(1.0, 0.0);
+	};
+
+	struct FVehicleRecord
+	{
+		FDoemitzVehicleDefinition Definition;
+		FDoemitzVehicleState State;
+		FName ReservedNodeId;
+	};
+
 	static int32 FindScheduleIndex(const TArray<FDoemitzScheduleEntry>& Schedule, double MinuteOfDay);
 	static FName MakeRouteKey(FName FromPlaceId, FName ToPlaceId);
 	void BuildRouteCache(FCitizenRecord& Record, FName FromPlaceId, FName DestinationPlaceId);
 	void StartTrip(FCitizenRecord& Record, FName DestinationPlaceId);
 	void UpdateCitizen(FCitizenRecord& Record, double DeltaSeconds);
 
+	void SampleEdgePose(const FRoadEdgeRecord& Edge, double DistanceCm, FVector& OutLocation, FRotator& OutRotation) const;
+	FName ChooseNextEdge(const FVehicleRecord& Record) const;
+	FName FindNearestDrivableEdge(const FVector& Location, double& OutDistanceCm) const;
+	void UpdateTraffic(double DeltaSeconds);
+	void ReleaseJunctionReservation(FVehicleRecord& Record);
+
 	bool bIsConfigured = false;
 	double TimeOfDayMinutes = 470.0;
 	double TimeScale = 60.0;
 	int32 DayNumber = 1;
+	int32 TrafficSeed = 202607;
 	FString LastNotification;
 	double NotificationRemainingSeconds = 0.0;
 
 	TMap<FName, FDoemitzPlaceDefinition> PlacesById;
 	TMap<FName, FDoemitzCitizenRoute> RoutesByKey;
 	TMap<FName, FCitizenRecord> CitizenRecords;
+
+	TMap<FName, FRoadEdgeRecord> RoadEdgesById;
+	TMap<FName, TArray<FName>> OutgoingEdgesByNode;
+	TMap<FName, FVehicleRecord> VehicleRecords;
+	TArray<FName> OrderedVehicleIds;
+	TMap<FName, FName> JunctionReservations;
 };

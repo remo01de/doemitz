@@ -19,6 +19,10 @@ void ADoemitzSimulationConfig::BeginPlay()
 	if (UDoemitzSimulationSubsystem* Subsystem = GetWorld()->GetSubsystem<UDoemitzSimulationSubsystem>())
 	{
 		Subsystem->ConfigureSimulation(StartMinute, TimeScale, Places, Routes, Citizens);
+		if (!RoadEdges.IsEmpty() && !Vehicles.IsEmpty())
+		{
+			Subsystem->ConfigureTrafficNetwork(TrafficSeed, RoadEdges, Vehicles);
+		}
 	}
 	TryAttachClockHud();
 }

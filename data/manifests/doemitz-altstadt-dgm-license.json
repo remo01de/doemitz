@@ -1,0 +1,13 @@
+{
+  "dataset": "Digitales Geländemodell 1 m (DGM1) Mecklenburg-Vorpommern",
+  "provider": "Landesamt für innere Verwaltung Mecklenburg-Vorpommern (LAiV M-V), Amt für Geoinformation, Vermessungs- und Katasterwesen",
+  "portal_url": "https://www.geoportal-mv.de",
+  "license": "CC BY 4.0 / Datenlizenz Deutschland – Namensnennung (Open Data M-V)",
+  "attribution_required": "© GeoBasis-DE/M-V <Jahr der Datenlieferung>",
+  "vertical_crs": "DHHN2016 (NHN)",
+  "horizontal_crs": "ETRS89 / UTM Zone 33N (EPSG:25833)",
+  "grid_spacing_m": 1.0,
+  "status": "license_verified_not_yet_imported",
+  "checked_at": "2026-11-21",
+  "notes": "Freie kommerzielle und nicht-kommerzielle Nutzung sowie Bearbeitung bei Quellenvermerk zulässig. Einbindung erfolgt in einem späteren Sprint nach Sprint 7."
+}

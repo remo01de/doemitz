@@ -11,7 +11,8 @@ HEADLIGHT = (0.95, 0.83, 0.55)
 TAILLIGHT = (0.6, 0.023, 0.013)
 
 
-def compact_car():
+def compact_car(paint_color=PAINT):
+    paint = tuple(paint_color) if paint_color is not None else PAINT
     vertices, triangles, vertex_colors = [], [], []
 
     def loft(rings, color):
@@ -57,7 +58,7 @@ def compact_car():
         (-1.88, 1.86, 0.85, 0.44, 0.16),
         (-1.84, 1.84, 0.84, 0.77, 0.15),
         (-1.70, 1.66, 0.77, 0.91, 0.13),
-    ], PAINT)
+    ], paint)
     panels([
         (-1.44, 0.97, 0.72, 0.88, 0.12),
         (-1.05, 0.41, 0.63, 1.39, 0.12),
@@ -65,7 +66,7 @@ def compact_car():
     panels([
         (-1.07, 0.43, 0.65, 1.39, 0.12),
         (-0.99, 0.36, 0.60, 1.48, 0.12),
-    ], PAINT)
+    ], paint)
 
     for side in (-1, 1):
         for north in (-1.14, 1.16):
@@ -75,7 +76,7 @@ def compact_car():
             wheel(north, tire, RUBBER)
             rim = sorted(((side * 0.908, 0.17), (side * 0.924, 0.15)))
             wheel(north, rim, METAL)
-        panels([(0.46, 0.67, 0.085, 0.91, 0.032), (0.48, 0.65, 0.074, 1.00, 0.025)], PAINT, side * 0.80)
+        panels([(0.46, 0.67, 0.085, 0.91, 0.032), (0.48, 0.65, 0.074, 1.00, 0.025)], paint, side * 0.80)
         panels([(1.78, 1.87, 0.17, 0.61, 0.023), (1.77, 1.86, 0.16, 0.73, 0.023)], HEADLIGHT, side * 0.53)
         panels([(-1.88, -1.81, 0.14, 0.59, 0.018), (-1.87, -1.79, 0.13, 0.74, 0.018)], TAILLIGHT, side * 0.59)
     panels([(1.845, 1.87, 0.22, 0.47, 0.01), (1.845, 1.87, 0.22, 0.58, 0.01)], RUBBER)

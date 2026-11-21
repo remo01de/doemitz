@@ -25,5 +25,40 @@
     "speed_kmh": 18,
     "start_distance_m": 72,
     "corner_trim_m": 4
+  },
+  "traffic_network": {
+    "seed": 202607,
+    "vehicles": [
+      {
+        "id": "altstadt_vehicle_01",
+        "start_edge_id": "edge:osm:way:25642325:0:2:fwd",
+        "start_distance_m": 15.0,
+        "body_color": [0.72, 0.22, 0.16]
+      },
+      {
+        "id": "altstadt_vehicle_02",
+        "start_edge_id": "edge:osm:way:25642221:0:0:fwd",
+        "start_distance_m": 20.0,
+        "body_color": [0.16, 0.36, 0.58]
+      },
+      {
+        "id": "altstadt_vehicle_03",
+        "start_edge_id": "edge:osm:way:157877527:0:0:fwd",
+        "start_distance_m": 10.0,
+        "body_color": [0.78, 0.56, 0.16]
+      },
+      {
+        "id": "altstadt_vehicle_04",
+        "start_edge_id": "edge:osm:way:157877528:0:0:fwd",
+        "start_distance_m": 10.0,
+        "body_color": [0.22, 0.48, 0.30]
+      },
+      {
+        "id": "altstadt_vehicle_05",
+        "start_edge_id": "edge:osm:way:124550214:0:0:fwd",
+        "start_distance_m": 12.0,
+        "body_color": [0.82, 0.78, 0.70]
+      }
+    ]
   }
 }

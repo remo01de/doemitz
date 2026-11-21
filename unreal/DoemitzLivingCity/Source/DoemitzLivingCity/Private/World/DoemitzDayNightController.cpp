@@ -87,6 +87,12 @@ void ADoemitzDayNightController::UpdateLightingFromSimulation()
 		}
 		if (UPointLightComponent* PointComp = Lamp->FindComponentByClass<UPointLightComponent>())
 		{
+			if (Lamp->IsHidden())
+			{
+				PointComp->SetIntensity(0.0f);
+				PointComp->SetVisibility(false);
+				continue;
+			}
 			PointComp->SetIntensity(CurrentStreetLightIntensity);
 			PointComp->SetVisibility(bLightsOn);
 		}

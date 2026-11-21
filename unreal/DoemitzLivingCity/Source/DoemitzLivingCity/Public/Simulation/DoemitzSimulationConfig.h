@@ -41,6 +41,15 @@ private:
 	UPROPERTY(EditInstanceOnly, Category = "Simulation")
 	TArray<FDoemitzCitizenDefinition> Citizens;
 
+	UPROPERTY(EditInstanceOnly, Category = "Traffic")
+	int32 TrafficSeed = 202607;
+
+	UPROPERTY(EditInstanceOnly, Category = "Traffic")
+	TArray<FDoemitzRoadEdgeDefinition> RoadEdges;
+
+	UPROPERTY(EditInstanceOnly, Category = "Traffic")
+	TArray<FDoemitzVehicleDefinition> Vehicles;
+
 	UPROPERTY(EditAnywhere, Category = "UI")
 	TSubclassOf<UDoemitzClockWidget> ClockWidgetClass;
 
