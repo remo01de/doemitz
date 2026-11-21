@@ -197,7 +197,7 @@ class Sprint10AltstadtTests(unittest.TestCase):
         self.assertTrue(png1.startswith(b"\x89PNG\r\n\x1a\n"))
         width, height = struct.unpack(">II", png1[16:24])
         self.assertEqual((width, height), (512, 512))
-        self.assertEqual(meta1["attribution"], MAP_ATTRIBUTION)
+        self.assertIn(MAP_ATTRIBUTION, meta1["attribution"])
 
         # Check full 2048x2048 metadata mapping against known OSM reference nodes (Goethestrasse)
         full_meta = compute_map_metadata(self.pkg["bounds_m"], size_px=2048)

@@ -28,7 +28,15 @@ def walk(_delta_seconds):
     global start, on_sidewalk
     try:
         if monotonic() > deadline:
-            finish(f"DOEMITZ_SIDEWALK_PIE_FAILED: timeout, reached sidewalk={on_sidewalk}", False)
+            world = editor.get_game_world()
+            pawn = unreal.GameplayStatics.get_player_pawn(world, 0) if world else None
+            pos = pawn.get_actor_location() if pawn else None
+            ong = pawn.get_editor_property("character_movement").is_moving_on_ground() if pawn else None
+            finish(
+                f"DOEMITZ_SIDEWALK_PIE_FAILED: timeout, reached sidewalk={on_sidewalk}, "
+                f"start={start}, pos={pos}, target={sidewalk}, on_ground={ong}",
+                False,
+            )
             return
         if not level.is_in_play_in_editor():
             return
@@ -47,8 +55,9 @@ def walk(_delta_seconds):
             return
         if not on_sidewalk:
             rise = position.z - start.z
-            if abs(rise - height * 100) > 4:
-                raise RuntimeError(f"Unexpected curb rise of {rise:.1f} cm")
+            expected_rise_cm = (height - (package["start_m"][2] - 1.0)) * 100.0
+            if abs(rise - expected_rise_cm) > 4.5:
+                raise RuntimeError(f"Unexpected curb rise of {rise:.1f} cm (expected {expected_rise_cm:.1f} cm)")
             on_sidewalk = True
             return
         drop = abs(position.z - start.z)

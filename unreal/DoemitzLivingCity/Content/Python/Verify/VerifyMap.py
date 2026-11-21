@@ -72,11 +72,10 @@ def check(_delta_seconds):
             raise RuntimeError("GetCityMapWidget() returned None")
         map_widget.refresh_map_data()
 
-        # Verify mandatory OSM attribution text
+        # Verify mandatory OSM and GeoBasis-DE/M-V attribution text
         attr = map_widget.get_attribution_text_string()
-        expected_attr = "Kartendaten \u00a9 OpenStreetMap contributors, ODbL 1.0"
-        if attr != expected_attr:
-            raise RuntimeError(f"unexpected map attribution: {attr!r} != {expected_attr!r}")
+        if "OpenStreetMap" not in attr or "\u00a9 GeoBasis-DE/M-V" not in attr:
+            raise RuntimeError(f"unexpected map attribution (missing OSM or GeoBasis): {attr!r}")
 
         # Verify marker counts come from simulation state
         if map_widget.get_citizen_marker_count() != 30:

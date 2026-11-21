@@ -107,7 +107,7 @@ class DOEMITZLIVINGCITY_API UDoemitzSaveGame : public USaveGame
 	GENERATED_BODY()
 
 public:
-	static constexpr int32 CurrentSchemaVersion = 5;
+	static constexpr int32 CurrentSchemaVersion = 6;
 
 	UPROPERTY(BlueprintReadWrite, Category = "SaveGame")
 	int32 SaveSchemaVersion = CurrentSchemaVersion;

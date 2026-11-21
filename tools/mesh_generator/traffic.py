@@ -98,6 +98,9 @@ def build_vehicle_route(config, roads, bounds, obstacles, elevation):
     ]).intersection(bounds)
     verify_vehicle_clearance(points, corridor, obstacles)
     start_m = config["start_distance_m"]
+    def _eval_z(e, n):
+        return round(float(elevation(e, n)), 4) if callable(elevation) else float(elevation)
+
     return {
         "id": config["id"],
         "route_id": config["route_id"],
@@ -106,8 +109,8 @@ def build_vehicle_route(config, roads, bounds, obstacles, elevation):
         "start_distance_m": start_m,
         "length_m": centerline.length,
         "preview_pose_m": [
-            (*centerline.interpolate(distance % centerline.length).coords[0], elevation)
-            for distance in (start_m, start_m + 0.1)
+            (pt[0], pt[1], _eval_z(pt[0], pt[1]))
+            for pt in (centerline.interpolate(distance % centerline.length).coords[0] for distance in (start_m, start_m + 0.1))
         ],
-        "points_m": [(east, north, elevation) for east, north in points],
+        "points_m": [(east, north, _eval_z(east, north)) for east, north in points],
     }

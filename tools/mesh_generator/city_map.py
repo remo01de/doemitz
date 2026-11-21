@@ -189,16 +189,54 @@ def encode_png_rgb(image: np.ndarray) -> bytes:
     )
 
 
+def _compute_hillshade_factor(elevation, meta: dict) -> np.ndarray | None:
+    """Compute subtle deterministic NW Lambertian hillshading factor centered around 1.0."""
+    if elevation is None or elevation.is_flat:
+        return None
+    w = int(meta["width_px"])
+    h = int(meta["height_px"])
+    v_min_e, v_min_n, v_max_e, v_max_n = meta["view_bounds_m"]
+    xs = v_min_e + ((np.arange(w, dtype=np.float64) + 0.5) / w) * (v_max_e - v_min_e)
+    ys = v_max_n - ((np.arange(h, dtype=np.float64) + 0.5) / h) * (v_max_n - v_min_n)
+    ee, nn = np.meshgrid(xs, ys)
+    z = elevation.sample_array(ee, nn)
+    step_e = (v_max_e - v_min_e) / w
+    step_n = (v_max_n - v_min_n) / h
+    # Gradient: dZ/dEast (axis 1), dZ/dNorth (-axis 0 because row 0 is north)
+    dz_de = np.gradient(z, step_e, axis=1)
+    dz_dn = -np.gradient(z, step_n, axis=0)
+    # Exaggerate relief gently (2.2x) so 10 m Festungswall & Elbtal edges read crisply on map
+    exag = 2.2
+    nx = -dz_de * exag
+    ny = -dz_dn * exag
+    nz = np.ones_like(z)
+    inv_len = 1.0 / np.sqrt(nx * nx + ny * ny + nz * nz)
+    nx *= inv_len
+    ny *= inv_len
+    nz *= inv_len
+    # Classic cartographic NW light: azimuth 315 deg (-east, +north), altitude 45 deg
+    lx, ly, lz = -0.5, 0.5, 0.70710678
+    dot = nx * lx + ny * ly + nz * lz
+    # Flat surface dot == lz (0.7071); center shading at 1.0 with subtle +-16% modulation
+    return np.clip(1.0 + (dot - lz) * 0.42, 0.80, 1.18)
+
+
 def render_city_map(
     scene: dict,
     road_width_fn,
     sidewalks: list[Polygon] | None = None,
     size_px: int = DEFAULT_MAP_SIZE_PX,
     output_png: Path | None = None,
+    elevation=None,
 ) -> tuple[bytes, dict]:
     """Render deterministic stylized top-down PNG map from scene.json and return (png_bytes, metadata)."""
     bounds_poly = shape(scene["terrain"]["boundary"])
     meta = compute_map_metadata(bounds_poly.bounds, size_px=size_px)
+    terrain_attr = scene.get("terrain", {}).get("attribution")
+    if terrain_attr:
+        meta["attribution"] = f"{MAP_ATTRIBUTION} | Höhendaten {terrain_attr}"
+        meta["terrain_attribution"] = terrain_attr
+    meta["hillshading"] = bool(elevation is not None and not elevation.is_flat)
 
     canvas = np.empty((size_px, size_px, 3), dtype=np.uint8)
     canvas[:, :] = COLOR_BG
@@ -206,6 +244,12 @@ def render_city_map(
     # 1. Terrain boundary
     for poly in geometry_parts(bounds_poly, "Polygon"):
         _rasterize_polygon(canvas, poly, COLOR_TERRAIN, meta)
+
+    # Apply subtle hillshading onto terrain and background before water/buildings
+    shade = _compute_hillshade_factor(elevation, meta)
+    if shade is not None:
+        shaded = np.clip(canvas.astype(np.float32) * shade[:, :, None].astype(np.float32), 0.0, 255.0)
+        canvas[:, :] = np.rint(shaded).astype(np.uint8)
 
     # 2. Water polygons
     for feature in scene["layers"].get("water", []):

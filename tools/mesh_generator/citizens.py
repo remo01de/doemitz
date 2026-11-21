@@ -215,6 +215,10 @@ def _nearest_crossing(pt: Point, crossing_pts: list[tuple[str, Point]], max_dist
     return best
 
 
+def _eval_z(elevation_or_fn, x: float, y: float) -> float:
+    return float(elevation_or_fn(x, y)) if callable(elevation_or_fn) else float(elevation_or_fn)
+
+
 def _pilot_route_points(
     start_place, end_place, road_line, lateral_offset_m, sidewalk_area,
     road_elevation_m, sidewalk_elevation_m, obstacles, crossing_pts,
@@ -231,13 +235,17 @@ def _pilot_route_points(
 
     def append_point(pt, prefer_sidewalk=True):
         if prefer_sidewalk and not sidewalk_area.is_empty and sidewalk_area.contains(pt):
-            z = sidewalk_elevation_m
+            z = _eval_z(sidewalk_elevation_m, pt.x, pt.y)
         elif not obstacles.is_empty and obstacles.contains(pt):
             _, safe = nearest_points(pt, sidewalk_area if not sidewalk_area.is_empty else road_line)
             pt = safe
-            z = sidewalk_elevation_m if not sidewalk_area.is_empty and sidewalk_area.covers(pt) else road_elevation_m
+            z = (
+                _eval_z(sidewalk_elevation_m, pt.x, pt.y)
+                if not sidewalk_area.is_empty and sidewalk_area.covers(pt)
+                else _eval_z(road_elevation_m, pt.x, pt.y)
+            )
         else:
-            z = road_elevation_m
+            z = _eval_z(road_elevation_m, pt.x, pt.y)
         coord = [round(pt.x, 4), round(pt.y, 4), round(z, 4)]
         if coord != points[-1]:
             points.append(coord)
@@ -319,7 +327,11 @@ def _graph_route_points(
                 _, safe = nearest_points(pt, sidewalk_area if not sidewalk_area.is_empty else LineString([p0, p1]))
                 if not obstacles.contains(safe):
                     pt = safe
-            z = sidewalk_elevation_m if (prefer_sw and not sidewalk_area.is_empty and sidewalk_area.covers(pt)) else road_elevation_m
+            z = (
+                _eval_z(sidewalk_elevation_m, pt.x, pt.y)
+                if (prefer_sw and not sidewalk_area.is_empty and sidewalk_area.covers(pt))
+                else _eval_z(road_elevation_m, pt.x, pt.y)
+            )
             coord = [round(pt.x, 4), round(pt.y, 4), round(z, 4)]
             if coord != points[-1]:
                 points.append(coord)
@@ -393,9 +405,9 @@ def build_citizens(
         if not walkable_access.is_empty:
             _, sw_pt = nearest_points(geom, walkable_access)
             if geom.distance(sw_pt) <= 18.0:
-                return sw_pt, sidewalk_elevation_m
+                return sw_pt, _eval_z(sidewalk_elevation_m, sw_pt.x, sw_pt.y)
         _, rd_pt = nearest_points(geom, all_road_union if not all_road_union.is_empty else road_line)
-        return rd_pt, road_elevation_m
+        return rd_pt, _eval_z(road_elevation_m, rd_pt.x, rd_pt.y)
 
     places_out = []
     places_by_id = {}
@@ -424,7 +436,11 @@ def build_citizens(
         if candidates:
             candidates.sort(key=lambda item: (item[0], item[1], item[2]))
             _, _, eid, ept, etype = candidates[0]
-            z = sidewalk_elevation_m if (not walkable_access.is_empty and walkable_access.distance(ept) <= 3.0) else road_elevation_m
+            z = (
+                _eval_z(sidewalk_elevation_m, ept.x, ept.y)
+                if (not walkable_access.is_empty and walkable_access.distance(ept) <= 3.0)
+                else _eval_z(road_elevation_m, ept.x, ept.y)
+            )
             entrance_sources["osm"] += 1
             return {
                 "id": f"entrance:{place_id}",
@@ -448,10 +464,10 @@ def build_citizens(
         if on_pilot:
             if walkable_access.is_empty:
                 _, access_pt = nearest_points(geom, road_line)
-                elevation = road_elevation_m
+                elevation = _eval_z(road_elevation_m, access_pt.x, access_pt.y)
             else:
                 _, access_pt = nearest_points(geom, walkable_access)
-                elevation = sidewalk_elevation_m
+                elevation = _eval_z(sidewalk_elevation_m, access_pt.x, access_pt.y)
             along_m = road_line.project(access_pt)
             side = _side_sign(road_line, access_pt)
         else:

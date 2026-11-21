@@ -14,13 +14,21 @@ from shapely.geometry import LineString, shape
 from shapely.ops import nearest_points
 
 from tools.geo_import.export import geometry_parts, write_json
+from tools.geo_transform.terrain import ElevationModel
 from tools.mesh_generator.architecture import ROOF_STYLES, WALL_STYLES, add_stylized_building
 from tools.mesh_generator.citizens import build_citizens
 from tools.mesh_generator.city_map import render_city_map
 from tools.mesh_generator.economy import build_economy
 from tools.mesh_generator.props import add_street_lamps, add_stylized_trees
+from tools.mesh_generator.road_elevation import DEFAULT_SMOOTHING_WINDOW_M, RoadElevationNetwork, densify_polygon
 from tools.mesh_generator.road_graph import build_road_graph
 from tools.mesh_generator.tasks import build_tasks
+from tools.mesh_generator.terrain import (
+    DEFAULT_MAX_ERROR_M,
+    DEFAULT_MAX_TRIANGLES,
+    DEFAULT_TILE_SIZE_M,
+    build_terrain_tiles,
+)
 from tools.mesh_generator.traffic import build_vehicle_route
 
 
@@ -90,6 +98,17 @@ class Mesh:
         return self.indices[coordinate]
 
     def add_surface(self, polygon, elevation_m):
+        if callable(elevation_m):
+            polygon = densify_polygon(polygon, max_segment_m=3.0)
+            triangles = orient_polygons(constrained_delaunay_triangles(polygon))
+            for triangle in triangles.geoms:
+                self.triangles.append(
+                    tuple(
+                        self.vertex(xy, round(float(elevation_m(xy[0], xy[1])), 4))
+                        for xy in list(triangle.exterior.coords)[:3]
+                    )
+                )
+            return
         triangles = orient_polygons(constrained_delaunay_triangles(polygon))
         for triangle in triangles.geoms:
             self.triangles.append(
@@ -106,6 +125,23 @@ class Mesh:
                 offset = len(self.vertices)
                 self.vertices.extend(
                     [(*start, base_m), (*end, base_m), (*end, base_m + height_m), (*start, base_m + height_m)]
+                )
+                self.triangles.extend(((offset, offset + 1, offset + 2), (offset, offset + 2, offset + 3)))
+
+    def add_draped_walls(self, polygon, top_z_fn, bottom_z_fn):
+        polygon = densify_polygon(polygon, max_segment_m=3.0)
+        for ring in (polygon.exterior, *polygon.interiors):
+            points = list(ring.coords)
+            for start, end in zip(points, points[1:]):
+                if start == end:
+                    continue
+                top_a = round(float(top_z_fn(start[0], start[1])), 4)
+                top_b = round(float(top_z_fn(end[0], end[1])), 4)
+                bot_a = round(float(bottom_z_fn(start[0], start[1])), 4)
+                bot_b = round(float(bottom_z_fn(end[0], end[1])), 4)
+                offset = len(self.vertices)
+                self.vertices.extend(
+                    [(*start, bot_a), (*end, bot_b), (*end, top_b), (*start, top_a)]
                 )
                 self.triangles.extend(((offset, offset + 1, offset + 2), (offset, offset + 2, offset + 3)))
 
@@ -138,7 +174,10 @@ def road_width(tags):
     return ROAD_WIDTHS_M.get(tags["highway"], 5.5), "estimated_from_highway"
 
 
-def add_streets(meshes, roads, bounds, obstacles, base_m, sidewalk_widths, default_sidewalk_widths=None):
+def add_streets(
+    meshes, roads, bounds, obstacles, base_m, sidewalk_widths,
+    default_sidewalk_widths=None, road_network=None, elevation=None, road_polygons_out=None,
+):
     surfaces = {name: [] for name in ROAD_MESHES}
     sidewalk_envelopes = []
     eligible_ids = set()
@@ -180,11 +219,17 @@ def add_streets(meshes, roads, bounds, obstacles, base_m, sidewalk_widths, defau
     if eligible_ids != sidewalk_widths.keys():
         raise ValueError(f"missing eligible roads for sidewalks: {sorted(sidewalk_widths.keys() - eligible_ids)}")
 
+    use_draped = road_network is not None and elevation is not None and not elevation.is_flat
+    road_z_arg = road_network.road_surface_z if use_draped else (base_m + ROAD_ELEVATION_M)
+    sidewalk_z_arg = road_network.sidewalk_surface_z if use_draped else (base_m + ROAD_ELEVATION_M + CURB_HEIGHT_M)
+
     occupied = union_all([], grid_size=STREET_GRID_M)
     for name, parts in surfaces.items():
         area = set_precision(union_all(parts, grid_size=STREET_GRID_M), STREET_GRID_M).intersection(bounds)
         for polygon in geometry_parts(area.difference(occupied), "Polygon"):
-            meshes[name].add_surface(polygon, base_m + ROAD_ELEVATION_M)
+            meshes[name].add_surface(polygon, road_z_arg)
+            if road_polygons_out is not None:
+                road_polygons_out.append(polygon)
         occupied = occupied.union(area)
 
     envelopes = set_precision(union_all(sidewalk_envelopes, grid_size=STREET_GRID_M), STREET_GRID_M)
@@ -195,40 +240,112 @@ def add_streets(meshes, roads, bounds, obstacles, base_m, sidewalk_widths, defau
         if polygon.area < 0.08:
             continue
         sidewalks.append(polygon)
-        meshes["Sidewalks"].add_surface(polygon, base_m + ROAD_ELEVATION_M + CURB_HEIGHT_M)
-        meshes["Sidewalks"].add_walls(polygon, ROAD_ELEVATION_M + CURB_HEIGHT_M, base_m)
+        meshes["Sidewalks"].add_surface(polygon, sidewalk_z_arg)
+        if use_draped:
+            def _curb_bottom(x, y):
+                return min(
+                    road_network.ground_elevation_at(x, y) - 0.20,
+                    elevation.sample(x, y) - 0.30,
+                )
+            meshes["Sidewalks"].add_draped_walls(polygon, road_network.sidewalk_surface_z, _curb_bottom)
+        else:
+            meshes["Sidewalks"].add_walls(polygon, ROAD_ELEVATION_M + CURB_HEIGHT_M, base_m)
     return width_sources, sidewalks
 
 
 def build(
     scene, report, sidewalk_widths=None, vehicle_config=None,
     citizens_config=None, default_sidewalk_widths=None, traffic_network_config=None,
-    economy_config=None, tasks_config=None, map_output_png=None,
+    economy_config=None, tasks_config=None, map_output_png=None, scene_dir=None,
 ):
     if scene["schema_version"] != 1 or scene["coordinates"]["local_axes"] != ["east", "north"]:
         raise ValueError("expected scene schema 1 with local [east, north] coordinates")
-    if scene["coordinates"]["unit"] != "meter" or scene["terrain"]["kind"] != "flat_placeholder":
-        raise ValueError("the prototype requires a metric scene with a flat placeholder terrain")
+    terrain_kind = scene["terrain"]["kind"]
+    if scene["coordinates"]["unit"] != "meter" or terrain_kind not in ("flat_placeholder", "dgm1"):
+        raise ValueError(f"unsupported scene unit or terrain kind: {terrain_kind!r}")
+
+    resolved_scene_dir = scene_dir if scene_dir is not None else (ROOT / "data" / "processed" / scene["id"])
+    elevation = ElevationModel.from_scene(scene, scene_dir=resolved_scene_dir)
+    assumptions = scene["terrain"].get("assumptions") or {}
+    tile_size_m = int(assumptions.get("terrain_tile_size_m", DEFAULT_TILE_SIZE_M))
+    max_error_m = float(assumptions.get("terrain_max_error_m", DEFAULT_MAX_ERROR_M))
+    max_triangles = int(assumptions.get("terrain_max_triangles", DEFAULT_MAX_TRIANGLES))
+    smoothing_window_m = float(assumptions.get("road_smoothing_window_m", DEFAULT_SMOOTHING_WINDOW_M))
+    water_depression_m = float(assumptions.get("water_bank_depression_m", 0.05))
 
     meshes = {name: Mesh() for name in PALETTE}
     bounds = shape(scene["terrain"]["boundary"])
-    base_m = scene["terrain"]["elevation_m"]
-    meshes["Terrain"].add_surface(bounds, base_m)
-    water = union_all([shape(feature["geometry"]) for feature in scene["layers"]["water"]])
-    for polygon in geometry_parts(water, "Polygon"):
-        meshes["Water"].add_surface(polygon, base_m + 0.04)
+    base_m = float(scene["terrain"].get("elevation_m", 0.0)) if elevation.is_flat else 0.0
 
+    # 1. Water bodies: fixed water level per waterbody (documented assumption strictly below bank heights)
+    water_geoms = []
+    water_surfaces: list[tuple] = []
+    water_levels_report: list[dict] = []
+    for feature in scene["layers"]["water"]:
+        geom = shape(feature["geometry"])
+        water_geoms.append(geom)
+        polys = list(geometry_parts(geom, "Polygon"))
+        if not polys:
+            continue
+        if elevation.is_flat:
+            w_level = base_m + 0.04
+            b_min = base_m
+            b_max = base_m
+            w_source = "flat_placeholder_offset_4cm"
+        else:
+            b_min = min(elevation.boundary_min_max(p)[0] for p in polys)
+            b_max = max(elevation.boundary_min_max(p)[1] for p in polys)
+            w_level = round(b_min - water_depression_m, 4)
+            w_source = f"assumed_bank_min_minus_{int(round(water_depression_m * 100))}cm"
+        for polygon in polys:
+            meshes["Water"].add_surface(polygon, w_level)
+            water_surfaces.append((polygon, w_level))
+        water_levels_report.append({
+            "id": feature["id"],
+            "name": feature["properties"].get("name", ""),
+            "bank_min_m": round(b_min, 4),
+            "bank_max_m": round(b_max, 4),
+            "water_level_m": round(w_level, 4),
+            "water_level_nhn_m": round(elevation.local_to_nhn(w_level), 4),
+            "source": w_source,
+        })
+    water = union_all(water_geoms)
+
+    # 2. Buildings: foundation at lowest terrain under footprint, visible stone plinth on slopes
     height_sources = Counter()
     buildings = []
+    building_entries: list[tuple] = []
+    sloped_buildings = 0
+    max_building_slope_m = 0.0
+    building_min_z_by_geom_idx: list[float] = []
     for feature in scene["layers"]["buildings"]:
         osm_id = int(feature["id"].rsplit(":", 1)[1])
         height, source = building_height(feature["properties"])
         height_sources[source] += 1
         geometry = orient_polygons(shape(feature["geometry"]))
         buildings.append(geometry)
-        for polygon in geometry_parts(geometry, "Polygon"):
-            add_stylized_building(meshes, polygon, height, base_m, osm_id, feature["properties"])
+        polys = list(geometry_parts(geometry, "Polygon"))
+        if elevation.is_flat:
+            b_min_z = base_m
+            b_max_z = base_m
+        else:
+            mins_maxs = [elevation.polygon_min_max(p) for p in polys]
+            b_min_z = min(mm[0] for mm in mins_maxs)
+            b_max_z = max(mm[1] for mm in mins_maxs)
+            slope_diff = b_max_z - b_min_z
+            if slope_diff > 0.05:
+                sloped_buildings += 1
+            if slope_diff > max_building_slope_m:
+                max_building_slope_m = slope_diff
+        building_min_z_by_geom_idx.append(b_min_z)
+        for polygon in polys:
+            add_stylized_building(
+                meshes, polygon, height, round(b_min_z, 4), osm_id, feature["properties"],
+                max_ground_m=round(b_max_z, 4),
+            )
+            building_entries.append((polygon, b_min_z))
 
+    # 3. Roads & sidewalks draped along smoothed longitudinal profile, flat cross-section, 12 cm curb
     sidewalk_widths = sidewalk_widths or {}
     default_sidewalk_widths = default_sidewalk_widths or {}
     obstacles = (
@@ -236,9 +353,53 @@ def build(
         if sidewalk_widths or default_sidewalk_widths or vehicle_config or citizens_config else water
     )
     roads = scene["layers"]["roads"]
+    road_network = RoadElevationNetwork(
+        elevation, roads, road_width, ROAD_ELEVATION_M, CURB_HEIGHT_M,
+        smoothing_window_m=smoothing_window_m,
+    )
+    road_polygons: list = []
     width_sources, sidewalks = add_streets(
         meshes, roads, bounds, obstacles, base_m, sidewalk_widths, default_sidewalk_widths,
+        road_network=road_network, elevation=elevation, road_polygons_out=road_polygons,
     )
+
+    # 4. Terrain mesh: simplified 64 m tiles for DGM1, single flat plane for flat_placeholder
+    terrain_tiles: dict[str, dict] = {}
+    if elevation.is_flat:
+        meshes["Terrain"].add_surface(bounds, base_m)
+        terrain_mesh_report = {
+            "kind": "flat_placeholder",
+            "tile_size_m": tile_size_m,
+            "tile_count": 1,
+            "triangle_count": len(meshes["Terrain"].triangles),
+            "max_triangles_budget": max_triangles,
+            "max_vertical_error_m": 0.0,
+            "max_error_budget_m": max_error_m,
+            "depressed_cells": 0,
+        }
+    else:
+        terrain_tiles, terrain_mesh_report = build_terrain_tiles(
+            elevation=elevation,
+            bounds=bounds,
+            water_surfaces=water_surfaces,
+            road_polygons=road_polygons,
+            sidewalk_polygons=sidewalks,
+            building_entries=building_entries,
+            road_ground_z_fn=road_network.ground_elevation_at,
+            tile_size_m=tile_size_m,
+            max_error_m=max_error_m,
+            max_triangles=max_triangles,
+        )
+
+    road_z_resolver = road_network.road_surface_z if not elevation.is_flat else (base_m + ROAD_ELEVATION_M)
+    sidewalk_z_resolver = road_network.sidewalk_surface_z if not elevation.is_flat else (base_m + ROAD_ELEVATION_M + CURB_HEIGHT_M)
+    terrain_z_resolver = elevation.sample if not elevation.is_flat else base_m
+    parking_z_resolver = (
+        (lambda x, y: elevation.sample(x, y) + ROAD_ELEVATION_M)
+        if not elevation.is_flat
+        else (base_m + ROAD_ELEVATION_M)
+    )
+
     roads_by_id = {road["id"]: (road, road_width(road["properties"])[0]) for road in roads}
     road_buffers = [
         shape(road["geometry"]).buffer(width / 2, quad_segs=2)
@@ -256,15 +417,16 @@ def build(
         )
     }
     lamp_lights, street_prop_instances = add_street_lamps(
-        meshes, roads, sidewalks, base_m, base_m + ROAD_ELEVATION_M + CURB_HEIGHT_M, detailed_road_ids,
+        meshes, roads, sidewalks, base_m, sidewalk_z_resolver, detailed_road_ids,
     )
-    vegetation_instances = add_stylized_trees(meshes, bounds, excluded_for_trees, base_m)
+    vegetation_instances = add_stylized_trees(meshes, bounds, excluded_for_trees, terrain_z_resolver)
     prop_instances = {**street_prop_instances, **vegetation_instances}
     road_graph = build_road_graph(
-        roads, road_width, base_m + ROAD_ELEVATION_M,
+        roads, road_width, road_z_resolver,
         crossings=scene.get("crossings"),
         priority_signs=scene.get("priority_signs"),
         pois=scene["layers"].get("pois"),
+        parking_elevation_fn=parking_z_resolver,
     )
     traffic_network = None
     if traffic_network_config:
@@ -297,13 +459,13 @@ def build(
     if vehicle_config:
         vehicle = build_vehicle_route(
             vehicle_config, roads_by_id,
-            bounds, obstacles, base_m + ROAD_ELEVATION_M,
+            bounds, obstacles, road_z_resolver,
         )
     citizens = None
     if citizens_config:
         citizens = build_citizens(
             citizens_config, roads_by_id, scene["layers"]["buildings"], sidewalks,
-            obstacles, base_m + ROAD_ELEVATION_M, base_m + ROAD_ELEVATION_M + CURB_HEIGHT_M,
+            obstacles, road_z_resolver, sidewalk_z_resolver,
             pois=scene["layers"].get("pois"),
             crossings=road_graph.get("crossings"),
             entrances=scene.get("entrances"),
@@ -316,35 +478,110 @@ def build(
         tasks = build_tasks(tasks_config, citizens["places"], economy)
     city_map = None
     if map_output_png is not None:
-        _, city_map = render_city_map(scene, road_width, sidewalks=sidewalks, output_png=map_output_png)
+        _, city_map = render_city_map(
+            scene, road_width, sidewalks=sidewalks, output_png=map_output_png, elevation=elevation,
+        )
     reference = report["reference"]
     if scene["id"] != report["id"]:
         raise ValueError("scene and report belong to different areas")
     reference_points = reference["local_points_m"]
+    reference_points_3d = [
+        [
+            round(float(pt[0]), 4),
+            round(float(pt[1]), 4),
+            round(float(road_network.road_surface_z(pt[0], pt[1]) if not elevation.is_flat else (base_m + ROAD_ELEVATION_M)), 4),
+        ]
+        for pt in reference_points
+    ]
+    reference_dgm_z_m = [
+        round(float(elevation.sample(pt[0], pt[1])), 4)
+        for pt in reference_points
+    ]
     reference_line = LineString(reference_points)
     start = reference_line.interpolate(0.5, normalized=True)
-    nearest_building = min(buildings, key=lambda building: building.distance(start))
+    nearest_building_idx = min(range(len(buildings)), key=lambda idx: buildings[idx].distance(start))
+    nearest_building = buildings[nearest_building_idx]
     if nearest_building.distance(start) < 1.0 or water.distance(start) < 1.0:
         raise ValueError("player start on the reference street is obstructed")
     roof_probe = nearest_building.representative_point()
+    roof_probe_z = building_min_z_by_geom_idx[nearest_building_idx]
+    start_ground_z = road_network.road_surface_z(start.x, start.y) if not elevation.is_flat else base_m
     sidewalk_interior = union_all([polygon.buffer(-0.4) for polygon in sidewalks])
     sidewalk_probe = None
     if sidewalk_widths and sidewalk_interior.is_empty:
         raise ValueError("the configured sidewalks have no walkable interior")
     if not sidewalk_interior.is_empty:
         _, point = nearest_points(start, sidewalk_interior)
-        sidewalk_probe = [point.x, point.y, base_m + ROAD_ELEVATION_M + CURB_HEIGHT_M]
+        sw_z = road_network.sidewalk_surface_z(point.x, point.y) if not elevation.is_flat else (base_m + ROAD_ELEVATION_M + CURB_HEIGHT_M)
+        sidewalk_probe = [round(point.x, 4), round(point.y, 4), round(sw_z, 4)]
+
+    # Open terrain probe for Unreal collision verification (pick first tree location if available, else origin)
+    if prop_instances["trees"]:
+        t0 = prop_instances["trees"][0]
+        terrain_probe = [t0[0], t0[1], t0[2]]
+    else:
+        terrain_probe = [0.0, 0.0, round(float(elevation.sample(0.0, 0.0)), 4)]
+
+    compiled_meshes = {
+        name: {
+            "color": PALETTE[name],
+            "collision": (
+                name in {"Terrain", "Sidewalks", "Roads", "Paving", "Paths"}
+                or name in WALLS
+                or name in ROOFS
+            ),
+            "vertices": mesh.vertices,
+            "triangles": mesh.triangles,
+        }
+        for name, mesh in meshes.items() if mesh.triangles
+    }
+    for tile_name, tile_data in terrain_tiles.items():
+        compiled_meshes[tile_name] = {
+            "color": PALETTE["Terrain"],
+            "material": "Terrain",
+            "collision": True,
+            "vertices": tile_data["vertices"],
+            "triangles": tile_data["triangles"],
+        }
+
+    terrain_attribution = scene["terrain"].get("attribution", "")
+    terrain_license = scene["terrain"].get("license", "")
     return {
         "schema_version": 1,
         "attribution": scene["attribution"],
         "attribution_url": scene["attribution_url"],
+        "terrain_attribution": terrain_attribution,
+        "terrain_license": terrain_license,
+        "terrain": {
+            "kind": terrain_kind,
+            "reference_elevation_m": float(scene["terrain"].get("reference_elevation_m", 0.0)),
+            "attribution": terrain_attribution,
+            "license": terrain_license,
+            "delivery_year": scene["terrain"].get("delivery_year"),
+            "mesh": terrain_mesh_report,
+            "water_levels": water_levels_report,
+            "roads_elevation": {
+                "smoothing_window_m": road_network.smoothing_window_m,
+                "max_slope_overall_percent": round(road_network.max_slope_overall(), 2),
+                "road_count": len(road_network.road_reports),
+                "roads": road_network.road_reports,
+            },
+            "buildings_elevation": {
+                "count": len(buildings),
+                "sloped_count": sloped_buildings,
+                "max_footprint_slope_m": round(max_building_slope_m, 4),
+            },
+        },
         "bounds_m": bounds.bounds,
         "reference_points_m": reference_points,
+        "reference_points_3d_m": reference_points_3d,
+        "reference_dgm_z_m": reference_dgm_z_m,
         "reference_geodesic_m": reference["geodesic_m"],
         "maximum_relative_error": reference["maximum_relative_error"],
-        "start_m": [start.x, start.y, base_m + 1.0],
-        "roof_probe_m": [roof_probe.x, roof_probe.y, base_m],
+        "start_m": [round(start.x, 4), round(start.y, 4), round(start_ground_z + 1.0, 4)],
+        "roof_probe_m": [round(roof_probe.x, 4), round(roof_probe.y, 4), round(roof_probe_z, 4)],
         "sidewalk_probe_m": sidewalk_probe,
+        "terrain_probe_m": terrain_probe,
         "road-graph": road_graph,
         "traffic_network": traffic_network,
         "vehicle": vehicle,
@@ -355,6 +592,7 @@ def build(
         "sidewalks": {
             "width_source": "estimated_from_pilot_layout",
             "widths_m": sidewalk_widths,
+            "curb_height_m": CURB_HEIGHT_M,
             "area_m2": round(sum(polygon.area for polygon in sidewalks), 2),
         },
         "height_sources": dict(height_sources),
@@ -368,15 +606,7 @@ def build(
             "trees_and_bushes": len(prop_instances["trees"]) + len(prop_instances["bushes"]),
             "instances": prop_instances,
         },
-        "meshes": {
-            name: {
-                "color": PALETTE[name],
-                "collision": name in {"Terrain", "Sidewalks"} or name in WALLS or name in ROOFS,
-                "vertices": mesh.vertices,
-                "triangles": mesh.triangles,
-            }
-            for name, mesh in meshes.items() if mesh.triangles
-        },
+        "meshes": compiled_meshes,
     }
 
 
@@ -408,11 +638,22 @@ def main():
     package = build(
         scene, report, layout.get("sidewalk_widths_m"), layout.get("vehicle"),
         citizens_config, layout.get("default_sidewalk_widths_m"), layout.get("traffic_network"),
-        economy_config, tasks_config, map_output_png=map_png_path,
+        economy_config, tasks_config, map_output_png=map_png_path, scene_dir=args.scene.parent,
     )
     package["source_scene_sha256"] = sha256(scene_bytes).hexdigest()
     destination = args.scene.with_name("unreal-city-meshes.json")
     write_json(destination, package)
+    if package.get("terrain"):
+        tr = package["terrain"]
+        tm = tr["mesh"]
+        re_info = tr["roads_elevation"]
+        print(
+            f"Terrain ({tr['kind']}): {tm['tile_count']} tile(s), {tm['triangle_count']} tris "
+            f"(budget {tm['max_triangles_budget']}), max_err={tm['max_vertical_error_m']*100:.2f} cm "
+            f"(budget {tm['max_error_budget_m']*100:.1f} cm), "
+            f"max_road_slope={re_info['max_slope_overall_percent']:.2f}%, "
+            f"sloped_buildings={tr['buildings_elevation']['sloped_count']}/{tr['buildings_elevation']['count']}"
+        )
     if package.get("city_map"):
         write_json(args.scene.with_name("city-map-meta.json"), package["city_map"])
         cm = package["city_map"]

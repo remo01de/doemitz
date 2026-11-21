@@ -121,7 +121,7 @@ def _add_pitched_roof(roof_mesh, gable_mesh, polygon, base_z, ridge_h, overhang=
     roof_mesh.add_surface(polygon, base_z)
 
 
-def add_stylized_building(meshes, polygon, height_m, base_m, osm_id, tags):
+def add_stylized_building(meshes, polygon, height_m, base_m, osm_id, tags, max_ground_m=None):
     """Build a stylized old-town building with stone plinth, windows, shutters, timber trim, and pitched roof."""
     is_minor = tags.get("building") in {"garage", "garages", "shed", "roof", "hut"} or height_m <= 3.2
     is_civic = tags.get("building") in {"church", "civic", "commercial"} or "name" in tags
@@ -140,7 +140,10 @@ def add_stylized_building(meshes, polygon, height_m, base_m, osm_id, tags):
     door_mesh = meshes["Doors"]
     flower_mesh = meshes["FlowerBoxes"]
 
-    # Main wall volume (collidable)
+    ground_top_m = base_m if max_ground_m is None else max(base_m, float(max_ground_m))
+    slope_span_m = ground_top_m - base_m
+
+    # Main wall volume (collidable); foundation starts at lowest terrain under footprint, eave counts from base_m.
     wall_mesh.add_walls(polygon, height_m, base_m)
 
     # Pitched roof (collidable)
@@ -148,11 +151,34 @@ def add_stylized_building(meshes, polygon, height_m, base_m, osm_id, tags):
     _add_pitched_roof(roof_mesh, wall_mesh, polygon, base_m + height_m, ridge_h)
 
     if is_minor:
+        if slope_span_m > 0.10:
+            minor_plinth_top = min(base_m + height_m - 0.15, ground_top_m + 0.25)
+            ring = list(polygon.exterior.coords)
+            for start, end in zip(ring, ring[1:]):
+                dx = end[0] - start[0]
+                dy = end[1] - start[1]
+                length = hypot(dx, dy)
+                if length < 0.5:
+                    continue
+                tx, ty = dx / length, dy / length
+                nx, ny = ty, -tx
+                _add_box_on_wall(
+                    stone_mesh, start[0], start[1], tx, ty, nx, ny,
+                    0.0, length, base_m, minor_plinth_top, 0.0, 0.05,
+                )
         return
 
-    plinth_h = min(0.85, height_m * 0.16)
+    base_plinth_h = min(0.85, height_m * 0.16)
+    # On sloped terrain, extend the natural stone plinth visibly past the highest terrain point under the footprint.
+    plinth_top_m = (
+        min(base_m + height_m - 0.35, max(base_m + base_plinth_h, ground_top_m + 0.35))
+        if slope_span_m > 0.05
+        else base_m + base_plinth_h
+    )
+    plinth_h = max(base_plinth_h, plinth_top_m - base_m)
     floors = max(1, min(4, int(round(height_m / 3.1))))
     floor_h = height_m / floors
+    door_z0 = min(ground_top_m, base_m + max(0.0, height_m - 2.45)) if slope_span_m > 0.25 else base_m
 
     door_placed = False
     ring = list(polygon.exterior.coords)
@@ -166,8 +192,8 @@ def add_stylized_building(meshes, polygon, height_m, base_m, osm_id, tags):
         # For CCW exterior ring in (east, north), outward normal is (ty, -tx)
         nx, ny = ty, -tx
 
-        # Stone plinth along wall base
-        _add_box_on_wall(stone_mesh, start[0], start[1], tx, ty, nx, ny, 0.0, length, base_m, base_m + plinth_h, 0.0, 0.05)
+        # Stone plinth along wall base (extends up past highest slope terrain)
+        _add_box_on_wall(stone_mesh, start[0], start[1], tx, ty, nx, ny, 0.0, length, base_m, plinth_top_m, 0.0, 0.05)
 
         # Horizontal cornice / timber belt between floors and under eaves
         belt_mesh = timber_mesh if has_timber_framing else stone_mesh
@@ -176,9 +202,9 @@ def add_stylized_building(meshes, polygon, height_m, base_m, osm_id, tags):
             _add_box_on_wall(belt_mesh, start[0], start[1], tx, ty, nx, ny, 0.0, length, z - 0.14, z + 0.04, 0.0, 0.08)
 
         # Corner timber posts / quoins
-        if has_timber_framing:
-            _add_box_on_wall(timber_mesh, start[0], start[1], tx, ty, nx, ny, 0.0, 0.16, base_m + plinth_h, base_m + height_m, 0.0, 0.06)
-            _add_box_on_wall(timber_mesh, start[0], start[1], tx, ty, nx, ny, length - 0.16, length, base_m + plinth_h, base_m + height_m, 0.0, 0.06)
+        if has_timber_framing and plinth_top_m < base_m + height_m - 0.2:
+            _add_box_on_wall(timber_mesh, start[0], start[1], tx, ty, nx, ny, 0.0, 0.16, plinth_top_m, base_m + height_m, 0.0, 0.06)
+            _add_box_on_wall(timber_mesh, start[0], start[1], tx, ty, nx, ny, length - 0.16, length, plinth_top_m, base_m + height_m, 0.0, 0.06)
 
         if length < 3.0:
             continue
@@ -193,12 +219,12 @@ def add_stylized_building(meshes, polygon, height_m, base_m, osm_id, tags):
                 if fl == 0 and not door_placed and bay == bays // 2 and length >= 4.0:
                     door_placed = True
                     # Wooden entrance door with stone/timber frame
-                    _add_box_on_wall(stone_mesh, start[0], start[1], tx, ty, nx, ny, u_center - 0.65, u_center + 0.65, base_m, base_m + 2.30, 0.0, 0.07)
-                    _add_box_on_wall(door_mesh, start[0], start[1], tx, ty, nx, ny, u_center - 0.52, u_center + 0.52, base_m, base_m + 2.18, 0.0, 0.09)
+                    _add_box_on_wall(stone_mesh, start[0], start[1], tx, ty, nx, ny, u_center - 0.65, u_center + 0.65, base_m, door_z0 + 2.30, 0.0, 0.07)
+                    _add_box_on_wall(door_mesh, start[0], start[1], tx, ty, nx, ny, u_center - 0.52, u_center + 0.52, door_z0, door_z0 + 2.18, 0.0, 0.09)
                     continue
 
                 win_w = 1.05
-                win_z0 = z_floor + max(plinth_h + 0.25, 0.95) if fl == 0 else z_floor + 0.85
+                win_z0 = z_floor + max(plinth_h + 0.25, 0.95) if fl == 0 else max(plinth_top_m + 0.20, z_floor + 0.85)
                 win_z1 = min(z_floor + floor_h - 0.35, win_z0 + 1.35)
                 if win_z1 - win_z0 < 0.6:
                     continue

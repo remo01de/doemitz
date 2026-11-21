@@ -22,6 +22,10 @@ def _ue_yaw_deg(dx_east, dy_north):
     return round(degrees(atan2(dx_east, dy_north)), 2)
 
 
+def _eval_z(elevation_or_fn, x, y):
+    return float(elevation_or_fn(x, y)) if callable(elevation_or_fn) else float(elevation_or_fn)
+
+
 def add_street_lamps(meshes, roads, sidewalks, base_m, sidewalk_elevation_m, detailed_road_ids):
     """Collect deterministic HISM instance transforms for lamps, benches, planters, and bollards."""
     del meshes, base_m
@@ -75,7 +79,7 @@ def add_street_lamps(meshes, roads, sidewalks, base_m, sidewalk_elevation_m, det
                         continue
 
                 x, y = cand.x, cand.y
-                z = round(sidewalk_elevation_m, 4)
+                z = round(_eval_z(sidewalk_elevation_m, x, y), 4)
                 if _far_enough(x, y, lamp_xy, 16.0):
                     lamp_xy.append((x, y))
                     instances["street_lamps"].append([round(x, 4), round(y, 4), z, yaw_deg])
@@ -93,13 +97,15 @@ def add_street_lamps(meshes, roads, sidewalks, base_m, sidewalk_elevation_m, det
                         and _far_enough(b_pt.x, b_pt.y, lamp_xy, 3.0)
                     ):
                         bx, by = b_pt.x, b_pt.y
+                        bz = round(_eval_z(sidewalk_elevation_m, bx, by), 4)
                         bench_xy.append((bx, by))
                         bench_yaw = yaw_deg if side > 0 else round((yaw_deg + 180.0) % 360.0, 2)
-                        instances["benches"].append([round(bx, 4), round(by, 4), z, bench_yaw])
+                        instances["benches"].append([round(bx, 4), round(by, 4), bz, bench_yaw])
 
                         p_pt = Point(bx + tx * 1.25, by + ty * 1.25)
                         if sidewalk_safe.contains(p_pt):
-                            instances["planters"].append([round(p_pt.x, 4), round(p_pt.y, 4), z, bench_yaw])
+                            pz = round(_eval_z(sidewalk_elevation_m, p_pt.x, p_pt.y), 4)
+                            instances["planters"].append([round(p_pt.x, 4), round(p_pt.y, 4), pz, bench_yaw])
 
                 if distance + 10.0 < length - 6.0:
                     pol_center = line.interpolate(distance + 10.0)
@@ -110,7 +116,8 @@ def add_street_lamps(meshes, roads, sidewalks, base_m, sidewalk_elevation_m, det
                         and _far_enough(pol_pt.x, pol_pt.y, lamp_xy, 3.0)
                     ):
                         bollard_xy.append((pol_pt.x, pol_pt.y))
-                        instances["bollards"].append([round(pol_pt.x, 4), round(pol_pt.y, 4), z, yaw_deg])
+                        pol_z = round(_eval_z(sidewalk_elevation_m, pol_pt.x, pol_pt.y), 4)
+                        instances["bollards"].append([round(pol_pt.x, 4), round(pol_pt.y, 4), pol_z, yaw_deg])
             distance += 20.0
             index += 1
     return lamp_lights, instances
@@ -138,12 +145,13 @@ def add_stylized_trees(meshes, bounds, excluded_area, base_m):
             if bounds.contains(pt) and not forbidden.contains(pt):
                 variant = h % 3
                 yaw_deg = float(h % 360)
+                tz = round(_eval_z(base_m, pt.x, pt.y), 4)
                 if h % 4 == 0:
                     scale = round(0.85 + (h % 5) * 0.12, 3)
-                    bushes.append([round(pt.x, 4), round(pt.y, 4), round(base_m, 4), yaw_deg, scale, variant])
+                    bushes.append([round(pt.x, 4), round(pt.y, 4), tz, yaw_deg, scale, variant])
                 else:
                     scale = round(0.82 + (h % 7) * 0.08, 3)
-                    trees.append([round(pt.x, 4), round(pt.y, 4), round(base_m, 4), yaw_deg, scale, variant])
+                    trees.append([round(pt.x, 4), round(pt.y, 4), tz, yaw_deg, scale, variant])
             gy += step
             iy += 1
         gx += step

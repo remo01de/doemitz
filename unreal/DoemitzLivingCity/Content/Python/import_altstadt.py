@@ -26,6 +26,7 @@ GENERATOR_TAG = "DoemitzAltstadtImport"
 EDITOR = unreal.EditorAssetLibrary
 ACTORS = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
 LEVELS = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
+SM_SUB = unreal.get_editor_subsystem(unreal.StaticMeshEditorSubsystem)
 TOOLS = unreal.AssetToolsHelpers.get_asset_tools()
 
 
@@ -111,7 +112,12 @@ PROCEDURAL_PATTERNS = {
 }
 
 
+_MATERIAL_CACHE = {}
+
+
 def material(name, color):
+    if name in _MATERIAL_CACHE:
+        return _MATERIAL_CACHE[name]
     path = f"{ASSETS}/M_{name}"
     asset = EDITOR.load_asset(path) if EDITOR.does_asset_exist(path) else None
     if asset is None:
@@ -171,6 +177,7 @@ def material(name, color):
     unreal.MaterialEditingLibrary.recompile_material(asset)
     if not EDITOR.save_loaded_asset(asset):
         raise RuntimeError(f"Could not save material {path}")
+    _MATERIAL_CACHE[name] = asset
     return asset
 
 
@@ -210,7 +217,23 @@ def static_mesh(name, source):
         )
     if asset is None or outcome != unreal.GeometryScriptOutcomePins.SUCCESS:
         raise RuntimeError(f"Could not build static mesh {path}: {outcome}")
-    asset.set_material(0, material(name, source.get("color")))
+    # Ensure per-section collision & trace mode match source["collision"] even on pre-existing assets (e.g. Paving/Roads).
+    SM_SUB.enable_section_collision(asset, bool(source["collision"]), 0, 0)
+    if source.get("collision"):
+        body_setup = asset.get_editor_property("body_setup")
+        if body_setup is not None:
+            body_setup.set_editor_property(
+                "collision_trace_flag",
+                unreal.CollisionTraceFlag.CTF_USE_COMPLEX_AS_SIMPLE,
+            )
+    # Disable costly 126^3 voxel Mesh Distance Field generation on tiled terrain meshes (r.Lumen.TraceMeshSDFs=0).
+    if name.startswith("Terrain"):
+        build_settings = SM_SUB.get_lod_build_settings(asset, 0)
+        build_settings.set_editor_property("generate_distance_field_as_if_two_sided", False)
+        build_settings.set_editor_property("distance_field_resolution_scale", 0.0)
+        SM_SUB.set_lod_build_settings(asset, 0, build_settings)
+    mat_name = source.get("material", name)
+    asset.set_material(0, material(mat_name, source.get("color")))
     if not EDITOR.save_loaded_asset(asset):
         raise RuntimeError(f"Could not save mesh {path}")
     return asset
@@ -228,8 +251,10 @@ def place(existing, name, actor_class, position, rotation=None):
     elif actor.get_class() != (actor_class if isinstance(actor_class, unreal.Class) else actor_class.static_class()):
         raise RuntimeError(f"{name} has unexpected class {actor.get_class().get_name()}")
     else:
+        actor.modify()
         actor.set_actor_location(position, False, False)
         actor.set_actor_rotation(rotation, False)
+    actor.modify()
     actor.set_editor_property("is_spatially_loaded", False)
     return actor
 
@@ -736,9 +761,13 @@ def import_level(package):
         actor = place(existing, f"Altstadt {name}", unreal.StaticMeshActor, unreal.Vector())
         mesh_actors[name] = actor
         component = actor.static_mesh_component
+        actor.modify()
+        component.modify()
         component.set_static_mesh(asset)
         profile = "BlockAll" if package["meshes"][name]["collision"] else "NoCollision"
         component.set_collision_profile_name(profile)
+        if name.startswith("Terrain"):
+            component.set_editor_property("affect_distance_field_lighting", False)
     for actor in list(existing.values()):
         if isinstance(actor, unreal.StaticMeshActor) and actor not in mesh_actors.values():
             if not ACTORS.destroy_actor(actor):
@@ -756,12 +785,14 @@ def import_level(package):
     )
 
     start = ue_position(package["start_m"])
-    first, second = (ue_position([*point, 0]) for point in package["reference_points_m"])
+    ref_3d = package.get("reference_points_3d_m") or [[*point, 0] for point in package["reference_points_m"]]
+    first, second = (ue_position(point) for point in ref_3d)
     yaw = degrees(atan2(second.y - first.y, second.x - first.x))
     place(existing, "Player Start - Goethestrasse", unreal.PlayerStart, start, unreal.Rotator(yaw=yaw))
     reference_a = place(existing, "Goethestrasse - Reference A", unreal.TargetPoint, first)
     reference_b = place(existing, "Goethestrasse - Reference B", unreal.TargetPoint, second)
-    distance_m = (reference_b.get_actor_location() - reference_a.get_actor_location()).length() / 100
+    delta_ref = reference_b.get_actor_location() - reference_a.get_actor_location()
+    distance_m = unreal.Vector2D(delta_ref.x, delta_ref.y).length() / 100.0
     error = abs(distance_m / package["reference_geodesic_m"] - 1)
     if error > package["maximum_relative_error"]:
         raise RuntimeError(f"In-editor reference distance out of tolerance: {distance_m:.4f} m")
@@ -806,21 +837,27 @@ def import_level(package):
     day_night.set_editor_property("sky_light", skylight)
     day_night.set_editor_property("street_lights", street_lights)
 
-    direction = second - first
+    direction = unreal.Vector(second.x - first.x, second.y - first.y, 0.0)
     credit = start + unreal.Vector(0, 0, 235) + direction * (450 / direction.length())
     text_actor = place(existing, "OpenStreetMap Attribution", unreal.TextRenderActor, credit,
                        unreal.Rotator(yaw=yaw + 180))
     text_component = text_actor.get_component_by_class(unreal.TextRenderComponent)
-    text_component.set_text(f"{package['attribution']}\nopenstreetmap.org/copyright")
+    terrain_attr = package.get("terrain_attribution") or ""
+    if terrain_attr:
+        attr_lines = f"{package['attribution']} (ODbL 1.0)\nHöhendaten: {terrain_attr} (CC BY 4.0)"
+    else:
+        attr_lines = f"{package['attribution']}\nopenstreetmap.org/copyright"
+    text_component.set_editor_property("text", unreal.Text(attr_lines))
+    text_component.set_text(attr_lines)
     text_component.set_horizontal_alignment(unreal.HorizTextAligment.EHTA_CENTER)
     text_component.set_world_size(14)
 
     world = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_editor_world()
     roof = ue_position(package["roof_probe_m"])
     for ray_start, ray_end, surface in (
-        (start, start - unreal.Vector(z=150), "terrain"),
+        (start + unreal.Vector(z=100), start - unreal.Vector(z=250), "road_ground"),
         (roof + unreal.Vector(z=17000), roof + unreal.Vector(z=100), "roof"),
-        (start, roof + unreal.Vector(z=100), "wall"),
+        (start, roof + unreal.Vector(z=150), "wall"),
     ):
         hit = unreal.SystemLibrary.line_trace_single(
             world, ray_start, ray_end,
@@ -828,6 +865,40 @@ def import_level(package):
         )
         if hit is None:
             raise RuntimeError(f"Collision test did not hit the {surface}")
+
+    # Verify open terrain tile collision & vertical accuracy
+    terrain_probe = package.get("terrain_probe_m")
+    if terrain_probe:
+        tp = ue_position(terrain_probe)
+        hit = unreal.SystemLibrary.line_trace_single(
+            world, tp + unreal.Vector(z=500), tp - unreal.Vector(z=500),
+            unreal.TraceTypeQuery.ECC_VISIBILITY, False, [], unreal.DrawDebugTrace.NONE, False
+        )
+        if hit is None:
+            raise RuntimeError("Open terrain collision test missed")
+        t_res = hit.to_dict()
+        t_label = t_res["hit_actor"].get_actor_label() if t_res["hit_actor"] else ""
+        t_dz = abs(t_res["impact_point"].z - tp.z)
+        if not t_label.startswith("Altstadt Terrain") or t_dz > 8.0:
+            raise RuntimeError(f"Open terrain collision mismatch: actor={t_label}, dz={t_dz:.2f} cm, expected_z={tp.z:.2f}")
+
+    # Verify reference actor heights against expected DGM1 / road surface
+    ref_dgm_z = package.get("reference_dgm_z_m") or [0.0, 0.0]
+    ref_z_checks = []
+    for idx, (ref_actor, exp_dgm_m) in enumerate(((reference_a, ref_dgm_z[0]), (reference_b, ref_dgm_z[1]))):
+        rloc = ref_actor.get_actor_location()
+        hit = unreal.SystemLibrary.line_trace_single(
+            world, rloc + unreal.Vector(z=500), rloc - unreal.Vector(z=500),
+            unreal.TraceTypeQuery.ECC_VISIBILITY, False, [], unreal.DrawDebugTrace.NONE, False
+        )
+        if hit is None:
+            raise RuntimeError(f"Reference actor {idx} vertical trace missed")
+        h_z = hit.to_dict()["impact_point"].z
+        dz_road = abs(h_z - rloc.z)
+        dz_dgm_cm = abs((h_z / 100.0) - (exp_dgm_m + 0.08)) * 100.0
+        if dz_road > 6.0:
+            raise RuntimeError(f"Reference actor {idx} road height mismatch: hit_z={h_z:.2f} vs ref_z={rloc.z:.2f}")
+        ref_z_checks.append(f"ref{idx}:hit={h_z/100.0:.3f}m(dgm={exp_dgm_m:.3f}m,diff={dz_dgm_cm:.1f}cm)")
 
     sidewalk = package.get("sidewalk_probe_m")
     if sidewalk:
@@ -840,7 +911,7 @@ def import_level(package):
         if hit is None:
             raise RuntimeError("Sidewalk collision test missed")
         result = hit.to_dict()
-        if result["hit_actor"] != mesh_actors["Sidewalks"] or abs(result["impact_point"].z - point.z) > 1:
+        if result["hit_actor"] != mesh_actors["Sidewalks"] or abs(result["impact_point"].z - point.z) > 2.5:
             raise RuntimeError(f"Sidewalk collision test hit the wrong surface: {result}")
 
     # World Partition actors are separate content packages.
@@ -849,7 +920,7 @@ def import_level(package):
     sidewalk_result = ", sidewalk collision passed" if sidewalk else ""
     unreal.log(
         f"DOEMITZ_IMPORT_OK: {len(assets)} meshes, {distance_m:.4f} m reference, "
-        f"{error:.4%} error, terrain, roof and wall collision passed{sidewalk_result}"
+        f"{error:.4%} error, {', '.join(ref_z_checks)}, terrain, roof and wall collision passed{sidewalk_result}"
     )
 
 

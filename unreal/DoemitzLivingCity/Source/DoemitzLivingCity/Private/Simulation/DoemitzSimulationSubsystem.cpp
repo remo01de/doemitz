@@ -1,9 +1,11 @@
 #include "Simulation/DoemitzSimulationSubsystem.h"
 
 #include "Algo/BinarySearch.h"
+#include "Components/CapsuleComponent.h"
 #include "Engine/Texture2D.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
+#include "GameFramework/Character.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
@@ -30,6 +32,42 @@ namespace
 	constexpr double CrossingLateralCm = 260.0;
 	constexpr double VehicleAccelCmPerSecSq = 260.0;
 	constexpr double VehicleDecelCmPerSecSq = 550.0;
+
+	bool TraceStaticGroundZ(UWorld* World, double WorldX, double WorldY, double& OutGroundZ)
+	{
+		if (!World)
+		{
+			return false;
+		}
+		FCollisionQueryParams Params(SCENE_QUERY_STAT(DoemitzSaveGroundTrace), false);
+		if (APlayerController* PC = World->GetFirstPlayerController())
+		{
+			if (APawn* Pawn = PC->GetPawn())
+			{
+				Params.AddIgnoredActor(Pawn);
+			}
+		}
+		for (TActorIterator<ADoemitzCitizenActor> It(World); It; ++It)
+		{
+			Params.AddIgnoredActor(*It);
+		}
+		for (TActorIterator<ADoemitzTrafficVehicle> It(World); It; ++It)
+		{
+			Params.AddIgnoredActor(*It);
+		}
+		FHitResult Hit;
+		if (World->LineTraceSingleByChannel(
+			Hit,
+			FVector(WorldX, WorldY, 5000.0),
+			FVector(WorldX, WorldY, -5000.0),
+			ECC_Visibility,
+			Params))
+		{
+			OutGroundZ = Hit.ImpactPoint.Z;
+			return true;
+		}
+		return false;
+	}
 
 	uint32 DeterministicHash(int32 Seed, FName KeyId, int32 Salt)
 	{
@@ -1893,11 +1931,16 @@ void UDoemitzSimulationSubsystem::SampleEdgePose(
 	if (!Dir.IsNearlyZero())
 	{
 		OutRotation = Dir.Rotation();
+		OutRotation.Roll = 0.0;
 		if (!Edge.Definition.bOneWay)
 		{
 			const double LaneOffset = FMath::Min(140.0, Edge.Definition.WidthCm * 0.22);
-			Pos.X += -Dir.Y * LaneOffset;
-			Pos.Y += Dir.X * LaneOffset;
+			FVector2D Right2D(-Dir.Y, Dir.X);
+			if (Right2D.Normalize())
+			{
+				Pos.X += Right2D.X * LaneOffset;
+				Pos.Y += Right2D.Y * LaneOffset;
+			}
 		}
 	}
 	OutLocation = Pos;
@@ -2996,6 +3039,7 @@ bool UDoemitzSimulationSubsystem::LoadCityState(const FString& SlotName)
 	const bool bMigratingFromPreV3 = (SaveObj->SaveSchemaVersion < 3);
 	const bool bMigratingFromPreV4 = (SaveObj->SaveSchemaVersion < 4);
 	const bool bMigratingFromPreV5 = (SaveObj->SaveSchemaVersion < 5);
+	const bool bMigratingFromPreV6 = (SaveObj->SaveSchemaVersion < 6);
 
 	if (bIsWorkingShift)
 	{
@@ -3071,6 +3115,7 @@ bool UDoemitzSimulationSubsystem::LoadCityState(const FString& SlotName)
 		Tasks = SaveObj->Tasks;
 	}
 
+	UWorld* LoadWorld = GetWorld();
 	TSet<FName> RestoredCitizenIds;
 	for (const FDoemitzSavedCitizen& Saved : SaveObj->Citizens)
 	{
@@ -3082,7 +3127,20 @@ bool UDoemitzSimulationSubsystem::LoadCityState(const FString& SlotName)
 			Record->State.TargetPlaceId = Saved.TargetPlaceId;
 			Record->State.bIsMoving = Saved.bIsMoving;
 			Record->State.bIsPausedForDialog = false;
-			Record->State.WorldLocation = Saved.WorldLocation;
+			FVector RestoredLoc = Saved.WorldLocation;
+			if (bMigratingFromPreV6)
+			{
+				double GroundZ = RestoredLoc.Z;
+				if (TraceStaticGroundZ(LoadWorld, RestoredLoc.X, RestoredLoc.Y, GroundZ))
+				{
+					RestoredLoc.Z = GroundZ;
+				}
+				else if (const FDoemitzPlaceDefinition* Place = PlacesById.Find(Saved.CurrentPlaceId))
+				{
+					RestoredLoc.Z = Place->AccessLocation.Z;
+				}
+			}
+			Record->State.WorldLocation = RestoredLoc;
 			Record->State.WorldRotation = Saved.WorldRotation;
 			Record->State.RouteProgressCm = FMath::Max(0.0, Saved.RouteProgressCm);
 			Record->State.ActiveScheduleIndex = Saved.ActiveScheduleIndex;
@@ -3266,7 +3324,24 @@ bool UDoemitzSimulationSubsystem::LoadCityState(const FString& SlotName)
 			{
 				if (APawn* Pawn = PC->GetPawn())
 				{
-					Pawn->SetActorLocationAndRotation(SaveObj->PlayerLocation, SaveObj->PlayerRotation, false, nullptr, ETeleportType::TeleportPhysics);
+					FVector RestoredPlayerLoc = SaveObj->PlayerLocation;
+					if (bMigratingFromPreV6)
+					{
+						double GroundZ = RestoredPlayerLoc.Z;
+						if (TraceStaticGroundZ(World, RestoredPlayerLoc.X, RestoredPlayerLoc.Y, GroundZ))
+						{
+							double HalfHeight = 96.0;
+							if (const ACharacter* Char = Cast<ACharacter>(Pawn))
+							{
+								if (const UCapsuleComponent* Cap = Char->GetCapsuleComponent())
+								{
+									HalfHeight = Cap->GetScaledCapsuleHalfHeight() + 4.0;
+								}
+							}
+							RestoredPlayerLoc.Z = GroundZ + HalfHeight;
+						}
+					}
+					Pawn->SetActorLocationAndRotation(RestoredPlayerLoc, SaveObj->PlayerRotation, false, nullptr, ETeleportType::TeleportPhysics);
 				}
 			}
 		}
@@ -3297,9 +3372,9 @@ bool UDoemitzSimulationSubsystem::LoadCityState(const FString& SlotName)
 		}
 	}
 
-	if (bMigratingFromPreV5)
+	if (bMigratingFromPreV6)
 	{
-		UE_LOG(LogTemp, Display, TEXT("Migrated SaveGame v%d -> v%d for slot '%s'"),
+		UE_LOG(LogTemp, Display, TEXT("Migrated SaveGame v%d -> v%d (terrain height migration) for slot '%s'"),
 			SaveObj->SaveSchemaVersion, UDoemitzSaveGame::CurrentSchemaVersion, *SlotName);
 	}
 

@@ -2,12 +2,18 @@
   "dataset": "Digitales Geländemodell 1 m (DGM1) Mecklenburg-Vorpommern",
   "provider": "Landesamt für innere Verwaltung Mecklenburg-Vorpommern (LAiV M-V), Amt für Geoinformation, Vermessungs- und Katasterwesen",
   "portal_url": "https://www.geoportal-mv.de",
-  "license": "CC BY 4.0 / Datenlizenz Deutschland – Namensnennung (Open Data M-V)",
-  "attribution_required": "© GeoBasis-DE/M-V <Jahr der Datenlieferung>",
+  "atom_url": "https://www.geodaten-mv.de/dienste/dgm_atom?type=dataset&id=ca268792-s2q1-4a39-b34c-9ec5bf9a4469",
+  "license": "Creative Commons Namensnennung – 4.0 International (CC BY 4.0)",
+  "license_id": "cc-by/4.0",
+  "license_url": "https://creativecommons.org/licenses/by/4.0/",
+  "attribution_required": "© GeoBasis-DE/M-V 2025",
+  "delivery_year": 2025,
   "vertical_crs": "DHHN2016 (NHN)",
   "horizontal_crs": "ETRS89 / UTM Zone 33N (EPSG:25833)",
   "grid_spacing_m": 1.0,
-  "status": "license_verified_not_yet_imported",
+  "reference_elevation_m": 13.001,
+  "reference_elevation_source": "dgm1_at_local_origin",
+  "status": "imported",
   "checked_at": "2026-11-21",
-  "notes": "Freie kommerzielle und nicht-kommerzielle Nutzung sowie Bearbeitung bei Quellenvermerk zulässig. Einbindung erfolgt in einem späteren Sprint nach Sprint 7."
+  "notes": "Amtliche Lizenz aus den ISO-Metadaten (CSW-ID a78b6941-7aae-4b2f-9951-89c362e3e79e): Creative Commons Namensnennung – 4.0 International (CC BY 4.0). Freie kommerzielle und nicht-kommerzielle Nutzung sowie Bearbeitung bei sichtbarem Quellenvermerk '© GeoBasis-DE/M-V 2025' zulässig. Rohkachel dgm1_33_248_5894_2_xyz.zip lokal in data/raw/doemitz-altstadt/dgm1/ gespeichert."
 }

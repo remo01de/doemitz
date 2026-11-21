@@ -143,7 +143,7 @@ void UDoemitzBenchmarkSubsystem::OnWorldBeginPlay(UWorld& InWorld)
 void UDoemitzBenchmarkSubsystem::BuildBenchmarkRoute()
 {
 	// Fixed Altstadt benchmark route: Goethestrasse -> Rathausplatz -> Festungszugang (An der Festung)
-	// Coordinates in Unreal cm (X = North * 100, Y = East * 100, Z = 180 cm)
+	// Horizontal coordinates in Unreal cm (X = North * 100, Y = East * 100); Z follows real terrain + 180 cm eye height.
 	RoutePoints = {
 		FVector(-13001.7,   5429.4, 180.0),
 		FVector(-14081.7,   5126.1, 180.0),
@@ -163,6 +163,21 @@ void UDoemitzBenchmarkSubsystem::BuildBenchmarkRoute()
 		FVector(-11862.1, -17415.8, 180.0),
 		FVector(-11418.6, -17495.7, 180.0)
 	};
+
+	if (UWorld* World = GetWorld())
+	{
+		FCollisionQueryParams TraceParams(SCENE_QUERY_STAT(DoemitzBenchmarkGround), false);
+		for (FVector& Pt : RoutePoints)
+		{
+			FHitResult Hit;
+			const FVector Start(Pt.X, Pt.Y, 5000.0);
+			const FVector End(Pt.X, Pt.Y, -5000.0);
+			if (World->LineTraceSingleByChannel(Hit, Start, End, ECC_Visibility, TraceParams))
+			{
+				Pt.Z = Hit.ImpactPoint.Z + 180.0;
+			}
+		}
+	}
 
 	SegmentEnds.Reset();
 	double Cumulative = 0.0;
@@ -212,7 +227,27 @@ void UDoemitzBenchmarkSubsystem::Tick(float DeltaTime)
 		: FMath::Clamp(ElapsedBenchmark / DurationSeconds, 0.0, 1.0);
 
 	FVector Forward = FVector::ForwardVector;
-	const FVector TargetLocation = SampleRouteLocation(Progress * RouteLengthCm, Forward);
+	FVector TargetLocation = SampleRouteLocation(Progress * RouteLengthCm, Forward);
+	{
+		FCollisionQueryParams GroundParams(SCENE_QUERY_STAT(DoemitzBenchmarkGroundTick), false);
+		if (APlayerController* PC = World->GetFirstPlayerController())
+		{
+			if (APawn* Pawn = PC->GetPawn())
+			{
+				GroundParams.AddIgnoredActor(Pawn);
+			}
+		}
+		FHitResult GroundHit;
+		if (World->LineTraceSingleByChannel(
+			GroundHit,
+			FVector(TargetLocation.X, TargetLocation.Y, TargetLocation.Z + 1500.0),
+			FVector(TargetLocation.X, TargetLocation.Y, TargetLocation.Z - 1500.0),
+			ECC_Visibility,
+			GroundParams))
+		{
+			TargetLocation.Z = GroundHit.ImpactPoint.Z + 180.0;
+		}
+	}
 	const FRotator LookRotation(FMath::Clamp(-5.0, -89.0, 89.0), Forward.Rotation().Yaw, 0.0);
 
 	if (APlayerController* PC = World->GetFirstPlayerController())

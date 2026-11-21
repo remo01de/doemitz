@@ -339,5 +339,5 @@ FText FDoemitzUiText::FormatNotification(const FDoemitzNotificationEvent& Event,
 
 FText FDoemitzUiText::GetMapAttributionText()
 {
-	return FText::FromString(TEXT("Kartendaten \u00a9 OpenStreetMap contributors, ODbL 1.0"));
+	return FText::FromString(TEXT("Kartendaten \u00a9 OpenStreetMap contributors, ODbL 1.0  |  H\u00f6hendaten \u00a9 GeoBasis-DE/M-V 2025"));
 }

@@ -172,10 +172,41 @@ def check(_delta_seconds):
                     raise RuntimeError(f"v4 migration expected vehicle {vid} in DRIVING phase")
             unreal.GameplayStatics.delete_game_in_slot(v4_slot, 0)
 
+            # Verify SaveSchemaVersion 5 -> 6 terrain height migration (flat Z -> downward trace onto DGM1)
+            v5_slot = "DoemitzVerifyV5Migration"
+            pawn.set_actor_location(unreal.Vector(saved_player_loc.x, saved_player_loc.y, 96.0), False, True)
+            sub.set_citizen_position_for_test("citizen_anna_01", unreal.Vector(saved_anna_loc.x, saved_anna_loc.y, 20.0))
+            sub.set_player_money_cents_for_test(21500)
+            if not sub.save_city_state(v5_slot):
+                raise RuntimeError("failed to capture baseline save for v5 migration")
+            v5_save = unreal.GameplayStatics.load_game_from_slot(v5_slot, 0)
+            v5_save.set_editor_property("save_schema_version", 5)
+            v5_save.set_editor_property("day_number", 4)
+            if not unreal.GameplayStatics.save_game_to_slot(v5_save, v5_slot, 0):
+                raise RuntimeError("failed to write downgraded v5 save")
+
+            if not sub.load_city_state(v5_slot):
+                raise RuntimeError("LoadCityState failed to migrate SaveSchemaVersion 5")
+            if sub.get_day_number() != 4 or sub.get_player_money_cents() != 21500:
+                raise RuntimeError(f"v5 migration state mismatch: day={sub.get_day_number()}, money={sub.get_player_money_cents()}")
+            mig_player_z = pawn.get_actor_location().z
+            mig_anna_z = get_state(sub, "citizen_anna_01").get_editor_property("world_location").z
+            # On real DGM1 terrain, Goethestrasse/Rathausplatz is ~470-490 cm above local origin (far above flat 20/96 cm)
+            if abs(mig_player_z - saved_player_loc.z) > 45.0:
+                raise RuntimeError(
+                    f"v5->v6 player height not snapped to terrain: got {mig_player_z:.1f} cm vs expected ~{saved_player_loc.z:.1f} cm"
+                )
+            if abs(mig_anna_z - saved_anna_loc.z) > 45.0:
+                raise RuntimeError(
+                    f"v5->v6 citizen height not snapped to terrain: got {mig_anna_z:.1f} cm vs expected ~{saved_anna_loc.z:.1f} cm"
+                )
+            unreal.GameplayStatics.delete_game_in_slot(v5_slot, 0)
+
             finish(
-                f"DOEMITZ_SAVEGAME_PIE_OK: v5 saved & restored time={restored_min:.1f}m, "
+                f"DOEMITZ_SAVEGAME_PIE_OK: v6 saved & restored time={restored_min:.1f}m, "
                 f"money={saved_money}ct, inv={saved_qty}, job={saved_job}, active_task={accepted_task_id}, "
-                f"30 citizens, 8 vehicles, and v4->v5 migration verified",
+                f"30 citizens, 8 vehicles, v4->v6 and v5->v6 terrain height migration "
+                f"(player_z={mig_player_z:.1f}cm, citizen_z={mig_anna_z:.1f}cm) verified",
                 True,
             )
             phase = "done"

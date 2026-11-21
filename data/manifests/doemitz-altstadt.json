@@ -3,6 +3,17 @@
   "bounds_lonlat": [11.2428, 53.1398, 11.2546, 53.1455],
   "origin_lonlat": [11.2487, 53.14265],
   "projected_crs": "EPSG:25833",
+  "dgm": {
+    "atom_url": "https://www.geodaten-mv.de/dienste/dgm_atom?type=dataset&id=ca268792-s2q1-4a39-b34c-9ec5bf9a4469",
+    "margin_m": 50.0,
+    "reference_elevation_m": 13.001,
+    "reference_elevation_source": "manifest_versioned_origin_dgm1",
+    "terrain_tile_size_m": 64.0,
+    "terrain_max_error_m": 0.05,
+    "terrain_max_triangles": 150000,
+    "road_smoothing_window_m": 12.0,
+    "water_bank_depression_m": 0.05
+  },
   "reference": {
     "description": "Goethestraße zwischen Rathausplatz und Fritz-Reuter-Straße",
     "way_id": 25642325,

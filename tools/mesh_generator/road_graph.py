@@ -87,10 +87,28 @@ def _strongly_connected_components(node_ids: list[str], adj: dict[str, list[str]
     return components
 
 
-def _generate_parking_slots(geom, center: Point, capacity: int, elevation_m: float, max_slots: int = 12) -> list[list[float]]:
+def _eval_z(elevation_or_fn, east_m: float, north_m: float) -> float:
+    return round(float(elevation_or_fn(east_m, north_m)), 4) if callable(elevation_or_fn) else round(float(elevation_or_fn), 4)
+
+
+def _densify_edge_coords(coords: list[tuple[float, float]], max_step_m: float = 4.0) -> list[tuple[float, float]]:
+    if len(coords) < 2:
+        return coords
+    out = [coords[0]]
+    for a, b in zip(coords, coords[1:]):
+        seg = dist(a, b)
+        if seg > max_step_m:
+            steps = int(seg // max_step_m) + 1
+            for i in range(1, steps):
+                t = i / steps
+                out.append((a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t))
+        out.append(b)
+    return out
+
+
+def _generate_parking_slots(geom, center: Point, capacity: int, elevation_m, max_slots: int = 12) -> list[list[float]]:
     """Generate deterministic, non-overlapping parking slot positions inside a polygon or around a point."""
     slot_count = max(1, min(capacity, max_slots))
-    z = round(float(elevation_m), 4)
     slots: list[list[float]] = []
 
     if geom.geom_type in {"Polygon", "MultiPolygon"} and geom.area >= 12.5:
@@ -102,29 +120,31 @@ def _generate_parking_slots(geom, center: Point, capacity: int, elevation_m: flo
             while x <= maxx - 1.5 and len(slots) < slot_count:
                 pt = Point(x, y)
                 if geom.contains(pt):
-                    slots.append([round(x, 4), round(y, 4), z])
+                    slots.append([round(x, 4), round(y, 4), _eval_z(elevation_m, x, y)])
                 x += step
             y += step
         if not slots:
             rp = geom.representative_point()
-            slots.append([round(rp.x, 4), round(rp.y, 4), z])
+            slots.append([round(rp.x, 4), round(rp.y, 4), _eval_z(elevation_m, rp.x, rp.y)])
         return slots
 
     # Point parking fallback: compact deterministic 2x2 grid around the OSM point
     offsets = [(0.0, 0.0), (3.5, 0.0), (0.0, 3.5), (3.5, 3.5)]
     for idx in range(min(slot_count, len(offsets))):
         ox, oy = offsets[idx]
-        slots.append([round(center.x + ox, 4), round(center.y + oy, 4), z])
+        sx, sy = center.x + ox, center.y + oy
+        slots.append([round(sx, 4), round(sy, 4), _eval_z(elevation_m, sx, sy)])
     return slots
 
 
 def build_road_graph(
     roads: list[dict],
     width_resolver,
-    elevation_m: float,
+    elevation_m,
     crossings: list[dict] | None = None,
     priority_signs: list[dict] | None = None,
     pois: list[dict] | None = None,
+    parking_elevation_fn=None,
 ) -> dict:
     """Construct a directed road graph from OSM road features in local meters."""
     parts: list[tuple[dict, int, list[tuple[float, float]], list[str | None]]] = []
@@ -188,7 +208,7 @@ def build_road_graph(
         nodes_by_id[nid] = {
             "id": nid,
             "osm_node_id": osm_id,
-            "position_m": [key[0], key[1], round(float(elevation_m), 4)],
+            "position_m": [key[0], key[1], _eval_z(elevation_m, key[0], key[1])],
             "way_count": len(coord_ways[key]),
             "is_junction": len(coord_ways[key]) >= 2 or coord_uses[key] >= 3,
         }
@@ -228,6 +248,8 @@ def build_road_graph(
                 continue
             for dir_label, reverse in directions:
                 ordered = list(reversed(sub_coords)) if reverse else sub_coords
+                if callable(elevation_m):
+                    ordered = _densify_edge_coords(ordered, max_step_m=4.0)
                 u = end_node if reverse else start_node
                 v = start_node if reverse else end_node
                 edge_id = f"edge:{road['id']}:{part_index}:{seg_idx}:{dir_label}"
@@ -248,7 +270,7 @@ def build_road_graph(
                     "length_m": round(float(length_m), 4),
                     "dead_end": False,
                     "points_m": [
-                        [round(p[0], 4), round(p[1], 4), round(float(elevation_m), 4)]
+                        [round(p[0], 4), round(p[1], 4), _eval_z(elevation_m, p[0], p[1])]
                         for p in ordered
                     ],
                 })
@@ -297,7 +319,7 @@ def build_road_graph(
             pos = crossing["position_m"]
             pt = Point(float(pos[0]), float(pos[1]))
             matched_edge_ids: list[str] = []
-            pos_3d = [round(float(pos[0]), 4), round(float(pos[1]), 4), round(float(elevation_m), 4)]
+            pos_3d = [round(float(pos[0]), 4), round(float(pos[1]), 4), _eval_z(elevation_m, float(pos[0]), float(pos[1]))]
             for edge, line in edge_lines:
                 if line.distance(pt) <= 2.5:
                     along_m = round(float(line.project(pt)), 4)
@@ -359,7 +381,7 @@ def build_road_graph(
                 "id": sign["id"],
                 "sign": sign_type,
                 "direction": direction,
-                "position_m": [round(float(pos[0]), 4), round(float(pos[1]), 4), round(float(elevation_m), 4)],
+                "position_m": [round(float(pos[0]), 4), round(float(pos[1]), 4), _eval_z(elevation_m, float(pos[0]), float(pos[1]))],
                 "edge_id": matched_edge["id"] if matched_edge else "",
                 "to_node": matched_edge["to_node"] if matched_edge else "",
             })
@@ -440,12 +462,13 @@ def build_road_graph(
             if not name:
                 street_hint = best_edge["name"] or osm_ref.rsplit(":", 1)[-1]
                 name = f"Parkplatz {street_hint}"
-            slots_m = _generate_parking_slots(geom, center, capacity, elevation_m)
+            park_elev = parking_elevation_fn if parking_elevation_fn is not None else elevation_m
+            slots_m = _generate_parking_slots(geom, center, capacity, park_elev)
             parking_lots_out.append({
                 "id": lot_id,
                 "osm_id": osm_ref,
                 "name": name,
-                "position_m": [round(center.x, 4), round(center.y, 4), round(float(elevation_m), 4)],
+                "position_m": [round(center.x, 4), round(center.y, 4), _eval_z(park_elev, center.x, center.y)],
                 "area_m2": area_m2,
                 "capacity": capacity,
                 "capacity_source": capacity_source,

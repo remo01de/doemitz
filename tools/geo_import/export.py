@@ -9,6 +9,7 @@ from shapely import make_valid, orient_polygons
 from shapely.geometry import LineString, MultiLineString, MultiPolygon, Point, Polygon, box, mapping, shape
 
 from tools.geo_import import osm
+from tools.geo_import.dgm import load_clipped_dgm1
 from tools.geo_transform.local import LocalFrame
 from tools.validation.scene import reference_measurement, validate
 
@@ -185,7 +186,21 @@ def write_json(path: Path, document: dict) -> None:
             temporary.unlink(missing_ok=True)
 
 
-def build(config: dict, raw_dir: Path, output_dir: Path) -> None:
+def write_bytes(path: Path, payload: bytes) -> None:
+    with NamedTemporaryFile(dir=path.parent, delete=False, mode="wb") as stream:
+        temporary = Path(stream.name)
+        try:
+            stream.write(payload)
+            stream.close()
+            temporary.replace(path)
+        finally:
+            stream.close()
+            temporary.unlink(missing_ok=True)
+
+
+def build(config: dict, raw_dir: Path, output_dir: Path, terrain_mode: str = "dgm1") -> None:
+    if terrain_mode not in ("dgm1", "flat"):
+        raise ValueError(f"unsupported terrain_mode: {terrain_mode!r}")
     dataset, bounds, layers, issues, sources = extract(config, raw_dir)
     frame = LocalFrame(config["projected_crs"], config["origin_lonlat"])
     local_layers = {
@@ -253,6 +268,22 @@ def build(config: dict, raw_dir: Path, output_dir: Path) -> None:
             })
     reference = reference_measurement(config["reference"], dataset, frame, local_layers["roads"])
     source = config["source"]
+    local_bounds_mapping = mapping(frame.geometry(bounds))
+
+    dgm_grid_bytes = None
+    dgm_raw_files = []
+    if terrain_mode == "dgm1":
+        local_grid_f32, terrain_meta, dgm_raw_files = load_clipped_dgm1(config, raw_dir, frame)
+        dgm_grid_bytes = local_grid_f32.tobytes()
+        terrain_section = {**terrain_meta, "boundary": local_bounds_mapping}
+    else:
+        terrain_section = {
+            "kind": "flat_placeholder",
+            "elevation_m": 0,
+            "reference_elevation_m": 0.0,
+            "boundary": local_bounds_mapping,
+        }
+
     scene = {
         "schema_version": 1,
         "id": config["id"],
@@ -263,7 +294,7 @@ def build(config: dict, raw_dir: Path, output_dir: Path) -> None:
             "local_axes": ["east", "north"],
             "unit": "meter",
         },
-        "terrain": {"kind": "flat_placeholder", "elevation_m": 0, "boundary": mapping(frame.geometry(bounds))},
+        "terrain": terrain_section,
         "attribution": source["attribution"],
         "attribution_url": source["attribution_url"],
         "license": source["license"],
@@ -282,7 +313,10 @@ def build(config: dict, raw_dir: Path, output_dir: Path) -> None:
         "id": config["id"],
         "source": source,
         "bounds_lonlat": config["bounds_lonlat"],
-        "raw_files": files,
+        "terrain_mode": terrain_mode,
+        "terrain": {k: v for k, v in terrain_section.items() if k != "boundary"},
+        "dgm_raw_files": dgm_raw_files,
+        "raw_files": files + dgm_raw_files,
         "counts": counts,
         "geometry_issues": issues,
         "reference": reference,
@@ -290,9 +324,23 @@ def build(config: dict, raw_dir: Path, output_dir: Path) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     for layer, features in layers.items():
         write_json(output_dir / f"{layer}.geojson", {"type": "FeatureCollection", "features": features})
+    if dgm_grid_bytes is not None:
+        write_bytes(output_dir / terrain_section["grid"]["file"], dgm_grid_bytes)
+    else:
+        (output_dir / "terrain-grid.bin").unlink(missing_ok=True)
     write_json(output_dir / "scene.json", scene)
     write_json(output_dir / "import-report.json", report)
     print(f"Features: {counts}. Geometry issues: {len(issues)}.")
+    if terrain_mode == "dgm1":
+        print(
+            f"Terrain: dgm1 ({terrain_section['attribution']}), "
+            f"ref={terrain_section['reference_elevation_m']:.3f} m NHN "
+            f"({terrain_section['reference_elevation_source']}), "
+            f"local=[{terrain_section['min_local_m']:.2f}, {terrain_section['max_local_m']:.2f}] m, "
+            f"grid={terrain_section['grid']['rows']}x{terrain_section['grid']['cols']}."
+        )
+    else:
+        print("Terrain: flat_placeholder (0.0 m).")
     print(
         f"Reference: {reference['projected_m']:.4f} m projected, "
         f"{reference['geodesic_m']:.4f} m geodesic ({reference['relative_error_percent']:.4f}% difference)."
