@@ -1,8 +1,10 @@
 #include "World/DoemitzDayNightController.h"
 
 #include "Components/DirectionalLightComponent.h"
+#include "Components/PointLightComponent.h"
 #include "Components/SkyLightComponent.h"
 #include "Engine/DirectionalLight.h"
+#include "Engine/PointLight.h"
 #include "Engine/SkyLight.h"
 #include "Simulation/DoemitzSimulationSubsystem.h"
 
@@ -71,6 +73,22 @@ void ADoemitzDayNightController::UpdateLightingFromSimulation()
 		{
 			const float SkyIntensity = bIsDay ? FMath::Lerp(0.45f, 1.35f, DaylightAlpha) : 0.22f;
 			SkyComp->SetIntensity(SkyIntensity);
+		}
+	}
+
+	const float NightFactor = static_cast<float>(FMath::Clamp((-CurrentSunElevationDegrees + 6.0) / 12.0, 0.0, 1.0));
+	CurrentStreetLightIntensity = NightStreetLightIntensity * NightFactor;
+	const bool bLightsOn = NightFactor > 0.01f;
+	for (APointLight* Lamp : StreetLights)
+	{
+		if (!Lamp)
+		{
+			continue;
+		}
+		if (UPointLightComponent* PointComp = Lamp->FindComponentByClass<UPointLightComponent>())
+		{
+			PointComp->SetIntensity(CurrentStreetLightIntensity);
+			PointComp->SetVisibility(bLightsOn);
 		}
 	}
 }

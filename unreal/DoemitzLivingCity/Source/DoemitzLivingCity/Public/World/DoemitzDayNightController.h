@@ -5,6 +5,7 @@
 #include "DoemitzDayNightController.generated.h"
 
 class ADirectionalLight;
+class APointLight;
 class ASkyLight;
 
 UCLASS()
@@ -28,6 +29,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Environment")
 	float GetCurrentSunIntensity() const { return CurrentSunIntensity; }
 
+	UFUNCTION(BlueprintPure, Category = "Environment")
+	float GetActiveStreetLightIntensity() const { return CurrentStreetLightIntensity; }
+
 protected:
 	virtual void BeginPlay() override;
 
@@ -38,9 +42,16 @@ private:
 	UPROPERTY(EditInstanceOnly, Category = "Environment")
 	TObjectPtr<ASkyLight> SkyLight;
 
+	UPROPERTY(EditInstanceOnly, Category = "Environment")
+	TArray<TObjectPtr<APointLight>> StreetLights;
+
 	UPROPERTY(EditAnywhere, Category = "Environment", meta = (ClampMin = "15", ClampMax = "85"))
 	double PeakSunElevationDegrees = 60.0;
 
+	UPROPERTY(EditAnywhere, Category = "Environment", meta = (ClampMin = "0"))
+	float NightStreetLightIntensity = 3800.0f;
+
 	double CurrentSunElevationDegrees = 45.0;
 	float CurrentSunIntensity = 3.5f;
+	float CurrentStreetLightIntensity = 0.0f;
 };

@@ -1,5 +1,13 @@
 {
   "scene_id": "doemitz-altstadt",
+  "default_sidewalk_widths_m": {
+    "primary": 1.6,
+    "secondary": 1.6,
+    "tertiary": 1.5,
+    "residential": 1.5,
+    "living_street": 1.4,
+    "unclassified": 1.4
+  },
   "sidewalk_widths_m": {
     "osm:way:25642325": 1.6
   },

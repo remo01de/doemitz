@@ -14,7 +14,9 @@ from shapely.geometry import LineString, shape
 from shapely.ops import nearest_points
 
 from tools.geo_import.export import geometry_parts, write_json
+from tools.mesh_generator.architecture import ROOF_STYLES, WALL_STYLES, add_stylized_building
 from tools.mesh_generator.citizens import build_citizens
+from tools.mesh_generator.props import add_street_lamps, add_stylized_trees
 from tools.mesh_generator.traffic import build_vehicle_route
 
 
@@ -23,19 +25,38 @@ DEFAULT_SCENE = ROOT / "data/processed/doemitz-altstadt/scene.json"
 STREET_LAYOUT = ROOT / "data/manifests/doemitz-altstadt-streets.json"
 CITIZENS_LAYOUT = ROOT / "data/manifests/doemitz-altstadt-citizens.json"
 PALETTE = {
-    "Terrain": (0.18, 0.26, 0.12),
-    "Water": (0.035, 0.17, 0.21),
-    "Roads": (0.20, 0.20, 0.19),
-    "Paving": (0.30, 0.25, 0.21),
-    "Paths": (0.28, 0.25, 0.17),
-    "Sidewalks": (0.52, 0.45, 0.36),
-    "WallsCream": (0.73, 0.58, 0.37),
-    "WallsOchre": (0.64, 0.42, 0.21),
-    "WallsBrick": (0.46, 0.20, 0.13),
-    "WallsSand": (0.62, 0.57, 0.44),
-    "Roofs": (0.30, 0.12, 0.085),
+    "Terrain": (0.22, 0.42, 0.14),
+    "Water": (0.06, 0.34, 0.42),
+    "Roads": (0.24, 0.24, 0.25),
+    "Paving": (0.38, 0.32, 0.27),
+    "Paths": (0.42, 0.36, 0.26),
+    "Sidewalks": (0.60, 0.52, 0.43),
+    "WallsCream": (0.86, 0.78, 0.62),
+    "WallsOchre": (0.82, 0.56, 0.22),
+    "WallsTerracotta": (0.74, 0.31, 0.21),
+    "WallsSage": (0.48, 0.58, 0.42),
+    "WallsSand": (0.76, 0.68, 0.52),
+    "WallsBrick": (0.58, 0.24, 0.16),
+    "RoofsTerracotta": (0.62, 0.20, 0.12),
+    "RoofsClay": (0.48, 0.22, 0.14),
+    "RoofsSlate": (0.20, 0.23, 0.28),
+    "StoneTrim": (0.48, 0.46, 0.43),
+    "TimberTrim": (0.22, 0.13, 0.08),
+    "WindowGlass": (0.08, 0.14, 0.20),
+    "ShuttersGreen": (0.14, 0.36, 0.22),
+    "ShuttersRed": (0.58, 0.16, 0.14),
+    "ShuttersBlue": (0.18, 0.34, 0.52),
+    "Doors": (0.28, 0.16, 0.09),
+    "FlowerBoxes": (0.78, 0.22, 0.36),
+    "LampMetal": (0.11, 0.12, 0.13),
+    "LanternGlow": (1.00, 0.84, 0.48),
+    "TreeTrunks": (0.26, 0.17, 0.11),
+    "FoliageLight": (0.24, 0.54, 0.16),
+    "FoliageMid": (0.15, 0.42, 0.14),
+    "FoliageDark": (0.10, 0.30, 0.11),
 }
-WALLS = ("WallsCream", "WallsOchre", "WallsBrick", "WallsSand")
+WALLS = WALL_STYLES
+ROOFS = ROOF_STYLES
 ROAD_WIDTHS_M = {
     "primary": 7.0, "secondary": 7.0, "tertiary": 6.5, "residential": 6.0,
     "living_street": 5.0, "service": 3.5, "track": 3.0, "pedestrian": 4.0,
@@ -111,11 +132,13 @@ def road_width(tags):
     return ROAD_WIDTHS_M.get(tags["highway"], 5.5), "estimated_from_highway"
 
 
-def add_streets(meshes, roads, bounds, obstacles, base_m, sidewalk_widths):
+def add_streets(meshes, roads, bounds, obstacles, base_m, sidewalk_widths, default_sidewalk_widths=None):
     surfaces = {name: [] for name in ROAD_MESHES}
     sidewalk_envelopes = []
     eligible_ids = set()
+    sidewalk_road_ids = set()
     width_sources = Counter()
+    default_sidewalk_widths = default_sidewalk_widths or {}
     bounds = set_precision(bounds, STREET_GRID_M)
     for road in roads:
         tags = road["properties"]
@@ -133,11 +156,17 @@ def add_streets(meshes, roads, bounds, obstacles, base_m, sidewalk_widths):
         surfaces[name].append(axis.buffer(width / 2, quad_segs=3))
 
         road_id = road["id"]
+        sidewalk_width = None
         if road_id in sidewalk_widths and highway not in PATH_CLASSES:
             sidewalk_width = sidewalk_widths[road_id]
+            eligible_ids.add(road_id)
+        elif highway in default_sidewalk_widths and highway not in PATH_CLASSES:
+            sidewalk_width = default_sidewalk_widths[highway]
+
+        if sidewalk_width is not None:
             if not 0 < sidewalk_width <= 5:
                 raise ValueError(f"invalid sidewalk width for {road_id}: {sidewalk_width}")
-            eligible_ids.add(road_id)
+            sidewalk_road_ids.add(road_id)
             sidewalk_envelopes.append(
                 axis.buffer(width / 2 + sidewalk_width, quad_segs=3, cap_style="flat")
             )
@@ -165,7 +194,7 @@ def add_streets(meshes, roads, bounds, obstacles, base_m, sidewalk_widths):
     return width_sources, sidewalks
 
 
-def build(scene, report, sidewalk_widths=None, vehicle_config=None, citizens_config=None):
+def build(scene, report, sidewalk_widths=None, vehicle_config=None, citizens_config=None, default_sidewalk_widths=None):
     if scene["schema_version"] != 1 or scene["coordinates"]["local_axes"] != ["east", "north"]:
         raise ValueError("expected scene schema 1 with local [east, north] coordinates")
     if scene["coordinates"]["unit"] != "meter" or scene["terrain"]["kind"] != "flat_placeholder":
@@ -183,25 +212,43 @@ def build(scene, report, sidewalk_widths=None, vehicle_config=None, citizens_con
     buildings = []
     for feature in scene["layers"]["buildings"]:
         osm_id = int(feature["id"].rsplit(":", 1)[1])
-        wall = meshes[WALLS[osm_id % len(WALLS)]]
         height, source = building_height(feature["properties"])
         height_sources[source] += 1
         geometry = orient_polygons(shape(feature["geometry"]))
         buildings.append(geometry)
         for polygon in geometry_parts(geometry, "Polygon"):
-            wall.add_walls(polygon, height, base_m)
-            meshes["Roofs"].add_surface(polygon, base_m + height)
+            add_stylized_building(meshes, polygon, height, base_m, osm_id, feature["properties"])
 
     sidewalk_widths = sidewalk_widths or {}
+    default_sidewalk_widths = default_sidewalk_widths or {}
     obstacles = (
         union_all([water, *buildings], grid_size=STREET_GRID_M)
-        if sidewalk_widths or vehicle_config or citizens_config else water
+        if sidewalk_widths or default_sidewalk_widths or vehicle_config or citizens_config else water
     )
     roads = scene["layers"]["roads"]
     width_sources, sidewalks = add_streets(
-        meshes, roads, bounds, obstacles, base_m, sidewalk_widths,
+        meshes, roads, bounds, obstacles, base_m, sidewalk_widths, default_sidewalk_widths,
     )
     roads_by_id = {road["id"]: (road, road_width(road["properties"])[0]) for road in roads}
+    road_buffers = [
+        shape(road["geometry"]).buffer(width / 2, quad_segs=2)
+        for road, width in roads_by_id.values()
+        if road["properties"].get("tunnel", "no") == "no"
+    ]
+    excluded_for_trees = union_all([water, *buildings, *road_buffers, *sidewalks], grid_size=STREET_GRID_M)
+    detailed_road_ids = {
+        road["id"]
+        for road in roads
+        if road["properties"].get("tunnel", "no") == "no"
+        and (
+            road["id"] in sidewalk_widths
+            or road["properties"]["highway"] in default_sidewalk_widths
+        )
+    }
+    lamp_lights, lamps_placed, benches_placed, bollards_placed = add_street_lamps(
+        meshes, roads, sidewalks, base_m, base_m + ROAD_ELEVATION_M + CURB_HEIGHT_M, detailed_road_ids,
+    )
+    trees_placed = add_stylized_trees(meshes, bounds, excluded_for_trees, base_m)
     vehicle = None
     if vehicle_config:
         vehicle = build_vehicle_route(
@@ -251,10 +298,17 @@ def build(scene, report, sidewalk_widths=None, vehicle_config=None, citizens_con
         },
         "height_sources": dict(height_sources),
         "width_sources": dict(width_sources),
+        "props": {
+            "street_lamps": lamps_placed,
+            "lamp_lights_m": lamp_lights,
+            "benches": benches_placed,
+            "bollards": bollards_placed,
+            "trees_and_bushes": trees_placed,
+        },
         "meshes": {
             name: {
                 "color": PALETTE[name],
-                "collision": name in {"Terrain", "Roofs", "Sidewalks"} or name in WALLS,
+                "collision": name in {"Terrain", "Sidewalks"} or name in WALLS or name in ROOFS,
                 "vertices": mesh.vertices,
                 "triangles": mesh.triangles,
             }
@@ -277,7 +331,10 @@ def main():
         citizens_layout = json.loads(CITIZENS_LAYOUT.read_text(encoding="utf-8"))
         if scene["id"] == citizens_layout["scene_id"]:
             citizens_config = citizens_layout
-    package = build(scene, report, layout.get("sidewalk_widths_m"), layout.get("vehicle"), citizens_config)
+    package = build(
+        scene, report, layout.get("sidewalk_widths_m"), layout.get("vehicle"),
+        citizens_config, layout.get("default_sidewalk_widths_m"),
+    )
     package["source_scene_sha256"] = sha256(scene_bytes).hexdigest()
     destination = args.scene.with_name("unreal-city-meshes.json")
     write_json(destination, package)

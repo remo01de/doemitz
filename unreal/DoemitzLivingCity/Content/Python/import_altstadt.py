@@ -25,24 +25,143 @@ def ue_position(point):
     return unreal.Vector(north * 100, east * 100, height * 100)
 
 
+def _build_patterned_color(asset, color, tile_u, tile_v, darken_factor, contrast):
+    """Build a lightweight procedural tile/brick/cobble/plaster pattern using standard UE material nodes."""
+    mel = unreal.MaterialEditingLibrary
+    dark_color = tuple(max(0.0, c * darken_factor) for c in color)
+
+    col_a = mel.create_material_expression(asset, unreal.MaterialExpressionConstant3Vector, -600, -140)
+    col_a.set_editor_property("constant", unreal.LinearColor(*color, 1))
+    col_b = mel.create_material_expression(asset, unreal.MaterialExpressionConstant3Vector, -600, 20)
+    col_b.set_editor_property("constant", unreal.LinearColor(*dark_color, 1))
+
+    uv = mel.create_material_expression(asset, unreal.MaterialExpressionTextureCoordinate, -1000, 180)
+    uv.set_editor_property("u_tiling", float(tile_u))
+    uv.set_editor_property("v_tiling", float(tile_v))
+
+    mask_u = mel.create_material_expression(asset, unreal.MaterialExpressionComponentMask, -820, 120)
+    mask_u.set_editor_property("r", True)
+    mask_u.set_editor_property("g", False)
+    mask_u.set_editor_property("b", False)
+    mask_u.set_editor_property("a", False)
+    mel.connect_material_expressions(uv, "", mask_u, "")
+
+    mask_v = mel.create_material_expression(asset, unreal.MaterialExpressionComponentMask, -820, 240)
+    mask_v.set_editor_property("r", False)
+    mask_v.set_editor_property("g", True)
+    mask_v.set_editor_property("b", False)
+    mask_v.set_editor_property("a", False)
+    mel.connect_material_expressions(uv, "", mask_v, "")
+
+    sin_u = mel.create_material_expression(asset, unreal.MaterialExpressionSine, -660, 120)
+    mel.connect_material_expressions(mask_u, "", sin_u, "")
+    sin_v = mel.create_material_expression(asset, unreal.MaterialExpressionSine, -660, 240)
+    mel.connect_material_expressions(mask_v, "", sin_v, "")
+
+    mul_uv = mel.create_material_expression(asset, unreal.MaterialExpressionMultiply, -500, 180)
+    mel.connect_material_expressions(sin_u, "", mul_uv, "A")
+    mel.connect_material_expressions(sin_v, "", mul_uv, "B")
+
+    # Map [-1, 1] -> [0, 1] scaled by contrast
+    scale = mel.create_material_expression(asset, unreal.MaterialExpressionConstant, -500, 300)
+    scale.set_editor_property("r", 0.5 * contrast)
+    bias = mel.create_material_expression(asset, unreal.MaterialExpressionConstant, -360, 300)
+    bias.set_editor_property("r", 0.5)
+
+    mul_c = mel.create_material_expression(asset, unreal.MaterialExpressionMultiply, -360, 180)
+    mel.connect_material_expressions(mul_uv, "", mul_c, "A")
+    mel.connect_material_expressions(scale, "", mul_c, "B")
+
+    add_b = mel.create_material_expression(asset, unreal.MaterialExpressionAdd, -220, 180)
+    mel.connect_material_expressions(mul_c, "", add_b, "A")
+    mel.connect_material_expressions(bias, "", add_b, "B")
+
+    lerp = mel.create_material_expression(asset, unreal.MaterialExpressionLinearInterpolate, -80, 0)
+    mel.connect_material_expressions(col_b, "", lerp, "A")
+    mel.connect_material_expressions(col_a, "", lerp, "B")
+    mel.connect_material_expressions(add_b, "", lerp, "Alpha")
+    return lerp
+
+
+PROCEDURAL_PATTERNS = {
+    "Paving": (14.0, 14.0, 0.66, 0.95),
+    "Sidewalks": (6.0, 6.0, 0.78, 0.80),
+    "Roads": (4.0, 4.0, 0.86, 0.45),
+    "Paths": (9.0, 9.0, 0.78, 0.70),
+    "RoofsTerracotta": (10.0, 22.0, 0.62, 0.95),
+    "RoofsClay": (10.0, 22.0, 0.64, 0.95),
+    "RoofsSlate": (10.0, 20.0, 0.68, 0.85),
+    "StoneTrim": (6.0, 12.0, 0.72, 0.85),
+    "Terrain": (0.8, 0.8, 0.82, 0.55),
+    "WallsCream": (1.5, 1.5, 0.90, 0.45),
+    "WallsOchre": (1.5, 1.5, 0.88, 0.50),
+    "WallsTerracotta": (1.5, 1.5, 0.86, 0.55),
+    "WallsSage": (1.5, 1.5, 0.88, 0.50),
+    "WallsSand": (1.5, 1.5, 0.88, 0.45),
+    "WallsBrick": (8.0, 16.0, 0.68, 0.90),
+}
+
+
 def material(name, color):
     path = f"{ASSETS}/M_{name}"
     asset = EDITOR.load_asset(path) if EDITOR.does_asset_exist(path) else None
     if asset is None:
         asset = TOOLS.create_asset(f"M_{name}", ASSETS, unreal.Material, unreal.MaterialFactoryNew())
-        expression_type = unreal.MaterialExpressionVertexColor if color is None else unreal.MaterialExpressionConstant3Vector
-        base = unreal.MaterialEditingLibrary.create_material_expression(asset, expression_type, -300, 0)
-        if color is not None:
-            base.set_editor_property("constant", unreal.LinearColor(*color, 1))
-        unreal.MaterialEditingLibrary.connect_material_property(base, "", unreal.MaterialProperty.MP_BASE_COLOR)
-        roughness = unreal.MaterialEditingLibrary.create_material_expression(
-            asset, unreal.MaterialExpressionConstant, -300, 150
+    else:
+        unreal.MaterialEditingLibrary.delete_all_material_expressions(asset)
+
+    if color is None:
+        base = unreal.MaterialEditingLibrary.create_material_expression(
+            asset, unreal.MaterialExpressionVertexColor, -300, 0
         )
-        roughness.set_editor_property("r", 0.85)
-        unreal.MaterialEditingLibrary.connect_material_property(roughness, "", unreal.MaterialProperty.MP_ROUGHNESS)
-        unreal.MaterialEditingLibrary.recompile_material(asset)
-        if not EDITOR.save_loaded_asset(asset):
-            raise RuntimeError(f"Could not save material {path}")
+    elif name in PROCEDURAL_PATTERNS:
+        tile_u, tile_v, darken, contrast = PROCEDURAL_PATTERNS[name]
+        base = _build_patterned_color(asset, color, tile_u, tile_v, darken, contrast)
+    else:
+        base = unreal.MaterialEditingLibrary.create_material_expression(
+            asset, unreal.MaterialExpressionConstant3Vector, -300, 0
+        )
+        base.set_editor_property("constant", unreal.LinearColor(*color, 1))
+    unreal.MaterialEditingLibrary.connect_material_property(base, "", unreal.MaterialProperty.MP_BASE_COLOR)
+
+    roughness_val = 0.85
+    metallic_val = 0.0
+    emissive_color = None
+    if name == "Water":
+        roughness_val = 0.12
+    elif name == "WindowGlass":
+        roughness_val = 0.14
+        metallic_val = 0.25
+    elif name == "LampMetal":
+        roughness_val = 0.42
+        metallic_val = 0.75
+    elif name == "LanternGlow":
+        roughness_val = 0.25
+        emissive_color = (3.8, 2.6, 1.0)
+
+    roughness = unreal.MaterialEditingLibrary.create_material_expression(
+        asset, unreal.MaterialExpressionConstant, -300, 150
+    )
+    roughness.set_editor_property("r", roughness_val)
+    unreal.MaterialEditingLibrary.connect_material_property(roughness, "", unreal.MaterialProperty.MP_ROUGHNESS)
+
+    if metallic_val > 0.0:
+        metallic = unreal.MaterialEditingLibrary.create_material_expression(
+            asset, unreal.MaterialExpressionConstant, -300, 260
+        )
+        metallic.set_editor_property("r", metallic_val)
+        unreal.MaterialEditingLibrary.connect_material_property(metallic, "", unreal.MaterialProperty.MP_METALLIC)
+
+    if emissive_color is not None:
+        emissive = unreal.MaterialEditingLibrary.create_material_expression(
+            asset, unreal.MaterialExpressionConstant3Vector, -300, 360
+        )
+        emissive.set_editor_property("constant", unreal.LinearColor(*emissive_color, 1))
+        unreal.MaterialEditingLibrary.connect_material_property(emissive, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+
+    unreal.MaterialEditingLibrary.recompile_material(asset)
+    if not EDITOR.save_loaded_asset(asset):
+        raise RuntimeError(f"Could not save material {path}")
     return asset
 
 
@@ -276,12 +395,32 @@ def import_level(package):
     sky_component.set_intensity(1.3)
     sky_component.set_editor_property("real_time_capture", True)
 
+    street_lights = []
+    lamp_positions = package.get("props", {}).get("lamp_lights_m", [])
+    active_lamp_labels = set()
+    for index, pos_m in enumerate(lamp_positions):
+        label = f"Altstadt StreetLight {index:02d}"
+        active_lamp_labels.add(label)
+        lamp_actor = place(existing, label, unreal.PointLight, ue_position(pos_m))
+        lamp_comp = lamp_actor.get_component_by_class(unreal.PointLightComponent)
+        lamp_comp.set_mobility(unreal.ComponentMobility.MOVABLE)
+        lamp_comp.set_light_color(unreal.LinearColor(1.0, 0.78, 0.42, 1.0))
+        lamp_comp.set_attenuation_radius(950.0)
+        lamp_comp.set_cast_shadows(False)
+        lamp_comp.set_intensity(0.0)
+        street_lights.append(lamp_actor)
+    for label, actor in list(existing.items()):
+        if label.startswith("Altstadt StreetLight ") and label not in active_lamp_labels:
+            if not ACTORS.destroy_actor(actor):
+                raise RuntimeError(f"Could not remove obsolete street light {label}")
+
     day_night_class = unreal.load_class(None, "/Script/DoemitzLivingCity.DoemitzDayNightController")
     if not day_night_class:
         raise RuntimeError("Build the DoemitzLivingCityEditor target before importing the day/night controller")
     day_night = place(existing, "Altstadt Day Night Controller", day_night_class, unreal.Vector())
     day_night.set_editor_property("sun_light", sun)
     day_night.set_editor_property("sky_light", skylight)
+    day_night.set_editor_property("street_lights", street_lights)
 
     direction = second - first
     credit = start + unreal.Vector(0, 0, 235) + direction * (450 / direction.length())
