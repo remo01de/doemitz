@@ -108,3 +108,14 @@ void ADoemitzTrafficVehicle::Tick(float DeltaSeconds)
 			*VehicleId.ToString(), *RouteId.ToString(), Motion.CompletedLaps);
 	}
 }
+
+void ADoemitzTrafficVehicle::RestoreMotionState(double NewDistanceCm, int32 NewCompletedLaps)
+{
+	if (Motion.Length <= 0.0 || !FMath::IsFinite(NewDistanceCm) || NewDistanceCm < 0.0)
+	{
+		return;
+	}
+	Motion.Distance = FMath::Fmod(NewDistanceCm, Motion.Length);
+	Motion.CompletedLaps = FMath::Max(0, NewCompletedLaps);
+	SetActorTransform(Motion.Sample(RoutePoints, Motion.Distance));
+}

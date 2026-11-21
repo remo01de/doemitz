@@ -41,6 +41,13 @@ TSharedRef<SWidget> UDoemitzClockWidget::RebuildWidget()
 		StatusFont.Size = 13;
 		StatusText->SetFont(StatusFont);
 		VBox->AddChildToVerticalBox(StatusText);
+
+		NoticeText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("NoticeText"));
+		NoticeText->SetColorAndOpacity(FSlateColor(FLinearColor(0.95f, 0.82f, 0.45f, 1.0f)));
+		FSlateFontInfo NoticeFont = NoticeText->GetFont();
+		NoticeFont.Size = 11;
+		NoticeText->SetFont(NoticeFont);
+		VBox->AddChildToVerticalBox(NoticeText);
 	}
 	return Super::RebuildWidget();
 }
@@ -68,7 +75,11 @@ void UDoemitzClockWidget::RefreshDisplay()
 	const int32 TotalMinutes = FMath::FloorToInt(Subsystem->GetTimeOfDayMinutes()) % 1440;
 	const int32 Hours = TotalMinutes / 60;
 	const int32 Minutes = TotalMinutes % 60;
-	LastClockString = FString::Printf(TEXT("Tag %d  |  %02d:%02d"), Subsystem->GetDayNumber(), Hours, Minutes);
+	const double Scale = Subsystem->GetTimeScale();
+	const FString SpeedLabel = Scale <= 0.0
+		? TEXT("Pause")
+		: FString::Printf(TEXT("%.0fx"), FMath::Max(1.0, Scale / 60.0));
+	LastClockString = FString::Printf(TEXT("Tag %d  |  %02d:%02d  (%s)"), Subsystem->GetDayNumber(), Hours, Minutes, *SpeedLabel);
 
 	int32 MovingCount = 0;
 	const TArray<FName> CitizenIds = Subsystem->GetAllCitizenIds();
@@ -82,6 +93,11 @@ void UDoemitzClockWidget::RefreshDisplay()
 	}
 	LastStatusString = FString::Printf(TEXT("Doemitz Altstadt  |  %d Einwohner (%d unterwegs)"), CitizenIds.Num(), MovingCount);
 
+	const FString ActiveNotice = Subsystem->GetLastNotification();
+	LastNoticeString = ActiveNotice.IsEmpty()
+		? TEXT("F5 Speichern  |  F9 Laden  |  1/2/3/P Zeit")
+		: ActiveNotice;
+
 	if (ClockText)
 	{
 		ClockText->SetText(FText::FromString(LastClockString));
@@ -89,5 +105,9 @@ void UDoemitzClockWidget::RefreshDisplay()
 	if (StatusText)
 	{
 		StatusText->SetText(FText::FromString(LastStatusString));
+	}
+	if (NoticeText)
+	{
+		NoticeText->SetText(FText::FromString(LastNoticeString));
 	}
 }

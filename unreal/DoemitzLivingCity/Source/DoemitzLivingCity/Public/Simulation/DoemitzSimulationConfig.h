@@ -24,6 +24,7 @@ protected:
 
 private:
 	void TryAttachClockHud();
+	void HandleHotkeys();
 
 	UPROPERTY(EditInstanceOnly, Category = "Simulation")
 	double StartMinute = 470.0;
@@ -45,4 +46,6 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<UDoemitzClockWidget> ClockWidget;
+
+	double PreviousActiveTimeScale = 60.0;
 };

@@ -31,10 +31,16 @@ public:
 	virtual void Tick(float DeltaSeconds) override;
 
 	UFUNCTION(BlueprintPure, Category = "Traffic")
+	FName GetVehicleId() const { return VehicleId; }
+
+	UFUNCTION(BlueprintPure, Category = "Traffic")
 	double GetDistanceAlongRoute() const { return Motion.Distance; }
 
 	UFUNCTION(BlueprintPure, Category = "Traffic")
 	int32 GetCompletedLaps() const { return Motion.CompletedLaps; }
+
+	UFUNCTION(BlueprintCallable, Category = "Traffic")
+	void RestoreMotionState(double NewDistanceCm, int32 NewCompletedLaps);
 
 protected:
 	virtual void BeginPlay() override;

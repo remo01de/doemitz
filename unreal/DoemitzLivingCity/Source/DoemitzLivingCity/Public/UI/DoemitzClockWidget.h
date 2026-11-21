@@ -33,6 +33,10 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UTextBlock> StatusText;
 
+	UPROPERTY(Transient)
+	TObjectPtr<UTextBlock> NoticeText;
+
 	FString LastClockString;
 	FString LastStatusString;
+	FString LastNoticeString;
 };

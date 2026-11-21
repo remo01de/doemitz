@@ -179,6 +179,21 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Simulation")
 	TArray<FName> GetAllCitizenIds() const;
 
+	UFUNCTION(BlueprintCallable, Category = "SaveGame")
+	bool SaveCityState(const FString& SlotName = TEXT("DoemitzQuicksave"));
+
+	UFUNCTION(BlueprintCallable, Category = "SaveGame")
+	bool LoadCityState(const FString& SlotName = TEXT("DoemitzQuicksave"));
+
+	UFUNCTION(BlueprintPure, Category = "SaveGame")
+	bool DoesSaveExist(const FString& SlotName = TEXT("DoemitzQuicksave")) const;
+
+	UFUNCTION(BlueprintCallable, Category = "Simulation")
+	void SetNotification(const FString& Message, double DurationSeconds = 4.0);
+
+	UFUNCTION(BlueprintPure, Category = "Simulation")
+	FString GetLastNotification() const;
+
 private:
 	struct FCitizenRecord
 	{
@@ -191,6 +206,7 @@ private:
 
 	static int32 FindScheduleIndex(const TArray<FDoemitzScheduleEntry>& Schedule, double MinuteOfDay);
 	static FName MakeRouteKey(FName FromPlaceId, FName ToPlaceId);
+	void BuildRouteCache(FCitizenRecord& Record, FName FromPlaceId, FName DestinationPlaceId);
 	void StartTrip(FCitizenRecord& Record, FName DestinationPlaceId);
 	void UpdateCitizen(FCitizenRecord& Record, double DeltaSeconds);
 
@@ -198,6 +214,8 @@ private:
 	double TimeOfDayMinutes = 470.0;
 	double TimeScale = 60.0;
 	int32 DayNumber = 1;
+	FString LastNotification;
+	double NotificationRemainingSeconds = 0.0;
 
 	TMap<FName, FDoemitzPlaceDefinition> PlacesById;
 	TMap<FName, FDoemitzCitizenRoute> RoutesByKey;

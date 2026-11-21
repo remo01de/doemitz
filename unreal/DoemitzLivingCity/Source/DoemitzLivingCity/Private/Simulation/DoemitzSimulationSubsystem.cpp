@@ -2,6 +2,13 @@
 
 #include "Algo/BinarySearch.h"
 #include "Engine/World.h"
+#include "EngineUtils.h"
+#include "GameFramework/Pawn.h"
+#include "GameFramework/PlayerController.h"
+#include "Kismet/GameplayStatics.h"
+#include "Simulation/DoemitzSaveGame.h"
+#include "Traffic/DoemitzTrafficVehicle.h"
+#include "World/DoemitzDayNightController.h"
 
 bool UDoemitzSimulationSubsystem::ShouldCreateSubsystem(UObject* Outer) const
 {
@@ -147,15 +154,13 @@ TArray<FName> UDoemitzSimulationSubsystem::GetAllCitizenIds() const
 	return Ids;
 }
 
-void UDoemitzSimulationSubsystem::StartTrip(FCitizenRecord& Record, FName DestinationPlaceId)
+void UDoemitzSimulationSubsystem::BuildRouteCache(FCitizenRecord& Record, FName FromPlaceId, FName DestinationPlaceId)
 {
 	Record.ActiveRoute.Reset();
 	Record.ActiveSegmentEnds.Reset();
 	Record.ActiveRouteLength = 0.0;
-	Record.State.RouteProgressCm = 0.0;
-	Record.State.TargetPlaceId = DestinationPlaceId;
 
-	if (const FDoemitzCitizenRoute* Route = RoutesByKey.Find(MakeRouteKey(Record.State.CurrentPlaceId, DestinationPlaceId)))
+	if (const FDoemitzCitizenRoute* Route = RoutesByKey.Find(MakeRouteKey(FromPlaceId, DestinationPlaceId)))
 	{
 		Record.ActiveRoute = Route->Points;
 	}
@@ -172,6 +177,13 @@ void UDoemitzSimulationSubsystem::StartTrip(FCitizenRecord& Record, FName Destin
 		Record.ActiveSegmentEnds.Add(Cumulative);
 	}
 	Record.ActiveRouteLength = Cumulative;
+}
+
+void UDoemitzSimulationSubsystem::StartTrip(FCitizenRecord& Record, FName DestinationPlaceId)
+{
+	Record.State.RouteProgressCm = 0.0;
+	Record.State.TargetPlaceId = DestinationPlaceId;
+	BuildRouteCache(Record, Record.State.CurrentPlaceId, DestinationPlaceId);
 
 	if (Record.ActiveRouteLength <= 1.0)
 	{
@@ -249,6 +261,20 @@ void UDoemitzSimulationSubsystem::Tick(float DeltaTime)
 		return;
 	}
 
+	if (NotificationRemainingSeconds > 0.0)
+	{
+		NotificationRemainingSeconds = FMath::Max(0.0, NotificationRemainingSeconds - static_cast<double>(DeltaTime));
+		if (NotificationRemainingSeconds <= 0.0)
+		{
+			LastNotification.Reset();
+		}
+	}
+
+	if (TimeScale <= 0.0)
+	{
+		return;
+	}
+
 	const double SimMinutesDelta = (static_cast<double>(DeltaTime) * TimeScale) / 60.0;
 	TimeOfDayMinutes += SimMinutesDelta;
 	while (TimeOfDayMinutes >= 1440.0)
@@ -263,4 +289,177 @@ void UDoemitzSimulationSubsystem::Tick(float DeltaTime)
 	{
 		UpdateCitizen(Pair.Value, static_cast<double>(DeltaTime));
 	}
+}
+
+void UDoemitzSimulationSubsystem::SetNotification(const FString& Message, double DurationSeconds)
+{
+	LastNotification = Message;
+	NotificationRemainingSeconds = FMath::Max(0.5, DurationSeconds);
+}
+
+FString UDoemitzSimulationSubsystem::GetLastNotification() const
+{
+	return NotificationRemainingSeconds > 0.0 ? LastNotification : FString();
+}
+
+bool UDoemitzSimulationSubsystem::DoesSaveExist(const FString& SlotName) const
+{
+	return !SlotName.IsEmpty() && UGameplayStatics::DoesSaveGameExist(SlotName, 0);
+}
+
+bool UDoemitzSimulationSubsystem::SaveCityState(const FString& SlotName)
+{
+	if (!bIsConfigured || SlotName.IsEmpty())
+	{
+		return false;
+	}
+
+	UDoemitzSaveGame* SaveObj = Cast<UDoemitzSaveGame>(UGameplayStatics::CreateSaveGameObject(UDoemitzSaveGame::StaticClass()));
+	if (!SaveObj)
+	{
+		return false;
+	}
+
+	SaveObj->DayNumber = DayNumber;
+	SaveObj->TimeOfDayMinutes = TimeOfDayMinutes;
+	SaveObj->TimeScale = TimeScale;
+
+	if (UWorld* World = GetWorld())
+	{
+		if (APlayerController* PC = World->GetFirstPlayerController())
+		{
+			if (APawn* Pawn = PC->GetPawn())
+			{
+				SaveObj->bHasPlayerTransform = true;
+				SaveObj->PlayerLocation = Pawn->GetActorLocation();
+				SaveObj->PlayerRotation = Pawn->GetActorRotation();
+			}
+		}
+
+		for (TActorIterator<ADoemitzTrafficVehicle> It(World); It; ++It)
+		{
+			const ADoemitzTrafficVehicle* Vehicle = *It;
+			if (Vehicle && !Vehicle->GetVehicleId().IsNone())
+			{
+				FDoemitzSavedVehicle SavedVehicle;
+				SavedVehicle.VehicleId = Vehicle->GetVehicleId();
+				SavedVehicle.DistanceCm = Vehicle->GetDistanceAlongRoute();
+				SavedVehicle.CompletedLaps = Vehicle->GetCompletedLaps();
+				SaveObj->Vehicles.Add(SavedVehicle);
+			}
+		}
+	}
+
+	for (const TPair<FName, FCitizenRecord>& Pair : CitizenRecords)
+	{
+		const FDoemitzCitizenState& State = Pair.Value.State;
+		FDoemitzSavedCitizen SavedCitizen;
+		SavedCitizen.CitizenId = State.CitizenId;
+		SavedCitizen.CurrentActivity = State.CurrentActivity;
+		SavedCitizen.CurrentPlaceId = State.CurrentPlaceId;
+		SavedCitizen.TargetPlaceId = State.TargetPlaceId;
+		SavedCitizen.bIsMoving = State.bIsMoving;
+		SavedCitizen.WorldLocation = State.WorldLocation;
+		SavedCitizen.WorldRotation = State.WorldRotation;
+		SavedCitizen.RouteProgressCm = State.RouteProgressCm;
+		SavedCitizen.ActiveScheduleIndex = State.ActiveScheduleIndex;
+		SavedCitizen.CompletedTrips = State.CompletedTrips;
+		SaveObj->Citizens.Add(SavedCitizen);
+	}
+
+	const bool bSaved = UGameplayStatics::SaveGameToSlot(SaveObj, SlotName, 0);
+	if (bSaved)
+	{
+		SetNotification(FString::Printf(TEXT("Gespeichert: %s"), *SlotName));
+		UE_LOG(LogTemp, Display, TEXT("Doemitz save written to slot '%s' (Day %d, %.1f min, %d citizens, %d vehicles)"),
+			*SlotName, DayNumber, TimeOfDayMinutes, SaveObj->Citizens.Num(), SaveObj->Vehicles.Num());
+	}
+	return bSaved;
+}
+
+bool UDoemitzSimulationSubsystem::LoadCityState(const FString& SlotName)
+{
+	if (!bIsConfigured || !DoesSaveExist(SlotName))
+	{
+		return false;
+	}
+
+	const UDoemitzSaveGame* SaveObj = Cast<UDoemitzSaveGame>(UGameplayStatics::LoadGameFromSlot(SlotName, 0));
+	if (!SaveObj || SaveObj->SaveSchemaVersion != 1)
+	{
+		return false;
+	}
+
+	DayNumber = FMath::Max(1, SaveObj->DayNumber);
+	TimeOfDayMinutes = FMath::Fmod(FMath::Max(0.0, SaveObj->TimeOfDayMinutes), 1440.0);
+	TimeScale = FMath::Clamp(SaveObj->TimeScale, 0.0, 3600.0);
+
+	for (const FDoemitzSavedCitizen& Saved : SaveObj->Citizens)
+	{
+		if (FCitizenRecord* Record = CitizenRecords.Find(Saved.CitizenId))
+		{
+			Record->State.CurrentActivity = Saved.CurrentActivity;
+			Record->State.CurrentPlaceId = Saved.CurrentPlaceId;
+			Record->State.TargetPlaceId = Saved.TargetPlaceId;
+			Record->State.bIsMoving = Saved.bIsMoving;
+			Record->State.WorldLocation = Saved.WorldLocation;
+			Record->State.WorldRotation = Saved.WorldRotation;
+			Record->State.RouteProgressCm = FMath::Max(0.0, Saved.RouteProgressCm);
+			Record->State.ActiveScheduleIndex = Saved.ActiveScheduleIndex;
+			Record->State.CompletedTrips = FMath::Max(0, Saved.CompletedTrips);
+			if (Record->State.bIsMoving)
+			{
+				BuildRouteCache(*Record, Record->State.CurrentPlaceId, Record->State.TargetPlaceId);
+			}
+			else
+			{
+				Record->ActiveRoute.Reset();
+				Record->ActiveSegmentEnds.Reset();
+				Record->ActiveRouteLength = 0.0;
+			}
+		}
+	}
+
+	if (UWorld* World = GetWorld())
+	{
+		if (SaveObj->bHasPlayerTransform)
+		{
+			if (APlayerController* PC = World->GetFirstPlayerController())
+			{
+				if (APawn* Pawn = PC->GetPawn())
+				{
+					Pawn->SetActorLocationAndRotation(SaveObj->PlayerLocation, SaveObj->PlayerRotation, false, nullptr, ETeleportType::TeleportPhysics);
+				}
+			}
+		}
+
+		TMap<FName, FDoemitzSavedVehicle> SavedVehiclesById;
+		for (const FDoemitzSavedVehicle& SavedVehicle : SaveObj->Vehicles)
+		{
+			SavedVehiclesById.Add(SavedVehicle.VehicleId, SavedVehicle);
+		}
+		for (TActorIterator<ADoemitzTrafficVehicle> It(World); It; ++It)
+		{
+			if (ADoemitzTrafficVehicle* Vehicle = *It)
+			{
+				if (const FDoemitzSavedVehicle* SavedVehicle = SavedVehiclesById.Find(Vehicle->GetVehicleId()))
+				{
+					Vehicle->RestoreMotionState(SavedVehicle->DistanceCm, SavedVehicle->CompletedLaps);
+				}
+			}
+		}
+
+		for (TActorIterator<ADoemitzDayNightController> It(World); It; ++It)
+		{
+			if (ADoemitzDayNightController* Controller = *It)
+			{
+				Controller->UpdateLightingFromSimulation();
+			}
+		}
+	}
+
+	SetNotification(FString::Printf(TEXT("Geladen: %s"), *SlotName));
+	UE_LOG(LogTemp, Display, TEXT("Doemitz save loaded from slot '%s' (Day %d, %.1f min)"),
+		*SlotName, DayNumber, TimeOfDayMinutes);
+	return true;
 }
