@@ -5,6 +5,7 @@ from math import atan2, degrees
 from pathlib import Path
 
 import unreal
+from doemitz_citizen_mesh import stylized_citizen
 from doemitz_vehicle_mesh import compact_car
 
 
@@ -96,7 +97,7 @@ def place(existing, name, actor_class, position, rotation=None):
             raise RuntimeError(f"Could not spawn {name}")
         actor.set_actor_label(name)
         actor.set_editor_property("tags", [GENERATOR_TAG])
-    elif not isinstance(actor, actor_class):
+    elif actor.get_class() != (actor_class if isinstance(actor_class, unreal.Class) else actor_class.static_class()):
         raise RuntimeError(f"{name} has unexpected class {actor.get_class().get_name()}")
     else:
         actor.set_actor_location(position, False, False)
@@ -126,6 +127,96 @@ def place_vehicle(existing, config):
     actor.set_editor_property("start_distance_cm", config["start_distance_m"] * 100)
     actor.set_editor_property("speed_cm_per_second", config["speed_kmh"] / 0.036)
     unreal.log(f"DOEMITZ_TRAFFIC_IMPORT_OK: {config['id']}, {config['route_id']}, {config['length_m']:.1f} m")
+
+
+def place_citizens(existing, config):
+    config_name = "Altstadt Simulation Config"
+    if not config:
+        for label, actor in list(existing.items()):
+            if label == config_name or label.startswith("Altstadt Citizen - "):
+                if not ACTORS.destroy_actor(actor):
+                    raise RuntimeError(f"Could not remove obsolete generated actor {label}")
+        return
+
+    config_class = unreal.load_class(None, "/Script/DoemitzLivingCity.DoemitzSimulationConfig")
+    citizen_class = unreal.load_class(None, "/Script/DoemitzLivingCity.DoemitzCitizenActor")
+    if not config_class or not citizen_class:
+        raise RuntimeError("Build the DoemitzLivingCityEditor target before importing citizens")
+
+    activity_enum = {
+        "Home": unreal.DoemitzCitizenActivity.HOME,
+        "Commuting": unreal.DoemitzCitizenActivity.COMMUTING,
+        "Working": unreal.DoemitzCitizenActivity.WORKING,
+        "Shopping": unreal.DoemitzCitizenActivity.SHOPPING,
+        "Strolling": unreal.DoemitzCitizenActivity.STROLLING,
+    }
+
+    places_by_id = {}
+    place_structs = []
+    for entry in config["places"]:
+        pos = ue_position(entry["access_m"])
+        places_by_id[entry["id"]] = pos
+        place_struct = unreal.DoemitzPlaceDefinition()
+        place_struct.set_editor_property("place_id", entry["id"])
+        place_struct.set_editor_property("display_name", entry["name"])
+        place_struct.set_editor_property("building_id", entry["building_id"])
+        place_struct.set_editor_property("kind", entry["kind"])
+        place_struct.set_editor_property("access_location", pos)
+        place_structs.append(place_struct)
+
+    route_structs = []
+    for entry in config["routes"]:
+        route_struct = unreal.DoemitzCitizenRoute()
+        route_struct.set_editor_property("from_place_id", entry["from_place_id"])
+        route_struct.set_editor_property("to_place_id", entry["to_place_id"])
+        route_struct.set_editor_property("points", list(map(ue_position, entry["points_m"])))
+        route_structs.append(route_struct)
+
+    citizen_structs = []
+    active_labels = set()
+    for entry in config["citizens"]:
+        schedule_structs = []
+        for step in entry["schedule"]:
+            sched = unreal.DoemitzScheduleEntry()
+            sched.set_editor_property("start_minute", step["start_minute"])
+            sched.set_editor_property("activity", activity_enum[step["activity"]])
+            sched.set_editor_property("place_id", step["place_id"])
+            schedule_structs.append(sched)
+
+        cdef = unreal.DoemitzCitizenDefinition()
+        cdef.set_editor_property("citizen_id", entry["id"])
+        cdef.set_editor_property("display_name", entry["name"])
+        cdef.set_editor_property("home_place_id", entry["home_place_id"])
+        cdef.set_editor_property("work_place_id", entry["work_place_id"])
+        cdef.set_editor_property("walk_speed_cm_per_second", entry["walk_speed_mps"] * 100.0)
+        cdef.set_editor_property("schedule", schedule_structs)
+        citizen_structs.append(cdef)
+
+        label = f"Altstadt Citizen - {entry['id']}"
+        active_labels.add(label)
+        spawn_pos = places_by_id[entry["home_place_id"]]
+        actor = place(existing, label, citizen_class, spawn_pos)
+        mesh_name = f"Citizen_{entry['id']}"
+        actor.get_editor_property("citizen_mesh").set_static_mesh(
+            static_mesh(mesh_name, stylized_citizen(entry["coat_color"]))
+        )
+        actor.set_editor_property("citizen_id", entry["id"])
+
+    for label, actor in list(existing.items()):
+        if label.startswith("Altstadt Citizen - ") and label not in active_labels:
+            if not ACTORS.destroy_actor(actor):
+                raise RuntimeError(f"Could not remove obsolete citizen actor {label}")
+
+    sim_actor = place(existing, config_name, config_class, unreal.Vector())
+    sim_actor.set_editor_property("start_minute", config["clock"]["start_minute"])
+    sim_actor.set_editor_property("time_scale", config["clock"]["time_scale"])
+    sim_actor.set_editor_property("places", place_structs)
+    sim_actor.set_editor_property("routes", route_structs)
+    sim_actor.set_editor_property("citizens", citizen_structs)
+    unreal.log(
+        f"DOEMITZ_CITIZENS_IMPORT_OK: {len(citizen_structs)} citizens, "
+        f"{len(place_structs)} places, {len(route_structs)} routes"
+    )
 
 
 def import_level(package):
@@ -159,6 +250,7 @@ def import_level(package):
             if not ACTORS.destroy_actor(actor):
                 raise RuntimeError(f"Could not remove obsolete generated actor {actor.get_actor_label()}")
     place_vehicle(existing, package.get("vehicle"))
+    place_citizens(existing, package.get("citizens"))
 
     start = ue_position(package["start_m"])
     first, second = (ue_position([*point, 0]) for point in package["reference_points_m"])

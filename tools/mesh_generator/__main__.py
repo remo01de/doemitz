@@ -14,12 +14,14 @@ from shapely.geometry import LineString, shape
 from shapely.ops import nearest_points
 
 from tools.geo_import.export import geometry_parts, write_json
+from tools.mesh_generator.citizens import build_citizens
 from tools.mesh_generator.traffic import build_vehicle_route
 
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_SCENE = ROOT / "data/processed/doemitz-altstadt/scene.json"
 STREET_LAYOUT = ROOT / "data/manifests/doemitz-altstadt-streets.json"
+CITIZENS_LAYOUT = ROOT / "data/manifests/doemitz-altstadt-citizens.json"
 PALETTE = {
     "Terrain": (0.18, 0.26, 0.12),
     "Water": (0.035, 0.17, 0.21),
@@ -163,7 +165,7 @@ def add_streets(meshes, roads, bounds, obstacles, base_m, sidewalk_widths):
     return width_sources, sidewalks
 
 
-def build(scene, report, sidewalk_widths=None, vehicle_config=None):
+def build(scene, report, sidewalk_widths=None, vehicle_config=None, citizens_config=None):
     if scene["schema_version"] != 1 or scene["coordinates"]["local_axes"] != ["east", "north"]:
         raise ValueError("expected scene schema 1 with local [east, north] coordinates")
     if scene["coordinates"]["unit"] != "meter" or scene["terrain"]["kind"] != "flat_placeholder":
@@ -191,16 +193,26 @@ def build(scene, report, sidewalk_widths=None, vehicle_config=None):
             meshes["Roofs"].add_surface(polygon, base_m + height)
 
     sidewalk_widths = sidewalk_widths or {}
-    obstacles = union_all([water, *buildings], grid_size=STREET_GRID_M) if sidewalk_widths or vehicle_config else water
+    obstacles = (
+        union_all([water, *buildings], grid_size=STREET_GRID_M)
+        if sidewalk_widths or vehicle_config or citizens_config else water
+    )
     roads = scene["layers"]["roads"]
     width_sources, sidewalks = add_streets(
         meshes, roads, bounds, obstacles, base_m, sidewalk_widths,
     )
+    roads_by_id = {road["id"]: (road, road_width(road["properties"])[0]) for road in roads}
     vehicle = None
     if vehicle_config:
         vehicle = build_vehicle_route(
-            vehicle_config, {road["id"]: (road, road_width(road["properties"])[0]) for road in roads},
+            vehicle_config, roads_by_id,
             bounds, obstacles, base_m + ROAD_ELEVATION_M,
+        )
+    citizens = None
+    if citizens_config:
+        citizens = build_citizens(
+            citizens_config, roads_by_id, scene["layers"]["buildings"], sidewalks,
+            obstacles, base_m + ROAD_ELEVATION_M, base_m + ROAD_ELEVATION_M + CURB_HEIGHT_M,
         )
     reference = report["reference"]
     if scene["id"] != report["id"]:
@@ -231,6 +243,7 @@ def build(scene, report, sidewalk_widths=None, vehicle_config=None):
         "roof_probe_m": [roof_probe.x, roof_probe.y, base_m],
         "sidewalk_probe_m": sidewalk_probe,
         "vehicle": vehicle,
+        "citizens": citizens,
         "sidewalks": {
             "width_source": "estimated_from_pilot_layout",
             "widths_m": sidewalk_widths,
@@ -259,7 +272,12 @@ def main():
     scene = json.loads(scene_bytes)
     street_layout = json.loads(STREET_LAYOUT.read_text(encoding="utf-8"))
     layout = street_layout if scene["id"] == street_layout["scene_id"] else {}
-    package = build(scene, report, layout.get("sidewalk_widths_m"), layout.get("vehicle"))
+    citizens_config = None
+    if CITIZENS_LAYOUT.exists():
+        citizens_layout = json.loads(CITIZENS_LAYOUT.read_text(encoding="utf-8"))
+        if scene["id"] == citizens_layout["scene_id"]:
+            citizens_config = citizens_layout
+    package = build(scene, report, layout.get("sidewalk_widths_m"), layout.get("vehicle"), citizens_config)
     package["source_scene_sha256"] = sha256(scene_bytes).hexdigest()
     destination = args.scene.with_name("unreal-city-meshes.json")
     write_json(destination, package)

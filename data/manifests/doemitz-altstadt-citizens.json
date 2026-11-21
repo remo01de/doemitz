@@ -1,0 +1,101 @@
+{
+  "scene_id": "doemitz-altstadt",
+  "pilot_road_id": "osm:way:25642325",
+  "clock": {
+    "start_minute": 470,
+    "time_scale": 60.0
+  },
+  "places": [
+    {
+      "id": "place_goethe_pension",
+      "name": "Radlerpension Doemitz",
+      "building_id": "osm:way:198024955",
+      "kind": "home"
+    },
+    {
+      "id": "place_goethe_home_west",
+      "name": "Wohnhaus Goethestrasse West",
+      "building_id": "osm:way:326008130",
+      "kind": "home"
+    },
+    {
+      "id": "place_amtsverwaltung",
+      "name": "Amtsverwaltung und Buergerbuero",
+      "building_id": "osm:way:41020271",
+      "kind": "work"
+    },
+    {
+      "id": "place_goethe_home_east",
+      "name": "Wohnhaus Goethestrasse Ost",
+      "building_id": "osm:way:325972553",
+      "kind": "home"
+    },
+    {
+      "id": "place_kaufhaus",
+      "name": "Kaufhaus Goethestrasse",
+      "building_id": "osm:way:168171467",
+      "kind": "shop"
+    }
+  ],
+  "citizens": [
+    {
+      "id": "citizen_anna_01",
+      "name": "Anna",
+      "home_place_id": "place_goethe_pension",
+      "work_place_id": "place_amtsverwaltung",
+      "walk_speed_mps": 1.35,
+      "coat_color": [0.68, 0.22, 0.18],
+      "schedule": [
+        { "start_minute": 0, "activity": "Home", "place_id": "place_goethe_pension" },
+        { "start_minute": 475, "activity": "Working", "place_id": "place_amtsverwaltung" },
+        { "start_minute": 750, "activity": "Shopping", "place_id": "place_kaufhaus" },
+        { "start_minute": 810, "activity": "Working", "place_id": "place_amtsverwaltung" },
+        { "start_minute": 1020, "activity": "Home", "place_id": "place_goethe_pension" }
+      ]
+    },
+    {
+      "id": "citizen_bernd_02",
+      "name": "Bernd",
+      "home_place_id": "place_goethe_home_east",
+      "work_place_id": "place_kaufhaus",
+      "walk_speed_mps": 1.40,
+      "coat_color": [0.16, 0.34, 0.56],
+      "schedule": [
+        { "start_minute": 0, "activity": "Home", "place_id": "place_goethe_home_east" },
+        { "start_minute": 480, "activity": "Working", "place_id": "place_kaufhaus" },
+        { "start_minute": 780, "activity": "Strolling", "place_id": "place_amtsverwaltung" },
+        { "start_minute": 840, "activity": "Working", "place_id": "place_kaufhaus" },
+        { "start_minute": 1080, "activity": "Home", "place_id": "place_goethe_home_east" }
+      ]
+    },
+    {
+      "id": "citizen_clara_03",
+      "name": "Clara",
+      "home_place_id": "place_goethe_home_west",
+      "work_place_id": "place_kaufhaus",
+      "walk_speed_mps": 1.30,
+      "coat_color": [0.76, 0.55, 0.16],
+      "schedule": [
+        { "start_minute": 0, "activity": "Home", "place_id": "place_goethe_home_west" },
+        { "start_minute": 485, "activity": "Working", "place_id": "place_kaufhaus" },
+        { "start_minute": 990, "activity": "Strolling", "place_id": "place_goethe_pension" },
+        { "start_minute": 1050, "activity": "Home", "place_id": "place_goethe_home_west" }
+      ]
+    },
+    {
+      "id": "citizen_dieter_04",
+      "name": "Dieter",
+      "home_place_id": "place_goethe_home_east",
+      "work_place_id": "place_amtsverwaltung",
+      "walk_speed_mps": 1.25,
+      "coat_color": [0.22, 0.48, 0.30],
+      "schedule": [
+        { "start_minute": 0, "activity": "Home", "place_id": "place_goethe_home_east" },
+        { "start_minute": 490, "activity": "Working", "place_id": "place_amtsverwaltung" },
+        { "start_minute": 720, "activity": "Shopping", "place_id": "place_kaufhaus" },
+        { "start_minute": 780, "activity": "Working", "place_id": "place_amtsverwaltung" },
+        { "start_minute": 1050, "activity": "Home", "place_id": "place_goethe_home_east" }
+      ]
+    }
+  ]
+}
