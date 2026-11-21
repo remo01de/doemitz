@@ -14,10 +14,24 @@ def validate(layers: dict) -> None:
         "buildings": {"Polygon", "MultiPolygon"},
         "water": {"Polygon", "MultiPolygon"},
     }
+    optional = {
+        "pois": {"Point", "Polygon", "MultiPolygon"},
+    }
     ids = set()
     for layer, allowed in expected.items():
         if not layers[layer]:
             raise ValueError(f"{layer}: empty layer")
+        for feature in layers[layer]:
+            feature_id = feature["id"]
+            geometry = shape(feature["geometry"])
+            if feature_id in ids:
+                raise ValueError(f"{feature_id}: duplicate feature ID")
+            if geometry.is_empty or not geometry.is_valid or geometry.geom_type not in allowed:
+                raise ValueError(f"{feature_id}: invalid {layer} geometry")
+            ids.add(feature_id)
+    for layer, allowed in optional.items():
+        if layer not in layers:
+            continue
         for feature in layers[layer]:
             feature_id = feature["id"]
             geometry = shape(feature["geometry"])

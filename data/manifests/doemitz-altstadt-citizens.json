@@ -5,6 +5,10 @@
     "start_minute": 470,
     "time_scale": 60.0
   },
+  "population": {
+    "target_count": 30,
+    "seed": 202608
+  },
   "places": [
     {
       "id": "place_goethe_pension",
@@ -51,6 +55,18 @@
         { "start_minute": 750, "activity": "Shopping", "place_id": "place_kaufhaus" },
         { "start_minute": 810, "activity": "Working", "place_id": "place_amtsverwaltung" },
         { "start_minute": 1020, "activity": "Home", "place_id": "place_goethe_pension" }
+      ],
+      "saturday_schedule": [
+        { "start_minute": 0, "activity": "Home", "place_id": "place_goethe_pension" },
+        { "start_minute": 570, "activity": "Shopping", "place_id": "place_kaufhaus" },
+        { "start_minute": 660, "activity": "Strolling", "place_id": "place_amtsverwaltung" },
+        { "start_minute": 840, "activity": "Home", "place_id": "place_goethe_pension" }
+      ],
+      "sunday_schedule": [
+        { "start_minute": 0, "activity": "Home", "place_id": "place_goethe_pension" },
+        { "start_minute": 600, "activity": "Shopping", "place_id": "place_kaufhaus" },
+        { "start_minute": 660, "activity": "Strolling", "place_id": "place_amtsverwaltung" },
+        { "start_minute": 900, "activity": "Home", "place_id": "place_goethe_pension" }
       ]
     },
     {
@@ -66,6 +82,17 @@
         { "start_minute": 780, "activity": "Strolling", "place_id": "place_amtsverwaltung" },
         { "start_minute": 840, "activity": "Working", "place_id": "place_kaufhaus" },
         { "start_minute": 1080, "activity": "Home", "place_id": "place_goethe_home_east" }
+      ],
+      "saturday_schedule": [
+        { "start_minute": 0, "activity": "Home", "place_id": "place_goethe_home_east" },
+        { "start_minute": 510, "activity": "Working", "place_id": "place_kaufhaus" },
+        { "start_minute": 780, "activity": "Strolling", "place_id": "place_goethe_pension" },
+        { "start_minute": 900, "activity": "Home", "place_id": "place_goethe_home_east" }
+      ],
+      "sunday_schedule": [
+        { "start_minute": 0, "activity": "Home", "place_id": "place_goethe_home_east" },
+        { "start_minute": 630, "activity": "Strolling", "place_id": "place_goethe_pension" },
+        { "start_minute": 870, "activity": "Home", "place_id": "place_goethe_home_east" }
       ]
     },
     {
@@ -80,6 +107,17 @@
         { "start_minute": 485, "activity": "Working", "place_id": "place_kaufhaus" },
         { "start_minute": 990, "activity": "Strolling", "place_id": "place_goethe_pension" },
         { "start_minute": 1050, "activity": "Home", "place_id": "place_goethe_home_west" }
+      ],
+      "saturday_schedule": [
+        { "start_minute": 0, "activity": "Home", "place_id": "place_goethe_home_west" },
+        { "start_minute": 540, "activity": "Working", "place_id": "place_kaufhaus" },
+        { "start_minute": 780, "activity": "Strolling", "place_id": "place_amtsverwaltung" },
+        { "start_minute": 960, "activity": "Home", "place_id": "place_goethe_home_west" }
+      ],
+      "sunday_schedule": [
+        { "start_minute": 0, "activity": "Home", "place_id": "place_goethe_home_west" },
+        { "start_minute": 660, "activity": "Strolling", "place_id": "place_amtsverwaltung" },
+        { "start_minute": 900, "activity": "Home", "place_id": "place_goethe_home_west" }
       ]
     },
     {
@@ -95,6 +133,17 @@
         { "start_minute": 720, "activity": "Shopping", "place_id": "place_kaufhaus" },
         { "start_minute": 780, "activity": "Working", "place_id": "place_amtsverwaltung" },
         { "start_minute": 1050, "activity": "Home", "place_id": "place_goethe_home_east" }
+      ],
+      "saturday_schedule": [
+        { "start_minute": 0, "activity": "Home", "place_id": "place_goethe_home_east" },
+        { "start_minute": 540, "activity": "Shopping", "place_id": "place_kaufhaus" },
+        { "start_minute": 660, "activity": "Strolling", "place_id": "place_goethe_pension" },
+        { "start_minute": 840, "activity": "Home", "place_id": "place_goethe_home_east" }
+      ],
+      "sunday_schedule": [
+        { "start_minute": 0, "activity": "Home", "place_id": "place_goethe_home_east" },
+        { "start_minute": 600, "activity": "Strolling", "place_id": "place_goethe_pension" },
+        { "start_minute": 840, "activity": "Home", "place_id": "place_goethe_home_east" }
       ]
     }
   ]

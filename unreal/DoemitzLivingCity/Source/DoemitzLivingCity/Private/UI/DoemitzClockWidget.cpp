@@ -6,6 +6,7 @@
 #include "Components/CanvasPanelSlot.h"
 #include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
+#include "Settings/DoemitzGraphicsSettings.h"
 #include "Simulation/DoemitzSimulationSubsystem.h"
 
 TSharedRef<SWidget> UDoemitzClockWidget::RebuildWidget()
@@ -79,7 +80,14 @@ void UDoemitzClockWidget::RefreshDisplay()
 	const FString SpeedLabel = Scale <= 0.0
 		? TEXT("Pause")
 		: FString::Printf(TEXT("%.0fx"), FMath::Max(1.0, Scale / 60.0));
-	LastClockString = FString::Printf(TEXT("Tag %d  |  %02d:%02d  (%s)"), Subsystem->GetDayNumber(), Hours, Minutes, *SpeedLabel);
+	const FString DayShort = Subsystem->GetDayOfWeekShortName();
+	LastClockString = FString::Printf(
+		TEXT("%s, Tag %d  |  %02d:%02d  (%s)"),
+		*DayShort,
+		Subsystem->GetDayNumber(),
+		Hours,
+		Minutes,
+		*SpeedLabel);
 
 	int32 MovingCount = 0;
 	const TArray<FName> CitizenIds = Subsystem->GetAllCitizenIds();
@@ -91,11 +99,19 @@ void UDoemitzClockWidget::RefreshDisplay()
 			MovingCount += 1;
 		}
 	}
-	LastStatusString = FString::Printf(TEXT("Doemitz Altstadt  |  %d Einwohner (%d unterwegs)"), CitizenIds.Num(), MovingCount);
+	const FString ProfileLabel = UDoemitzGraphicsSettings::Get()
+		? UDoemitzGraphicsSettings::Get()->GetActiveProfileShortLabel()
+		: TEXT("Low");
+	LastStatusString = FString::Printf(
+		TEXT("Doemitz Altstadt  |  %d Einwohner (%d unterwegs, %d nah)  |  Grafik: %s"),
+		CitizenIds.Num(),
+		MovingCount,
+		Subsystem->GetActiveCitizenActorCount(),
+		*ProfileLabel);
 
 	const FString ActiveNotice = Subsystem->GetLastNotification();
 	LastNoticeString = ActiveNotice.IsEmpty()
-		? TEXT("F5 Speichern  |  F9 Laden  |  1/2/3/P Zeit")
+		? TEXT("F5 Speichern  |  F9 Laden  |  F7 Grafik  |  1/2/3/P Zeit")
 		: ActiveNotice;
 
 	if (ClockText)

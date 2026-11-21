@@ -6,6 +6,7 @@
 #include "DoemitzSimulationConfig.generated.h"
 
 class UDoemitzClockWidget;
+class UStaticMesh;
 
 UCLASS()
 class DOEMITZLIVINGCITY_API ADoemitzSimulationConfig : public AActor
@@ -41,6 +42,12 @@ private:
 	UPROPERTY(EditInstanceOnly, Category = "Simulation")
 	TArray<FDoemitzCitizenDefinition> Citizens;
 
+	UPROPERTY(EditInstanceOnly, Category = "Simulation")
+	TArray<TObjectPtr<UStaticMesh>> CitizenMeshVariants;
+
+	UPROPERTY(EditInstanceOnly, Category = "Simulation", meta = (Units = "cm"))
+	double CitizenLodRadiusCm = 15000.0;
+
 	UPROPERTY(EditInstanceOnly, Category = "Traffic")
 	int32 TrafficSeed = 202607;
 
@@ -49,6 +56,9 @@ private:
 
 	UPROPERTY(EditInstanceOnly, Category = "Traffic")
 	TArray<FDoemitzVehicleDefinition> Vehicles;
+
+	UPROPERTY(EditInstanceOnly, Category = "Traffic")
+	TArray<FDoemitzCrossingDefinition> Crossings;
 
 	UPROPERTY(EditAnywhere, Category = "UI")
 	TSubclassOf<UDoemitzClockWidget> ClockWidgetClass;

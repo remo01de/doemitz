@@ -2,6 +2,7 @@
 
 #include "Components/CapsuleComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "Engine/StaticMesh.h"
 #include "Engine/World.h"
 #include "Simulation/DoemitzSimulationSubsystem.h"
 
@@ -36,6 +37,27 @@ void ADoemitzCitizenActor::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 	SyncFromSimulation();
+}
+
+void ADoemitzCitizenActor::AssignToCitizen(FName NewCitizenId, UStaticMesh* MeshAsset)
+{
+	CitizenId = NewCitizenId;
+	if (CitizenMesh && MeshAsset && CitizenMesh->GetStaticMesh() != MeshAsset)
+	{
+		CitizenMesh->SetStaticMesh(MeshAsset);
+	}
+	SetActorHiddenInGame(false);
+	SetActorEnableCollision(true);
+	SetActorTickEnabled(true);
+	SyncFromSimulation();
+}
+
+void ADoemitzCitizenActor::ReleaseToPool()
+{
+	CitizenId = NAME_None;
+	SetActorHiddenInGame(true);
+	SetActorEnableCollision(false);
+	SetActorTickEnabled(false);
 }
 
 void ADoemitzCitizenActor::SyncFromSimulation()

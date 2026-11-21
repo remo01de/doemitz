@@ -13,6 +13,7 @@ from shapely.geometry import LineString, MultiLineString, MultiPolygon, Polygon
 @dataclass
 class Dataset:
     nodes: dict[int, tuple[float, float]] = field(default_factory=dict)
+    node_tags: dict[int, dict[str, str]] = field(default_factory=dict)
     ways: dict[int, ET.Element] = field(default_factory=dict)
     relations: dict[int, ET.Element] = field(default_factory=dict)
 
@@ -21,10 +22,14 @@ class Dataset:
         if root.tag != "osm" or root.get("version") != "0.6":
             raise ValueError(f"{path}: expected OSM XML 0.6")
         for node in root.findall("node"):
+            nid = int(node.attrib["id"])
             self.nodes.setdefault(
-                int(node.attrib["id"]),
+                nid,
                 (float(node.attrib["lon"]), float(node.attrib["lat"])),
             )
+            ntags = tags(node)
+            if ntags:
+                self.node_tags.setdefault(nid, ntags)
         for element in root.findall("way"):
             self.ways.setdefault(int(element.attrib["id"]), element)
         for element in root.findall("relation"):
@@ -41,6 +46,13 @@ def node_ids(way: ET.Element) -> list[int]:
 
 def tags(element: ET.Element) -> dict[str, str]:
     return {tag.attrib["k"]: tag.attrib["v"] for tag in element.findall("tag")}
+
+
+POI_KEYS = ("shop", "amenity", "office", "tourism")
+
+
+def is_poi(attributes: dict[str, str]) -> bool:
+    return any(attributes.get(key) not in (None, "", "no") for key in POI_KEYS)
 
 
 def area_layer(attributes: dict[str, str]) -> str | None:

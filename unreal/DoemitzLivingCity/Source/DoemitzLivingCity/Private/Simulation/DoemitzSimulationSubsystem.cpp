@@ -6,6 +6,7 @@
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
+#include "Simulation/DoemitzCitizenActor.h"
 #include "Simulation/DoemitzSaveGame.h"
 #include "Traffic/DoemitzTrafficVehicle.h"
 #include "World/DoemitzDayNightController.h"
@@ -20,6 +21,9 @@ namespace
 	constexpr double JunctionClearanceCm = 550.0;
 	constexpr double PedestrianStopDistCm = 620.0;
 	constexpr double PedestrianLateralCm = 185.0;
+	constexpr double CrossingApproachDistCm = 900.0;
+	constexpr double CrossingStopMarginCm = 320.0;
+	constexpr double CrossingLateralCm = 260.0;
 	constexpr double VehicleAccelCmPerSecSq = 260.0;
 	constexpr double VehicleDecelCmPerSecSq = 550.0;
 
@@ -104,6 +108,8 @@ void UDoemitzSimulationSubsystem::ConfigureSimulation(
 	TimeOfDayMinutes = FMath::Fmod(FMath::Max(0.0, InStartMinute), 1440.0);
 	TimeScale = FMath::Clamp(InTimeScale, 0.0, 3600.0);
 	DayNumber = 1;
+	DayOfWeek = 0; // Montag
+	CalendarWeek = 1;
 
 	CitizenRecords.Reset();
 	for (const FDoemitzCitizenDefinition& Def : InCitizens)
@@ -119,35 +125,53 @@ void UDoemitzSimulationSubsystem::ConfigureSimulation(
 		Record.State.DisplayName = Def.DisplayName;
 		Record.State.HomePlaceId = Def.HomePlaceId;
 		Record.State.WorkPlaceId = Def.WorkPlaceId;
-
-		const int32 InitialIndex = FindScheduleIndex(Def.Schedule, TimeOfDayMinutes);
-		const FDoemitzScheduleEntry& Entry = Def.Schedule[InitialIndex];
-		Record.State.ActiveScheduleIndex = InitialIndex;
-		Record.State.CurrentActivity = Entry.Activity;
-		Record.State.CurrentPlaceId = Entry.PlaceId;
-		Record.State.TargetPlaceId = Entry.PlaceId;
-		Record.State.bIsMoving = false;
-		if (const FDoemitzPlaceDefinition* Place = PlacesById.Find(Entry.PlaceId))
-		{
-			Record.State.WorldLocation = Place->AccessLocation;
-		}
+		ResetCitizenToCurrentSchedule(Record);
 
 		CitizenRecords.Add(Def.CitizenId, MoveTemp(Record));
 	}
 
 	bIsConfigured = CitizenRecords.Num() > 0 || VehicleRecords.Num() > 0;
-	UE_LOG(LogTemp, Display, TEXT("Doemitz simulation started at %.1f min (scale %.1fx): %d places, %d routes, %d citizens"),
-		TimeOfDayMinutes, TimeScale, PlacesById.Num(), RoutesByKey.Num(), CitizenRecords.Num());
+	UE_LOG(LogTemp, Display, TEXT("Doemitz simulation started (%s, Tag %d, KW %d, %.1f min, scale %.1fx): %d places, %d routes, %d citizens"),
+		*GetDayOfWeekShortName(), DayNumber, CalendarWeek, TimeOfDayMinutes, TimeScale, PlacesById.Num(), RoutesByKey.Num(), CitizenRecords.Num());
+}
+
+void UDoemitzSimulationSubsystem::ConfigureCitizenPool(
+	const TArray<TObjectPtr<UStaticMesh>>& InMeshVariants,
+	double InLodRadiusCm)
+{
+	CitizenMeshVariants = InMeshVariants;
+	CitizenLodRadiusCm = FMath::Max(500.0, InLodRadiusCm);
+
+	// Adopt any pre-existing citizen actors in the level into the active/pooled tracking maps
+	ActiveCitizenActors.Reset();
+	PooledCitizenActors.Reset();
+	if (UWorld* World = GetWorld())
+	{
+		for (TActorIterator<ADoemitzCitizenActor> It(World); It; ++It)
+		{
+			ADoemitzCitizenActor* Actor = *It;
+			if (!Actor)
+			{
+				continue;
+			}
+			Actor->ReleaseToPool();
+			PooledCitizenActors.Add(Actor);
+		}
+	}
+
+	UpdateCitizenLodPool();
 }
 
 void UDoemitzSimulationSubsystem::ConfigureTrafficNetwork(
 	int32 InTrafficSeed,
 	const TArray<FDoemitzRoadEdgeDefinition>& InRoadEdges,
-	const TArray<FDoemitzVehicleDefinition>& InVehicles)
+	const TArray<FDoemitzVehicleDefinition>& InVehicles,
+	const TArray<FDoemitzCrossingDefinition>& InCrossings)
 {
 	TrafficSeed = InTrafficSeed;
 	RoadEdgesById.Reset();
 	OutgoingEdgesByNode.Reset();
+	Crossings = InCrossings;
 	VehicleRecords.Reset();
 	OrderedVehicleIds.Reset();
 	JunctionReservations.Reset();
@@ -214,8 +238,321 @@ void UDoemitzSimulationSubsystem::ConfigureTrafficNetwork(
 
 	OrderedVehicleIds.Sort(FNameLexicalLess());
 	bIsConfigured = CitizenRecords.Num() > 0 || VehicleRecords.Num() > 0;
-	UE_LOG(LogTemp, Display, TEXT("Doemitz traffic network configured: seed=%d, %d edges, %d vehicles"),
-		TrafficSeed, RoadEdgesById.Num(), VehicleRecords.Num());
+	UE_LOG(LogTemp, Display, TEXT("Doemitz traffic network configured: seed=%d, %d edges, %d vehicles, %d crossings"),
+		TrafficSeed, RoadEdgesById.Num(), VehicleRecords.Num(), Crossings.Num());
+}
+
+FString UDoemitzSimulationSubsystem::GetDayOfWeekShortName() const
+{
+	static const TCHAR* ShortNames[7] = {
+		TEXT("Mo"), TEXT("Di"), TEXT("Mi"), TEXT("Do"), TEXT("Fr"), TEXT("Sa"), TEXT("So")
+	};
+	return ShortNames[FMath::Clamp(DayOfWeek, 0, 6)];
+}
+
+EDoemitzDayKind UDoemitzSimulationSubsystem::GetDayKind() const
+{
+	if (DayOfWeek == 5)
+	{
+		return EDoemitzDayKind::Saturday;
+	}
+	if (DayOfWeek == 6)
+	{
+		return EDoemitzDayKind::Sunday;
+	}
+	return EDoemitzDayKind::Weekday;
+}
+
+void UDoemitzSimulationSubsystem::SetDayNumber(int32 NewDayNumber)
+{
+	DayNumber = FMath::Max(1, NewDayNumber);
+	DayOfWeek = (DayNumber - 1) % 7;
+	CalendarWeek = 1 + ((DayNumber - 1) / 7);
+}
+
+void UDoemitzSimulationSubsystem::SetDayOfWeekForTest(int32 NewDayOfWeek)
+{
+	DayOfWeek = ((NewDayOfWeek % 7) + 7) % 7;
+}
+
+bool UDoemitzSimulationSubsystem::IsPlaceOpen(FName PlaceId, int32 DayOfWeekIndex, double MinuteOfDay) const
+{
+	const FDoemitzPlaceDefinition* Place = PlacesById.Find(PlaceId);
+	if (!Place)
+	{
+		return false;
+	}
+	if (Place->bAlwaysOpen || Place->WeeklyOpeningHours.IsEmpty())
+	{
+		return true;
+	}
+	const int32 ClampedDay = ((DayOfWeekIndex % 7) + 7) % 7;
+	if (!Place->WeeklyOpeningHours.IsValidIndex(ClampedDay))
+	{
+		return true;
+	}
+	const double WrappedMin = FMath::Fmod(FMath::Max(0.0, MinuteOfDay), 1440.0);
+	for (const FDoemitzTimeInterval& Interval : Place->WeeklyOpeningHours[ClampedDay].Intervals)
+	{
+		if (WrappedMin >= static_cast<double>(Interval.StartMinute) &&
+			WrappedMin < static_cast<double>(Interval.EndMinute))
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+bool UDoemitzSimulationSubsystem::IsPlaceOpenNow(FName PlaceId) const
+{
+	return IsPlaceOpen(PlaceId, DayOfWeek, TimeOfDayMinutes);
+}
+
+const TArray<FDoemitzScheduleEntry>& UDoemitzSimulationSubsystem::GetActiveScheduleForDay(const FDoemitzCitizenDefinition& Def) const
+{
+	const EDoemitzDayKind Kind = GetDayKind();
+	if (Kind == EDoemitzDayKind::Saturday && !Def.SaturdaySchedule.IsEmpty())
+	{
+		return Def.SaturdaySchedule;
+	}
+	if (Kind == EDoemitzDayKind::Sunday && !Def.SundaySchedule.IsEmpty())
+	{
+		return Def.SundaySchedule;
+	}
+	return Def.Schedule;
+}
+
+FDoemitzScheduleEntry UDoemitzSimulationSubsystem::ResolveDesiredEntry(const FDoemitzCitizenDefinition& Def, int32& OutIndex) const
+{
+	const TArray<FDoemitzScheduleEntry>& ActiveSchedule = GetActiveScheduleForDay(Def);
+	if (ActiveSchedule.IsEmpty())
+	{
+		OutIndex = 0;
+		FDoemitzScheduleEntry Fallback;
+		Fallback.Activity = EDoemitzCitizenActivity::Home;
+		Fallback.PlaceId = Def.HomePlaceId;
+		return Fallback;
+	}
+
+	const int32 BaseIndex = FindScheduleIndex(ActiveSchedule, TimeOfDayMinutes);
+	for (int32 Offset = 0; Offset < ActiveSchedule.Num(); ++Offset)
+	{
+		const int32 CandidateIndex = (BaseIndex + Offset) % ActiveSchedule.Num();
+		const FDoemitzScheduleEntry& Candidate = ActiveSchedule[CandidateIndex];
+		if (Candidate.Activity == EDoemitzCitizenActivity::Shopping && !IsPlaceOpenNow(Candidate.PlaceId))
+		{
+			continue;
+		}
+		OutIndex = CandidateIndex;
+		return Candidate;
+	}
+
+	OutIndex = 0;
+	FDoemitzScheduleEntry HomeFallback;
+	HomeFallback.Activity = EDoemitzCitizenActivity::Home;
+	HomeFallback.PlaceId = Def.HomePlaceId;
+	return HomeFallback;
+}
+
+void UDoemitzSimulationSubsystem::ResetCitizenToCurrentSchedule(FCitizenRecord& Record)
+{
+	int32 InitialIndex = 0;
+	const FDoemitzScheduleEntry Entry = ResolveDesiredEntry(Record.Definition, InitialIndex);
+	Record.State.ActiveScheduleIndex = InitialIndex;
+	Record.State.CurrentActivity = Entry.Activity;
+	Record.State.CurrentPlaceId = Entry.PlaceId;
+	Record.State.TargetPlaceId = Entry.PlaceId;
+	Record.State.bIsMoving = false;
+	Record.State.RouteProgressCm = 0.0;
+	Record.ActiveRoute.Reset();
+	Record.ActiveSegmentEnds.Reset();
+	Record.ActiveRouteLength = 0.0;
+	Record.CoarseAccumulatedSeconds = 0.0;
+	if (const FDoemitzPlaceDefinition* Place = PlacesById.Find(Entry.PlaceId))
+	{
+		Record.State.WorldLocation = Place->AccessLocation;
+	}
+}
+
+bool UDoemitzSimulationSubsystem::IsCitizenHighDetail(FName CitizenId) const
+{
+	if (const FCitizenRecord* Record = CitizenRecords.Find(CitizenId))
+	{
+		return Record->State.bIsHighDetail;
+	}
+	return false;
+}
+
+bool UDoemitzSimulationSubsystem::GetCitizenActorLocation(FName CitizenId, FVector& OutLocation) const
+{
+	if (const TObjectPtr<ADoemitzCitizenActor>* ActorPtr = ActiveCitizenActors.Find(CitizenId))
+	{
+		if (IsValid(ActorPtr->Get()))
+		{
+			OutLocation = (*ActorPtr)->GetActorLocation();
+			return true;
+		}
+	}
+	return false;
+}
+
+void UDoemitzSimulationSubsystem::SetCitizenLodRadiusCm(double NewRadiusCm)
+{
+	CitizenLodRadiusCm = FMath::Max(100.0, NewRadiusCm);
+	UpdateCitizenLodPool();
+}
+
+bool UDoemitzSimulationSubsystem::SetCitizenPositionForTest(FName CitizenId, const FVector& NewLocation)
+{
+	FCitizenRecord* Record = CitizenRecords.Find(CitizenId);
+	if (!Record)
+	{
+		return false;
+	}
+	Record->State.WorldLocation = NewLocation;
+	Record->State.bIsMoving = false;
+	if (TObjectPtr<ADoemitzCitizenActor>* ActorPtr = ActiveCitizenActors.Find(CitizenId))
+	{
+		if (IsValid(ActorPtr->Get()))
+		{
+			(*ActorPtr)->SetActorLocation(NewLocation, false);
+		}
+	}
+	return true;
+}
+
+bool UDoemitzSimulationSubsystem::GetCrossingLocation(FName CrossingId, FVector& OutLocation) const
+{
+	for (const FDoemitzCrossingDefinition& Crossing : Crossings)
+	{
+		if (Crossing.CrossingId == CrossingId)
+		{
+			OutLocation = Crossing.Location;
+			return true;
+		}
+	}
+	return false;
+}
+
+TArray<FName> UDoemitzSimulationSubsystem::GetAllCrossingIds() const
+{
+	TArray<FName> Ids;
+	Ids.Reserve(Crossings.Num());
+	for (const FDoemitzCrossingDefinition& Crossing : Crossings)
+	{
+		Ids.Add(Crossing.CrossingId);
+	}
+	return Ids;
+}
+
+ADoemitzCitizenActor* UDoemitzSimulationSubsystem::AcquirePooledCitizenActor(const FCitizenRecord& Record)
+{
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return nullptr;
+	}
+
+	ADoemitzCitizenActor* Actor = nullptr;
+	while (!PooledCitizenActors.IsEmpty() && !IsValid(Actor))
+	{
+		Actor = PooledCitizenActors.Pop().Get();
+	}
+
+	if (!IsValid(Actor))
+	{
+		FActorSpawnParameters SpawnParams;
+		SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+		Actor = World->SpawnActor<ADoemitzCitizenActor>(
+			ADoemitzCitizenActor::StaticClass(),
+			Record.State.WorldLocation,
+			Record.State.WorldRotation,
+			SpawnParams);
+	}
+
+	if (IsValid(Actor))
+	{
+		UStaticMesh* MeshAsset = nullptr;
+		if (!CitizenMeshVariants.IsEmpty())
+		{
+			const int32 VariantIdx = ((Record.Definition.CoatVariantIndex % CitizenMeshVariants.Num()) + CitizenMeshVariants.Num()) % CitizenMeshVariants.Num();
+			MeshAsset = CitizenMeshVariants[VariantIdx].Get();
+		}
+		Actor->AssignToCitizen(Record.State.CitizenId, MeshAsset);
+		ActiveCitizenActors.Add(Record.State.CitizenId, Actor);
+	}
+	return Actor;
+}
+
+void UDoemitzSimulationSubsystem::ReleaseCitizenActor(FName CitizenId)
+{
+	TObjectPtr<ADoemitzCitizenActor> Removed;
+	if (ActiveCitizenActors.RemoveAndCopyValue(CitizenId, Removed))
+	{
+		if (IsValid(Removed.Get()))
+		{
+			Removed->ReleaseToPool();
+			PooledCitizenActors.Add(Removed);
+		}
+	}
+}
+
+void UDoemitzSimulationSubsystem::UpdateCitizenLodPool()
+{
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	FVector PlayerLoc = FVector::ZeroVector;
+	bool bHasPlayer = false;
+	if (const APlayerController* PC = World->GetFirstPlayerController())
+	{
+		if (const APawn* Pawn = PC->GetPawn())
+		{
+			PlayerLoc = Pawn->GetActorLocation();
+			bHasPlayer = true;
+		}
+	}
+	if (!bHasPlayer)
+	{
+		return;
+	}
+
+	const double RadiusSq = CitizenLodRadiusCm * CitizenLodRadiusCm;
+	for (TPair<FName, FCitizenRecord>& Pair : CitizenRecords)
+	{
+		FCitizenRecord& Record = Pair.Value;
+		const double DistSq2D = FVector::DistSquared2D(PlayerLoc, Record.State.WorldLocation);
+		const bool bShouldBeHighDetail = DistSq2D <= RadiusSq;
+		const bool bWasHighDetail = Record.State.bIsHighDetail;
+		Record.State.bIsHighDetail = bShouldBeHighDetail;
+
+		if (bShouldBeHighDetail)
+		{
+			// Flush any pending coarse simulation time immediately so actor spawns at exact simulated position.
+			if (!bWasHighDetail && Record.CoarseAccumulatedSeconds > 0.0)
+			{
+				const double Pending = Record.CoarseAccumulatedSeconds;
+				Record.CoarseAccumulatedSeconds = 0.0;
+				UpdateCitizen(Record, Pending);
+			}
+			TObjectPtr<ADoemitzCitizenActor>* Existing = ActiveCitizenActors.Find(Pair.Key);
+			if (!Existing || !IsValid(Existing->Get()))
+			{
+				ActiveCitizenActors.Remove(Pair.Key);
+				AcquirePooledCitizenActor(Record);
+			}
+		}
+		else
+		{
+			if (ActiveCitizenActors.Contains(Pair.Key))
+			{
+				ReleaseCitizenActor(Pair.Key);
+			}
+		}
+	}
 }
 
 UDoemitzSimulationSubsystem* UDoemitzSimulationSubsystem::Get(const UObject* WorldContextObject)
@@ -451,6 +788,24 @@ void UDoemitzSimulationSubsystem::UpdateTraffic(double DeltaSeconds)
 		PedestrianLocations.Add(Pair.Value.State.WorldLocation);
 	}
 
+	// Precompute occupied pedestrian crossings (any citizen or player entering / standing on crossing)
+	TArray<FVector> OccupiedCrossings;
+	if (!Crossings.IsEmpty())
+	{
+		for (const FDoemitzCrossingDefinition& Crossing : Crossings)
+		{
+			const double TriggerSq = Crossing.TriggerRadiusCm * Crossing.TriggerRadiusCm;
+			for (const FVector& PedPos : PedestrianLocations)
+			{
+				if (FVector::DistSquared2D(PedPos, Crossing.Location) <= TriggerSq)
+				{
+					OccupiedCrossings.Add(Crossing.Location);
+					break;
+				}
+			}
+		}
+	}
+
 	for (FName VehicleId : OrderedVehicleIds)
 	{
 		FVehicleRecord* Record = VehicleRecords.Find(VehicleId);
@@ -482,12 +837,13 @@ void UDoemitzSimulationSubsystem::UpdateTraffic(double DeltaSeconds)
 		Record->State.bYieldingForRightOfWay = false;
 		Record->State.bYieldingForVehicle = false;
 		Record->State.bYieldingForPedestrian = false;
+		Record->State.bYieldingForCrossing = false;
 
 		const double RemainingOnEdge = Edge->LengthCm - Record->State.DistanceOnEdgeCm;
 		const FVector MyForward = Record->State.WorldRotation.Vector().GetSafeNormal2D();
 		const FVector MyRight(-MyForward.Y, MyForward.X, 0.0);
 
-		// 1. Pedestrian & Player yielding
+		// 1. Pedestrian & Player yielding (direct path + occupied pedestrian crossings)
 		for (const FVector& PedPos : PedestrianLocations)
 		{
 			const FVector Delta = PedPos - Record->State.WorldLocation;
@@ -498,6 +854,26 @@ void UDoemitzSimulationSubsystem::UpdateTraffic(double DeltaSeconds)
 				DesiredSpeed = 0.0;
 				Record->State.bYieldingForPedestrian = true;
 				break;
+			}
+		}
+		for (const FVector& CrossingLoc : OccupiedCrossings)
+		{
+			const FVector Delta = CrossingLoc - Record->State.WorldLocation;
+			const double FwdDist = FVector::DotProduct(Delta, MyForward);
+			const double LatDist = FMath::Abs(FVector::DotProduct(Delta, MyRight));
+			if (FwdDist > 0.0 && FwdDist < CrossingApproachDistCm && LatDist < CrossingLateralCm)
+			{
+				const double StopDist = FMath::Max(0.0, FwdDist - CrossingStopMarginCm);
+				if (StopDist <= 30.0)
+				{
+					DesiredSpeed = 0.0;
+				}
+				else
+				{
+					DesiredSpeed = FMath::Min(DesiredSpeed, FMath::Sqrt(2.0 * VehicleDecelCmPerSecSq * StopDist));
+				}
+				Record->State.bYieldingForPedestrian = true;
+				Record->State.bYieldingForCrossing = true;
 			}
 		}
 
@@ -758,9 +1134,8 @@ void UDoemitzSimulationSubsystem::StartTrip(FCitizenRecord& Record, FName Destin
 
 void UDoemitzSimulationSubsystem::UpdateCitizen(FCitizenRecord& Record, double DeltaSeconds)
 {
-	const TArray<FDoemitzScheduleEntry>& Schedule = Record.Definition.Schedule;
-	const int32 DesiredIndex = FindScheduleIndex(Schedule, TimeOfDayMinutes);
-	const FDoemitzScheduleEntry& DesiredEntry = Schedule[DesiredIndex];
+	int32 DesiredIndex = 0;
+	const FDoemitzScheduleEntry DesiredEntry = ResolveDesiredEntry(Record.Definition, DesiredIndex);
 	Record.State.ActiveScheduleIndex = DesiredIndex;
 
 	if (DesiredEntry.PlaceId != Record.State.TargetPlaceId)
@@ -836,11 +1211,32 @@ void UDoemitzSimulationSubsystem::Tick(float DeltaTime)
 	{
 		TimeOfDayMinutes -= 1440.0;
 		DayNumber += 1;
+		DayOfWeek = (DayOfWeek + 1) % 7;
+		if (DayOfWeek == 0)
+		{
+			CalendarWeek += 1;
+		}
 	}
+
+	UpdateCitizenLodPool();
 
 	for (TPair<FName, FCitizenRecord>& Pair : CitizenRecords)
 	{
-		UpdateCitizen(Pair.Value, ClampedDelta);
+		FCitizenRecord& Record = Pair.Value;
+		if (Record.State.bIsHighDetail)
+		{
+			UpdateCitizen(Record, ClampedDelta);
+		}
+		else
+		{
+			Record.CoarseAccumulatedSeconds += ClampedDelta;
+			if (Record.CoarseAccumulatedSeconds >= CoarseUpdateIntervalSeconds)
+			{
+				const double Step = Record.CoarseAccumulatedSeconds;
+				Record.CoarseAccumulatedSeconds = 0.0;
+				UpdateCitizen(Record, Step);
+			}
+		}
 	}
 
 	UpdateTraffic(ClampedDelta);
@@ -877,6 +1273,8 @@ bool UDoemitzSimulationSubsystem::SaveCityState(const FString& SlotName)
 
 	SaveObj->SaveSchemaVersion = UDoemitzSaveGame::CurrentSchemaVersion;
 	SaveObj->DayNumber = DayNumber;
+	SaveObj->DayOfWeek = DayOfWeek;
+	SaveObj->CalendarWeek = CalendarWeek;
 	SaveObj->TimeOfDayMinutes = TimeOfDayMinutes;
 	SaveObj->TimeScale = TimeScale;
 
@@ -962,20 +1360,33 @@ bool UDoemitzSimulationSubsystem::LoadCityState(const FString& SlotName)
 	}
 
 	const UDoemitzSaveGame* SaveObj = Cast<UDoemitzSaveGame>(UGameplayStatics::LoadGameFromSlot(SlotName, 0));
-	if (!SaveObj || (SaveObj->SaveSchemaVersion != 1 && SaveObj->SaveSchemaVersion != UDoemitzSaveGame::CurrentSchemaVersion))
+	if (!SaveObj || SaveObj->SaveSchemaVersion < 1 || SaveObj->SaveSchemaVersion > UDoemitzSaveGame::CurrentSchemaVersion)
 	{
 		return false;
 	}
 
 	const bool bMigratingFromV1 = (SaveObj->SaveSchemaVersion == 1);
+	const bool bMigratingFromPreV3 = (SaveObj->SaveSchemaVersion < 3);
 	DayNumber = FMath::Max(1, SaveObj->DayNumber);
+	if (bMigratingFromPreV3)
+	{
+		DayOfWeek = 0; // Montag (Migration from v1/v2)
+		CalendarWeek = 1 + ((DayNumber - 1) / 7);
+	}
+	else
+	{
+		DayOfWeek = ((SaveObj->DayOfWeek % 7) + 7) % 7;
+		CalendarWeek = FMath::Max(1, SaveObj->CalendarWeek);
+	}
 	TimeOfDayMinutes = FMath::Fmod(FMath::Max(0.0, SaveObj->TimeOfDayMinutes), 1440.0);
 	TimeScale = FMath::Clamp(SaveObj->TimeScale, 0.0, 3600.0);
 
+	TSet<FName> RestoredCitizenIds;
 	for (const FDoemitzSavedCitizen& Saved : SaveObj->Citizens)
 	{
 		if (FCitizenRecord* Record = CitizenRecords.Find(Saved.CitizenId))
 		{
+			RestoredCitizenIds.Add(Saved.CitizenId);
 			Record->State.CurrentActivity = Saved.CurrentActivity;
 			Record->State.CurrentPlaceId = Saved.CurrentPlaceId;
 			Record->State.TargetPlaceId = Saved.TargetPlaceId;
@@ -985,6 +1396,7 @@ bool UDoemitzSimulationSubsystem::LoadCityState(const FString& SlotName)
 			Record->State.RouteProgressCm = FMath::Max(0.0, Saved.RouteProgressCm);
 			Record->State.ActiveScheduleIndex = Saved.ActiveScheduleIndex;
 			Record->State.CompletedTrips = FMath::Max(0, Saved.CompletedTrips);
+			Record->CoarseAccumulatedSeconds = 0.0;
 			if (Record->State.bIsMoving)
 			{
 				BuildRouteCache(*Record, Record->State.CurrentPlaceId, Record->State.TargetPlaceId);
@@ -995,6 +1407,15 @@ bool UDoemitzSimulationSubsystem::LoadCityState(const FString& SlotName)
 				Record->ActiveSegmentEnds.Reset();
 				Record->ActiveRouteLength = 0.0;
 			}
+		}
+	}
+
+	// Any citizen not present in an older save (e.g. v1/v2 with 4 citizens -> v3 with 30 citizens) starts cleanly.
+	for (TPair<FName, FCitizenRecord>& Pair : CitizenRecords)
+	{
+		if (!RestoredCitizenIds.Contains(Pair.Key))
+		{
+			ResetCitizenToCurrentSchedule(Pair.Value);
 		}
 	}
 
@@ -1119,8 +1540,23 @@ bool UDoemitzSimulationSubsystem::LoadCityState(const FString& SlotName)
 		}
 	}
 
+	UpdateCitizenLodPool();
+	for (TPair<FName, TObjectPtr<ADoemitzCitizenActor>>& Pair : ActiveCitizenActors)
+	{
+		if (IsValid(Pair.Value.Get()))
+		{
+			Pair.Value->SyncFromSimulation();
+		}
+	}
+
+	if (bMigratingFromPreV3)
+	{
+		UE_LOG(LogTemp, Display, TEXT("Migrated SaveGame v%d -> v%d for slot '%s'"),
+			SaveObj->SaveSchemaVersion, UDoemitzSaveGame::CurrentSchemaVersion, *SlotName);
+	}
+
 	SetNotification(FString::Printf(TEXT("Geladen: %s"), *SlotName));
-	UE_LOG(LogTemp, Display, TEXT("Doemitz save v%d loaded from slot '%s' (Day %d, %.1f min)"),
-		SaveObj->SaveSchemaVersion, *SlotName, DayNumber, TimeOfDayMinutes);
+	UE_LOG(LogTemp, Display, TEXT("Doemitz save v%d loaded from slot '%s' (%s, Day %d, KW %d, %.1f min)"),
+		SaveObj->SaveSchemaVersion, *SlotName, *GetDayOfWeekShortName(), DayNumber, CalendarWeek, TimeOfDayMinutes);
 	return true;
 }

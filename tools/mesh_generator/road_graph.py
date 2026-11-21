@@ -4,7 +4,7 @@ from collections import Counter, defaultdict
 from math import dist, isfinite
 import re
 
-from shapely.geometry import shape
+from shapely.geometry import LineString, Point, shape
 
 
 DRIVABLE_HIGHWAYS = {
@@ -87,7 +87,12 @@ def _strongly_connected_components(node_ids: list[str], adj: dict[str, list[str]
     return components
 
 
-def build_road_graph(roads: list[dict], width_resolver, elevation_m: float) -> dict:
+def build_road_graph(
+    roads: list[dict],
+    width_resolver,
+    elevation_m: float,
+    crossings: list[dict] | None = None,
+) -> dict:
     """Construct a directed road graph from OSM road features in local meters."""
     parts: list[tuple[dict, int, list[tuple[float, float]], list[str | None]]] = []
     coord_uses: Counter[tuple[float, float]] = Counter()
@@ -242,6 +247,40 @@ def build_road_graph(roads: list[dict], width_resolver, elevation_m: float) -> d
     nodes_sorted = [nodes_by_id[nid] for nid in sorted(nodes_by_id)]
     edges_sorted = sorted(edges, key=lambda e: e["id"])
 
+    # Attach OSM highway=crossing nodes to drivable road edges.
+    crossings_out: list[dict] = []
+    for edge in edges_sorted:
+        edge["crossings"] = []
+    if crossings:
+        edge_lines = [
+            (edge, LineString([(p[0], p[1]) for p in edge["points_m"]]))
+            for edge in edges_sorted
+        ]
+        for crossing in sorted(crossings, key=lambda c: c["id"]):
+            pos = crossing["position_m"]
+            pt = Point(float(pos[0]), float(pos[1]))
+            matched_edge_ids: list[str] = []
+            pos_3d = [round(float(pos[0]), 4), round(float(pos[1]), 4), round(float(elevation_m), 4)]
+            for edge, line in edge_lines:
+                if line.distance(pt) <= 2.5:
+                    along_m = round(float(line.project(pt)), 4)
+                    edge["crossings"].append({
+                        "id": crossing["id"],
+                        "distance_m": along_m,
+                        "position_m": pos_3d,
+                    })
+                    matched_edge_ids.append(edge["id"])
+            if matched_edge_ids:
+                crossings_out.append({
+                    "id": crossing["id"],
+                    "position_m": pos_3d,
+                    "crossing": crossing.get("crossing", "unmarked"),
+                    "markings": crossing.get("markings", ""),
+                    "edge_ids": sorted(matched_edge_ids),
+                })
+        for edge in edges_sorted:
+            edge["crossings"].sort(key=lambda c: (c["distance_m"], c["id"]))
+
     return {
         "schema_version": 1,
         "node_count": len(nodes_sorted),
@@ -249,7 +288,9 @@ def build_road_graph(roads: list[dict], width_resolver, elevation_m: float) -> d
         "main_scc_node_count": len(main_scc),
         "main_scc_edge_count": len(edges_sorted) - dead_end_count,
         "dead_end_edge_count": dead_end_count,
+        "crossing_count": len(crossings_out),
         "speed_sources": dict(sorted(speed_sources.items())),
         "nodes": nodes_sorted,
         "edges": edges_sorted,
+        "crossings": crossings_out,
     }

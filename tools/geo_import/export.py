@@ -6,16 +6,17 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 
 from shapely import make_valid, orient_polygons
-from shapely.geometry import LineString, MultiLineString, MultiPolygon, Polygon, box, mapping, shape
+from shapely.geometry import LineString, MultiLineString, MultiPolygon, Point, Polygon, box, mapping, shape
 
 from tools.geo_import import osm
 from tools.geo_transform.local import LocalFrame
 from tools.validation.scene import reference_measurement, validate
 
 
-LAYERS = ("roads", "buildings", "water")
+LAYERS = ("roads", "buildings", "water", "pois")
 AREA_TAGS = ("building", "building:levels", "height", "name", "natural", "water", "waterway")
 ROAD_TAGS = ("highway", "name", "bridge", "tunnel", "layer", "lanes", "width", "surface", "oneway", "maxspeed")
+POI_TAGS = ("name", "shop", "amenity", "office", "tourism", "opening_hours", "building", "addr:street", "addr:housenumber")
 
 
 def geometry_parts(geometry, geometry_type: str):
@@ -62,6 +63,33 @@ def add_feature(layer, element_type, osm_id, attributes, geometry, bounds, layer
     return True
 
 
+def add_poi_feature(element_type, osm_id, attributes, geometry, bounds, layers, issues):
+    feature_id = f"poi:osm:{element_type}:{osm_id}"
+    if geometry.geom_type == "Point":
+        if not bounds.covers(geometry):
+            return False
+    else:
+        geometry, repaired = clipped_geometry(geometry, bounds, True)
+        if repaired:
+            action = "repaired invalid source geometry" if geometry is not None else "no usable geometry after repair"
+            issues.append({"id": feature_id, "reason": action})
+        if geometry is None:
+            return False
+    props = {"osm_id": f"osm:{element_type}:{osm_id}"}
+    for key in POI_TAGS:
+        if key in attributes:
+            props[key] = attributes[key]
+    layers["pois"].append(
+        {
+            "type": "Feature",
+            "id": feature_id,
+            "geometry": mapping(geometry),
+            "properties": props,
+        }
+    )
+    return True
+
+
 def extract(config: dict, raw_dir: Path):
     dataset = osm.Dataset()
     base = raw_dir / "map.osm"
@@ -74,7 +102,7 @@ def extract(config: dict, raw_dir: Path):
     bounds = box(*config["bounds_lonlat"])
     layers = {layer: [] for layer in LAYERS}
     issues = []
-    relation_outers = {layer: set() for layer in ("buildings", "water")}
+    relation_outers = {layer: set() for layer in ("buildings", "water", "pois")}
     sources = [(base, osm.map_url(config))]
     relations = list(osm.area_relations(dataset))
     way_ids = sorted(dataset.ways)
@@ -103,6 +131,11 @@ def extract(config: dict, raw_dir: Path):
             relation_outers[layer].update(
                 way_id for way_id, role in osm.ring_members(relation) if role == "outer"
             )
+        if osm.is_poi(attributes):
+            if add_poi_feature("relation", relation_id, attributes, area, bounds, layers, issues):
+                relation_outers["pois"].update(
+                    way_id for way_id, role in osm.ring_members(relation) if role == "outer"
+                )
 
     for way_id in way_ids:
         way = dataset.ways[way_id]
@@ -111,7 +144,10 @@ def extract(config: dict, raw_dir: Path):
         if layer and way_id not in relation_outers[layer]:
             coordinates = dataset.way_coordinates(way)
             if len(coordinates) >= 4 and coordinates[0] == coordinates[-1]:
-                add_feature(layer, "way", way_id, attributes, Polygon(coordinates), bounds, layers, issues)
+                poly = Polygon(coordinates)
+                add_feature(layer, "way", way_id, attributes, poly, bounds, layers, issues)
+                if osm.is_poi(attributes) and way_id not in relation_outers["pois"]:
+                    add_poi_feature("way", way_id, attributes, poly, bounds, layers, issues)
             else:
                 issues.append({"id": f"osm:way:{way_id}", "reason": "unclosed area way"})
         elif not layer and attributes.get("highway") not in (None, "construction", "proposed"):
@@ -121,6 +157,17 @@ def extract(config: dict, raw_dir: Path):
                     issues.append({"id": f"osm:way:{way_id}", "reason": "degenerate road way"})
                     continue
                 add_feature("roads", "way", way_id, attributes, LineString(coordinates), bounds, layers, issues)
+        elif not layer and osm.is_poi(attributes) and way_id not in relation_outers["pois"]:
+            coordinates = dataset.way_coordinates(way)
+            if len(coordinates) >= 4 and coordinates[0] == coordinates[-1]:
+                add_poi_feature("way", way_id, attributes, Polygon(coordinates), bounds, layers, issues)
+
+    for node_id in sorted(dataset.node_tags):
+        attributes = dataset.node_tags[node_id]
+        if osm.is_poi(attributes) and node_id in dataset.nodes:
+            lon, lat = dataset.nodes[node_id]
+            add_poi_feature("node", node_id, attributes, Point(lon, lat), bounds, layers, issues)
+
     validate(layers)
     return dataset, bounds, layers, issues, sources
 
@@ -171,6 +218,19 @@ def build(config: dict, raw_dir: Path, output_dir: Path) -> None:
                 for line in geom["coordinates"]
             ]
     validate(local_layers)
+    crossings = []
+    for node_id in sorted(dataset.node_tags):
+        ntags = dataset.node_tags[node_id]
+        if ntags.get("highway") == "crossing" and node_id in dataset.nodes:
+            lon, lat = dataset.nodes[node_id]
+            if bounds.covers(Point(lon, lat)):
+                east, north = frame.xy(lon, lat)
+                crossings.append({
+                    "id": f"osm:node:{node_id}",
+                    "position_m": [round(east, 4), round(north, 4)],
+                    "crossing": ntags.get("crossing", "unmarked"),
+                    "markings": ntags.get("crossing:markings", ""),
+                })
     reference = reference_measurement(config["reference"], dataset, frame, local_layers["roads"])
     source = config["source"]
     scene = {
@@ -189,6 +249,7 @@ def build(config: dict, raw_dir: Path, output_dir: Path) -> None:
         "license": source["license"],
         "license_url": source["license_url"],
         "layers": local_layers,
+        "crossings": crossings,
     }
     counts = {layer: len(features) for layer, features in layers.items()}
     files = []

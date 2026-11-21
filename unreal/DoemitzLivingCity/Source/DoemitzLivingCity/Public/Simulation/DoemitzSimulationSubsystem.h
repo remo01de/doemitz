@@ -4,6 +4,9 @@
 #include "Subsystems/WorldSubsystem.h"
 #include "DoemitzSimulationSubsystem.generated.h"
 
+class ADoemitzCitizenActor;
+class UStaticMesh;
+
 UENUM(BlueprintType)
 enum class EDoemitzCitizenActivity : uint8
 {
@@ -12,6 +15,35 @@ enum class EDoemitzCitizenActivity : uint8
 	Working,
 	Shopping,
 	Strolling
+};
+
+UENUM(BlueprintType)
+enum class EDoemitzDayKind : uint8
+{
+	Weekday,
+	Saturday,
+	Sunday
+};
+
+USTRUCT(BlueprintType)
+struct DOEMITZLIVINGCITY_API FDoemitzTimeInterval
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation")
+	int32 StartMinute = 0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation")
+	int32 EndMinute = 1440;
+};
+
+USTRUCT(BlueprintType)
+struct DOEMITZLIVINGCITY_API FDoemitzDayOpeningHours
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation")
+	TArray<FDoemitzTimeInterval> Intervals;
 };
 
 USTRUCT(BlueprintType)
@@ -33,6 +65,15 @@ struct DOEMITZLIVINGCITY_API FDoemitzPlaceDefinition
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation")
 	FVector AccessLocation = FVector::ZeroVector;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation")
+	bool bAlwaysOpen = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation")
+	FString OpeningHoursSource;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation")
+	TArray<FDoemitzDayOpeningHours> WeeklyOpeningHours;
 };
 
 USTRUCT(BlueprintType)
@@ -86,7 +127,16 @@ struct DOEMITZLIVINGCITY_API FDoemitzCitizenDefinition
 	double WalkSpeedCmPerSecond = 135.0;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation")
+	int32 CoatVariantIndex = 0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation")
 	TArray<FDoemitzScheduleEntry> Schedule;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation")
+	TArray<FDoemitzScheduleEntry> SaturdaySchedule;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Simulation")
+	TArray<FDoemitzScheduleEntry> SundaySchedule;
 };
 
 USTRUCT(BlueprintType)
@@ -119,6 +169,9 @@ struct DOEMITZLIVINGCITY_API FDoemitzCitizenState
 	bool bIsMoving = false;
 
 	UPROPERTY(BlueprintReadOnly, Category = "Simulation")
+	bool bIsHighDetail = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Simulation")
 	FVector WorldLocation = FVector::ZeroVector;
 
 	UPROPERTY(BlueprintReadOnly, Category = "Simulation")
@@ -132,6 +185,21 @@ struct DOEMITZLIVINGCITY_API FDoemitzCitizenState
 
 	UPROPERTY(BlueprintReadOnly, Category = "Simulation")
 	int32 CompletedTrips = 0;
+};
+
+USTRUCT(BlueprintType)
+struct DOEMITZLIVINGCITY_API FDoemitzCrossingDefinition
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic")
+	FName CrossingId;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic")
+	FVector Location = FVector::ZeroVector;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic", meta = (Units = "cm"))
+	double TriggerRadiusCm = 350.0;
 };
 
 USTRUCT(BlueprintType)
@@ -216,6 +284,9 @@ struct DOEMITZLIVINGCITY_API FDoemitzVehicleState
 
 	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
 	bool bYieldingForPedestrian = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
+	bool bYieldingForCrossing = false;
 };
 
 UCLASS()
@@ -236,10 +307,15 @@ public:
 		const TArray<FDoemitzCitizenRoute>& InRoutes,
 		const TArray<FDoemitzCitizenDefinition>& InCitizens);
 
+	void ConfigureCitizenPool(
+		const TArray<TObjectPtr<UStaticMesh>>& InMeshVariants,
+		double InLodRadiusCm = 15000.0);
+
 	void ConfigureTrafficNetwork(
 		int32 InTrafficSeed,
 		const TArray<FDoemitzRoadEdgeDefinition>& InRoadEdges,
-		const TArray<FDoemitzVehicleDefinition>& InVehicles);
+		const TArray<FDoemitzVehicleDefinition>& InVehicles,
+		const TArray<FDoemitzCrossingDefinition>& InCrossings = TArray<FDoemitzCrossingDefinition>());
 
 	UFUNCTION(BlueprintPure, Category = "Simulation", meta = (WorldContext = "WorldContextObject"))
 	static UDoemitzSimulationSubsystem* Get(const UObject* WorldContextObject);
@@ -251,6 +327,18 @@ public:
 	int32 GetDayNumber() const { return DayNumber; }
 
 	UFUNCTION(BlueprintPure, Category = "Simulation")
+	int32 GetDayOfWeek() const { return DayOfWeek; }
+
+	UFUNCTION(BlueprintPure, Category = "Simulation")
+	int32 GetCalendarWeek() const { return CalendarWeek; }
+
+	UFUNCTION(BlueprintPure, Category = "Simulation")
+	FString GetDayOfWeekShortName() const;
+
+	UFUNCTION(BlueprintPure, Category = "Simulation")
+	EDoemitzDayKind GetDayKind() const;
+
+	UFUNCTION(BlueprintPure, Category = "Simulation")
 	double GetTimeScale() const { return TimeScale; }
 
 	UFUNCTION(BlueprintCallable, Category = "Simulation")
@@ -258,6 +346,18 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "Simulation")
 	void SetTimeOfDayMinutes(double NewMinutes);
+
+	UFUNCTION(BlueprintCallable, Category = "Simulation")
+	void SetDayNumber(int32 NewDayNumber);
+
+	UFUNCTION(BlueprintCallable, Category = "Simulation")
+	void SetDayOfWeekForTest(int32 NewDayOfWeek);
+
+	UFUNCTION(BlueprintPure, Category = "Simulation")
+	bool IsPlaceOpen(FName PlaceId, int32 DayOfWeekIndex, double MinuteOfDay) const;
+
+	UFUNCTION(BlueprintPure, Category = "Simulation")
+	bool IsPlaceOpenNow(FName PlaceId) const;
 
 	UFUNCTION(BlueprintPure, Category = "Simulation")
 	int32 GetCitizenCount() const { return CitizenRecords.Num(); }
@@ -268,11 +368,38 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Simulation")
 	TArray<FName> GetAllCitizenIds() const;
 
+	UFUNCTION(BlueprintPure, Category = "Simulation")
+	int32 GetActiveCitizenActorCount() const { return ActiveCitizenActors.Num(); }
+
+	UFUNCTION(BlueprintPure, Category = "Simulation")
+	int32 GetPooledCitizenActorCount() const { return PooledCitizenActors.Num(); }
+
+	UFUNCTION(BlueprintPure, Category = "Simulation")
+	bool IsCitizenHighDetail(FName CitizenId) const;
+
+	UFUNCTION(BlueprintPure, Category = "Simulation")
+	bool GetCitizenActorLocation(FName CitizenId, FVector& OutLocation) const;
+
+	UFUNCTION(BlueprintCallable, Category = "Simulation")
+	void SetCitizenLodRadiusCm(double NewRadiusCm);
+
+	UFUNCTION(BlueprintCallable, Category = "Simulation")
+	bool SetCitizenPositionForTest(FName CitizenId, const FVector& NewLocation);
+
 	UFUNCTION(BlueprintPure, Category = "Traffic")
 	int32 GetVehicleCount() const { return VehicleRecords.Num(); }
 
 	UFUNCTION(BlueprintPure, Category = "Traffic")
 	int32 GetRoadEdgeCount() const { return RoadEdgesById.Num(); }
+
+	UFUNCTION(BlueprintPure, Category = "Traffic")
+	int32 GetCrossingCount() const { return Crossings.Num(); }
+
+	UFUNCTION(BlueprintPure, Category = "Traffic")
+	bool GetCrossingLocation(FName CrossingId, FVector& OutLocation) const;
+
+	UFUNCTION(BlueprintPure, Category = "Traffic")
+	TArray<FName> GetAllCrossingIds() const;
 
 	UFUNCTION(BlueprintPure, Category = "Traffic")
 	bool GetVehicleState(FName VehicleId, FDoemitzVehicleState& OutState) const;
@@ -309,6 +436,7 @@ private:
 		TArray<FVector> ActiveRoute;
 		TArray<double> ActiveSegmentEnds;
 		double ActiveRouteLength = 0.0;
+		double CoarseAccumulatedSeconds = 0.0;
 	};
 
 	struct FRoadEdgeRecord
@@ -329,9 +457,15 @@ private:
 
 	static int32 FindScheduleIndex(const TArray<FDoemitzScheduleEntry>& Schedule, double MinuteOfDay);
 	static FName MakeRouteKey(FName FromPlaceId, FName ToPlaceId);
+	const TArray<FDoemitzScheduleEntry>& GetActiveScheduleForDay(const FDoemitzCitizenDefinition& Def) const;
+	FDoemitzScheduleEntry ResolveDesiredEntry(const FDoemitzCitizenDefinition& Def, int32& OutIndex) const;
+	void ResetCitizenToCurrentSchedule(FCitizenRecord& Record);
 	void BuildRouteCache(FCitizenRecord& Record, FName FromPlaceId, FName DestinationPlaceId);
 	void StartTrip(FCitizenRecord& Record, FName DestinationPlaceId);
 	void UpdateCitizen(FCitizenRecord& Record, double DeltaSeconds);
+	void UpdateCitizenLodPool();
+	ADoemitzCitizenActor* AcquirePooledCitizenActor(const FCitizenRecord& Record);
+	void ReleaseCitizenActor(FName CitizenId);
 
 	void SampleEdgePose(const FRoadEdgeRecord& Edge, double DistanceCm, FVector& OutLocation, FRotator& OutRotation) const;
 	FName ChooseNextEdge(const FVehicleRecord& Record) const;
@@ -343,7 +477,11 @@ private:
 	double TimeOfDayMinutes = 470.0;
 	double TimeScale = 60.0;
 	int32 DayNumber = 1;
+	int32 DayOfWeek = 0; // 0 = Mo .. 6 = So
+	int32 CalendarWeek = 1;
 	int32 TrafficSeed = 202607;
+	double CitizenLodRadiusCm = 15000.0;
+	double CoarseUpdateIntervalSeconds = 1.0;
 	FString LastNotification;
 	double NotificationRemainingSeconds = 0.0;
 
@@ -351,8 +489,18 @@ private:
 	TMap<FName, FDoemitzCitizenRoute> RoutesByKey;
 	TMap<FName, FCitizenRecord> CitizenRecords;
 
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UStaticMesh>> CitizenMeshVariants;
+
+	UPROPERTY(Transient)
+	TMap<FName, TObjectPtr<ADoemitzCitizenActor>> ActiveCitizenActors;
+
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<ADoemitzCitizenActor>> PooledCitizenActors;
+
 	TMap<FName, FRoadEdgeRecord> RoadEdgesById;
 	TMap<FName, TArray<FName>> OutgoingEdgesByNode;
+	TArray<FDoemitzCrossingDefinition> Crossings;
 	TMap<FName, FVehicleRecord> VehicleRecords;
 	TArray<FName> OrderedVehicleIds;
 	TMap<FName, FName> JunctionReservations;

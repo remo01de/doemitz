@@ -5,6 +5,7 @@
 #include "DoemitzCitizenActor.generated.h"
 
 class UCapsuleComponent;
+class UStaticMesh;
 class UStaticMeshComponent;
 
 UCLASS()
@@ -19,12 +20,14 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Simulation")
 	FName GetCitizenId() const { return CitizenId; }
 
+	void AssignToCitizen(FName NewCitizenId, UStaticMesh* MeshAsset);
+	void ReleaseToPool();
+	void SyncFromSimulation();
+
 protected:
 	virtual void BeginPlay() override;
 
 private:
-	void SyncFromSimulation();
-
 	UPROPERTY(VisibleAnywhere, Category = "Citizen")
 	TObjectPtr<UStaticMeshComponent> CitizenMesh;
 

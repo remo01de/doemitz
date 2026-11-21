@@ -25,6 +25,7 @@
 #include "RenderTimer.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
+#include "Settings/DoemitzGraphicsSettings.h"
 #include "Traffic/DoemitzTrafficVehicle.h"
 
 namespace
@@ -60,22 +61,6 @@ namespace
 		const double Alpha = Rank - static_cast<double>(Lower);
 		return FMath::Lerp(SortedValues[Lower], SortedValues[Upper], Alpha);
 	}
-
-	void SetCVarInt(const TCHAR* Name, int32 Value)
-	{
-		if (IConsoleVariable* Var = IConsoleManager::Get().FindConsoleVariable(Name))
-		{
-			Var->Set(Value, ECVF_SetByScalability);
-		}
-	}
-
-	void SetCVarFloat(const TCHAR* Name, float Value)
-	{
-		if (IConsoleVariable* Var = IConsoleManager::Get().FindConsoleVariable(Name))
-		{
-			Var->Set(Value, ECVF_SetByScalability);
-		}
-	}
 }
 
 bool UDoemitzBenchmarkSubsystem::ShouldCreateSubsystem(UObject* Outer) const
@@ -95,98 +80,9 @@ TStatId UDoemitzBenchmarkSubsystem::GetStatId() const
 
 void UDoemitzBenchmarkSubsystem::ApplyGraphicsProfile(const FString& InProfileName, UWorld* World)
 {
-	if (InProfileName.Equals(TEXT("DoemitzLow"), ESearchCase::IgnoreCase))
+	if (UDoemitzGraphicsSettings* Settings = UDoemitzGraphicsSettings::Get())
 	{
-		if (GEngine)
-		{
-			if (UGameUserSettings* Settings = GEngine->GetGameUserSettings())
-			{
-				Settings->SetOverallScalabilityLevel(0);
-				Settings->SetViewDistanceQuality(1);
-				Settings->SetAntiAliasingQuality(1);
-				Settings->SetShadowQuality(1);
-				Settings->SetGlobalIlluminationQuality(0);
-				Settings->SetReflectionQuality(0);
-				Settings->SetPostProcessingQuality(0);
-				Settings->SetTextureQuality(1);
-				Settings->SetVisualEffectQuality(0);
-				Settings->SetFoliageQuality(1);
-				Settings->SetShadingQuality(0);
-				Settings->ApplyNonResolutionSettings();
-			}
-		}
-
-		// Disable expensive UE5 defaults for integrated GPUs (Iris Xe): Lumen GI/Reflections, VSM, Hardware RT
-		SetCVarInt(TEXT("r.DynamicGlobalIlluminationMethod"), 0);
-		SetCVarInt(TEXT("r.ReflectionMethod"), 0);
-		SetCVarInt(TEXT("r.Shadow.Virtual.Enable"), 0);
-		SetCVarInt(TEXT("r.Lumen.DiffuseIndirect.Allow"), 0);
-		SetCVarInt(TEXT("r.Lumen.Reflections.Allow"), 0);
-		SetCVarInt(TEXT("r.DistanceFieldAO"), 0);
-		SetCVarInt(TEXT("r.AmbientOcclusionLevels"), 0);
-		SetCVarInt(TEXT("r.VolumetricFog"), 0);
-		SetCVarInt(TEXT("r.VolumetricCloud"), 0);
-		SetCVarInt(TEXT("r.BloomQuality"), 0);
-		SetCVarInt(TEXT("r.MotionBlurQuality"), 0);
-		SetCVarInt(TEXT("r.Shadow.CSM.MaxCascades"), 2);
-		SetCVarInt(TEXT("r.Shadow.MaxResolution"), 1024);
-		SetCVarFloat(TEXT("r.Shadow.RadiusThreshold"), 0.05f);
-		SetCVarInt(TEXT("r.AntiAliasingMethod"), 1); // FXAA instead of TSR
-		SetCVarFloat(TEXT("r.ScreenPercentage"), 100.0f);
-
-		// Reduce street light count and attenuation radius for integrated GPU budget
-		if (World)
-		{
-			int32 LightIndex = 0;
-			int32 ActiveLights = 0;
-			for (TActorIterator<APointLight> It(World); It; ++It)
-			{
-				APointLight* Light = *It;
-				if (!Light)
-				{
-					continue;
-				}
-				if (UPointLightComponent* Comp = Light->FindComponentByClass<UPointLightComponent>())
-				{
-					Comp->SetCastShadows(false);
-					if ((LightIndex % 3) != 0)
-					{
-						Comp->SetVisibility(false);
-						Light->SetActorHiddenInGame(true);
-					}
-					else
-					{
-						Comp->SetAttenuationRadius(FMath::Min(Comp->AttenuationRadius, 700.0f));
-						Comp->MaxDrawDistance = 4500.0f;
-						Comp->MaxDistanceFadeRange = 1000.0f;
-						++ActiveLights;
-					}
-					++LightIndex;
-				}
-			}
-			UE_LOG(LogTemp, Display, TEXT("DoemitzLow profile applied: %d/%d street point lights kept active"), ActiveLights, LightIndex);
-		}
-		else
-		{
-			UE_LOG(LogTemp, Display, TEXT("DoemitzLow profile applied"));
-		}
-	}
-	else if (InProfileName.Equals(TEXT("DoemitzHigh"), ESearchCase::IgnoreCase))
-	{
-		if (GEngine)
-		{
-			if (UGameUserSettings* Settings = GEngine->GetGameUserSettings())
-			{
-				Settings->SetOverallScalabilityLevel(3);
-				Settings->ApplyNonResolutionSettings();
-			}
-		}
-		SetCVarInt(TEXT("r.DynamicGlobalIlluminationMethod"), 1);
-		SetCVarInt(TEXT("r.ReflectionMethod"), 1);
-		SetCVarInt(TEXT("r.Shadow.Virtual.Enable"), 1);
-		SetCVarInt(TEXT("r.Lumen.DiffuseIndirect.Allow"), 1);
-		SetCVarInt(TEXT("r.Lumen.Reflections.Allow"), 1);
-		UE_LOG(LogTemp, Display, TEXT("DoemitzHigh profile applied"));
+		Settings->ApplyProfile(InProfileName, World, false);
 	}
 }
 
@@ -198,8 +94,13 @@ void UDoemitzBenchmarkSubsystem::OnWorldBeginPlay(UWorld& InWorld)
 	FString RequestedProfile;
 	if (FParse::Value(CmdLine, TEXT("DoemitzProfile="), RequestedProfile))
 	{
-		ProfileName = RequestedProfile;
+		ProfileName = UDoemitzGraphicsSettings::NormalizeProfileName(RequestedProfile);
 		ApplyGraphicsProfile(ProfileName, &InWorld);
+	}
+	else if (UDoemitzGraphicsSettings* Settings = UDoemitzGraphicsSettings::Get())
+	{
+		ProfileName = Settings->GetActiveProfileName();
+		Settings->ApplyActiveProfile(&InWorld);
 	}
 
 	if (!FParse::Param(CmdLine, TEXT("DoemitzBenchmark")))

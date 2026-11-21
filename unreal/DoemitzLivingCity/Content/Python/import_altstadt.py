@@ -288,7 +288,7 @@ def place_traffic_network(existing, road_graph, traffic_network, legacy_vehicle)
 
     if not traffic_network or not road_graph:
         place_vehicle(existing, legacy_vehicle)
-        return [], [], 202607
+        return [], [], [], 202607
 
     # Remove legacy single test vehicle if present
     legacy_actor = existing.get("Altstadt Test Vehicle")
@@ -345,11 +345,19 @@ def place_traffic_network(existing, road_graph, traffic_network, legacy_vehicle)
     ]
     unreal.log(f"Remaining vehicle actors in level: {remaining_vehicles}")
 
+    crossing_structs = []
+    for crossing in road_graph.get("crossings", []):
+        cdef = unreal.DoemitzCrossingDefinition()
+        cdef.set_editor_property("crossing_id", crossing["id"])
+        cdef.set_editor_property("location", ue_position(crossing["position_m"]))
+        cdef.set_editor_property("trigger_radius_cm", 350.0)
+        crossing_structs.append(cdef)
+
     unreal.log(
         f"DOEMITZ_TRAFFIC_NETWORK_IMPORT_OK: {len(vehicle_structs)} vehicles, "
-        f"{len(edge_structs)} road edges (seed={traffic_network['seed']})"
+        f"{len(edge_structs)} road edges, {len(crossing_structs)} crossings (seed={traffic_network['seed']})"
     )
-    return edge_structs, vehicle_structs, int(traffic_network["seed"])
+    return edge_structs, vehicle_structs, crossing_structs, int(traffic_network["seed"])
 
 
 def place_vehicle(existing, config):
@@ -375,7 +383,9 @@ def place_vehicle(existing, config):
     unreal.log(f"DOEMITZ_TRAFFIC_IMPORT_OK: {config['id']}, {config['route_id']}, {config['length_m']:.1f} m")
 
 
-def place_citizens(existing, config, road_edge_structs=None, vehicle_structs=None, traffic_seed=202607):
+def place_citizens(
+    existing, config, road_edge_structs=None, vehicle_structs=None, crossing_structs=None, traffic_seed=202607,
+):
     config_name = "Altstadt Simulation Config"
     if not config:
         for label, actor in list(existing.items()):
@@ -397,6 +407,16 @@ def place_citizens(existing, config, road_edge_structs=None, vehicle_structs=Non
         "Strolling": unreal.DoemitzCitizenActivity.STROLLING,
     }
 
+    def build_schedule_structs(entries):
+        result = []
+        for step in entries or []:
+            sched = unreal.DoemitzScheduleEntry()
+            sched.set_editor_property("start_minute", step["start_minute"])
+            sched.set_editor_property("activity", activity_enum[step["activity"]])
+            sched.set_editor_property("place_id", step["place_id"])
+            result.append(sched)
+        return result
+
     places_by_id = {}
     place_structs = []
     for entry in config["places"]:
@@ -408,6 +428,22 @@ def place_citizens(existing, config, road_edge_structs=None, vehicle_structs=Non
         place_struct.set_editor_property("building_id", entry["building_id"])
         place_struct.set_editor_property("kind", entry["kind"])
         place_struct.set_editor_property("access_location", pos)
+
+        oh = entry.get("opening_hours") or {}
+        place_struct.set_editor_property("always_open", bool(oh.get("always_open", False)))
+        place_struct.set_editor_property("opening_hours_source", str(oh.get("source", "")))
+        weekly_structs = []
+        for day_intervals in oh.get("days", []):
+            day_struct = unreal.DoemitzDayOpeningHours()
+            iv_structs = []
+            for start_min, end_min in day_intervals:
+                iv = unreal.DoemitzTimeInterval()
+                iv.set_editor_property("start_minute", int(start_min))
+                iv.set_editor_property("end_minute", int(end_min))
+                iv_structs.append(iv)
+            day_struct.set_editor_property("intervals", iv_structs)
+            weekly_structs.append(day_struct)
+        place_struct.set_editor_property("weekly_opening_hours", weekly_structs)
         place_structs.append(place_struct)
 
     route_structs = []
@@ -418,16 +454,18 @@ def place_citizens(existing, config, road_edge_structs=None, vehicle_structs=Non
         route_struct.set_editor_property("points", list(map(ue_position, entry["points_m"])))
         route_structs.append(route_struct)
 
+    # Build a compact shared palette of stylized citizen meshes for the runtime LOD actor pool
+    color_to_variant = {}
+    variant_meshes = []
     citizen_structs = []
-    active_labels = set()
     for entry in config["citizens"]:
-        schedule_structs = []
-        for step in entry["schedule"]:
-            sched = unreal.DoemitzScheduleEntry()
-            sched.set_editor_property("start_minute", step["start_minute"])
-            sched.set_editor_property("activity", activity_enum[step["activity"]])
-            sched.set_editor_property("place_id", step["place_id"])
-            schedule_structs.append(sched)
+        coat_key = tuple(round(float(c), 3) for c in entry["coat_color"])
+        if coat_key not in color_to_variant:
+            variant_idx = len(variant_meshes)
+            color_to_variant[coat_key] = variant_idx
+            variant_meshes.append(static_mesh(f"CitizenVariant_{variant_idx}", stylized_citizen(coat_key)))
+        else:
+            variant_idx = color_to_variant[coat_key]
 
         cdef = unreal.DoemitzCitizenDefinition()
         cdef.set_editor_property("citizen_id", entry["id"])
@@ -435,23 +473,23 @@ def place_citizens(existing, config, road_edge_structs=None, vehicle_structs=Non
         cdef.set_editor_property("home_place_id", entry["home_place_id"])
         cdef.set_editor_property("work_place_id", entry["work_place_id"])
         cdef.set_editor_property("walk_speed_cm_per_second", entry["walk_speed_mps"] * 100.0)
-        cdef.set_editor_property("schedule", schedule_structs)
+        cdef.set_editor_property("coat_variant_index", variant_idx)
+        cdef.set_editor_property("schedule", build_schedule_structs(entry["schedule"]))
+        cdef.set_editor_property(
+            "saturday_schedule",
+            build_schedule_structs(entry.get("saturday_schedule") or entry["schedule"]),
+        )
+        cdef.set_editor_property(
+            "sunday_schedule",
+            build_schedule_structs(entry.get("sunday_schedule") or entry["schedule"]),
+        )
         citizen_structs.append(cdef)
 
-        label = f"Altstadt Citizen - {entry['id']}"
-        active_labels.add(label)
-        spawn_pos = places_by_id[entry["home_place_id"]]
-        actor = place(existing, label, citizen_class, spawn_pos)
-        mesh_name = f"Citizen_{entry['id']}"
-        actor.get_editor_property("citizen_mesh").set_static_mesh(
-            static_mesh(mesh_name, stylized_citizen(entry["coat_color"]))
-        )
-        actor.set_editor_property("citizen_id", entry["id"])
-
-    for label, actor in list(existing.items()):
-        if label.startswith("Altstadt Citizen - ") and label not in active_labels:
+    # Remove legacy per-citizen level actors; Sprint 8 manages citizen actors via the runtime LOD pool
+    for actor in list(ACTORS.get_all_level_actors()):
+        if actor.get_class() == citizen_class:
             if not ACTORS.destroy_actor(actor):
-                raise RuntimeError(f"Could not remove obsolete citizen actor {label}")
+                raise RuntimeError(f"Could not remove obsolete citizen actor {actor.get_actor_label()}")
 
     sim_actor = place(existing, config_name, config_class, unreal.Vector())
     sim_actor.set_editor_property("start_minute", config["clock"]["start_minute"])
@@ -459,13 +497,16 @@ def place_citizens(existing, config, road_edge_structs=None, vehicle_structs=Non
     sim_actor.set_editor_property("places", place_structs)
     sim_actor.set_editor_property("routes", route_structs)
     sim_actor.set_editor_property("citizens", citizen_structs)
+    sim_actor.set_editor_property("citizen_mesh_variants", variant_meshes)
+    sim_actor.set_editor_property("citizen_lod_radius_cm", 15000.0)
     if road_edge_structs is not None and vehicle_structs is not None:
         sim_actor.set_editor_property("traffic_seed", traffic_seed)
         sim_actor.set_editor_property("road_edges", road_edge_structs)
         sim_actor.set_editor_property("vehicles", vehicle_structs)
+        sim_actor.set_editor_property("crossings", crossing_structs or [])
     unreal.log(
         f"DOEMITZ_CITIZENS_IMPORT_OK: {len(citizen_structs)} citizens, "
-        f"{len(place_structs)} places, {len(route_structs)} routes"
+        f"{len(place_structs)} places, {len(route_structs)} routes, {len(variant_meshes)} mesh variants"
     )
 
 
@@ -500,10 +541,12 @@ def import_level(package):
             if not ACTORS.destroy_actor(actor):
                 raise RuntimeError(f"Could not remove obsolete generated actor {actor.get_actor_label()}")
     place_instanced_props(existing, package.get("props", {}).get("instances", {}))
-    road_edge_structs, vehicle_structs, traffic_seed = place_traffic_network(
+    road_edge_structs, vehicle_structs, crossing_structs, traffic_seed = place_traffic_network(
         existing, package.get("road-graph"), package.get("traffic_network"), package.get("vehicle"),
     )
-    place_citizens(existing, package.get("citizens"), road_edge_structs, vehicle_structs, traffic_seed)
+    place_citizens(
+        existing, package.get("citizens"), road_edge_structs, vehicle_structs, crossing_structs, traffic_seed,
+    )
 
     start = ue_position(package["start_m"])
     first, second = (ue_position([*point, 0]) for point in package["reference_points_m"])

@@ -74,13 +74,19 @@ class DOEMITZLIVINGCITY_API UDoemitzSaveGame : public USaveGame
 	GENERATED_BODY()
 
 public:
-	static constexpr int32 CurrentSchemaVersion = 2;
+	static constexpr int32 CurrentSchemaVersion = 3;
 
 	UPROPERTY(BlueprintReadWrite, Category = "SaveGame")
 	int32 SaveSchemaVersion = CurrentSchemaVersion;
 
 	UPROPERTY(BlueprintReadWrite, Category = "SaveGame")
 	int32 DayNumber = 1;
+
+	UPROPERTY(BlueprintReadWrite, Category = "SaveGame")
+	int32 DayOfWeek = 0;
+
+	UPROPERTY(BlueprintReadWrite, Category = "SaveGame")
+	int32 CalendarWeek = 1;
 
 	UPROPERTY(BlueprintReadWrite, Category = "SaveGame")
 	double TimeOfDayMinutes = 470.0;

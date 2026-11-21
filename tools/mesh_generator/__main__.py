@@ -254,7 +254,7 @@ def build(
     )
     vegetation_instances = add_stylized_trees(meshes, bounds, excluded_for_trees, base_m)
     prop_instances = {**street_prop_instances, **vegetation_instances}
-    road_graph = build_road_graph(roads, road_width, base_m + ROAD_ELEVATION_M)
+    road_graph = build_road_graph(roads, road_width, base_m + ROAD_ELEVATION_M, scene.get("crossings"))
     traffic_network = None
     if traffic_network_config:
         edges_by_id = {edge["id"]: edge for edge in road_graph["edges"]}
@@ -293,6 +293,8 @@ def build(
         citizens = build_citizens(
             citizens_config, roads_by_id, scene["layers"]["buildings"], sidewalks,
             obstacles, base_m + ROAD_ELEVATION_M, base_m + ROAD_ELEVATION_M + CURB_HEIGHT_M,
+            pois=scene["layers"].get("pois"),
+            crossings=road_graph.get("crossings"),
         )
     reference = report["reference"]
     if scene["id"] != report["id"]:
@@ -375,6 +377,17 @@ def main():
     package["source_scene_sha256"] = sha256(scene_bytes).hexdigest()
     destination = args.scene.with_name("unreal-city-meshes.json")
     write_json(destination, package)
+    if package.get("citizens"):
+        cit = package["citizens"]
+        osm_oh = cit.get("osm_opening_hours_places", [])
+        print(
+            f"Citizens: {len(cit['citizens'])}, places: {len(cit['places'])}, "
+            f"routes: {len(cit['routes'])} ({cit.get('routes_using_crossings', 0)} via crossings), "
+            f"opening_hours_sources: {cit.get('opening_hours_sources', {})}"
+        )
+        if osm_oh:
+            osm_summary = ", ".join(f"{p['name']} ({p['raw']})" for p in osm_oh)
+            print(f"OSM opening_hours ({len(osm_oh)}): {osm_summary}")
     print(f"{len(package['meshes'])} meshes, "
           f"{sum(len(mesh['triangles']) for mesh in package['meshes'].values())} triangles: {destination}")
 

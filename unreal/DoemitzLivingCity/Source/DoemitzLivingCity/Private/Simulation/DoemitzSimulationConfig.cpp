@@ -4,6 +4,7 @@
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "InputCoreTypes.h"
+#include "Settings/DoemitzGraphicsSettings.h"
 #include "UI/DoemitzClockWidget.h"
 
 ADoemitzSimulationConfig::ADoemitzSimulationConfig()
@@ -19,9 +20,10 @@ void ADoemitzSimulationConfig::BeginPlay()
 	if (UDoemitzSimulationSubsystem* Subsystem = GetWorld()->GetSubsystem<UDoemitzSimulationSubsystem>())
 	{
 		Subsystem->ConfigureSimulation(StartMinute, TimeScale, Places, Routes, Citizens);
+		Subsystem->ConfigureCitizenPool(CitizenMeshVariants, CitizenLodRadiusCm);
 		if (!RoadEdges.IsEmpty() && !Vehicles.IsEmpty())
 		{
-			Subsystem->ConfigureTrafficNetwork(TrafficSeed, RoadEdges, Vehicles);
+			Subsystem->ConfigureTrafficNetwork(TrafficSeed, RoadEdges, Vehicles, Crossings);
 		}
 	}
 	TryAttachClockHud();
@@ -80,6 +82,14 @@ void ADoemitzSimulationConfig::HandleHotkeys()
 	if (PC->WasInputKeyJustPressed(EKeys::F5))
 	{
 		Subsystem->SaveCityState();
+	}
+	else if (PC->WasInputKeyJustPressed(EKeys::F7))
+	{
+		if (UDoemitzGraphicsSettings* GraphicsSettings = UDoemitzGraphicsSettings::Get())
+		{
+			const FString NewProfile = GraphicsSettings->ToggleProfile(World);
+			Subsystem->SetNotification(FString::Printf(TEXT("Grafikprofil: %s"), *NewProfile));
+		}
 	}
 	else if (PC->WasInputKeyJustPressed(EKeys::F9))
 	{
