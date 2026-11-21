@@ -276,6 +276,13 @@ def import_level(package):
     sky_component.set_intensity(1.3)
     sky_component.set_editor_property("real_time_capture", True)
 
+    day_night_class = unreal.load_class(None, "/Script/DoemitzLivingCity.DoemitzDayNightController")
+    if not day_night_class:
+        raise RuntimeError("Build the DoemitzLivingCityEditor target before importing the day/night controller")
+    day_night = place(existing, "Altstadt Day Night Controller", day_night_class, unreal.Vector())
+    day_night.set_editor_property("sun_light", sun)
+    day_night.set_editor_property("sky_light", skylight)
+
     direction = second - first
     credit = start + unreal.Vector(0, 0, 235) + direction * (450 / direction.length())
     text_actor = place(existing, "OpenStreetMap Attribution", unreal.TextRenderActor, credit,

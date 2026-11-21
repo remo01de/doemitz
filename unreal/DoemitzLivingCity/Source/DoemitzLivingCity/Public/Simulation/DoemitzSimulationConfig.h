@@ -5,6 +5,8 @@
 #include "Simulation/DoemitzSimulationSubsystem.h"
 #include "DoemitzSimulationConfig.generated.h"
 
+class UDoemitzClockWidget;
+
 UCLASS()
 class DOEMITZLIVINGCITY_API ADoemitzSimulationConfig : public AActor
 {
@@ -12,11 +14,17 @@ class DOEMITZLIVINGCITY_API ADoemitzSimulationConfig : public AActor
 
 public:
 	ADoemitzSimulationConfig();
+	virtual void Tick(float DeltaSeconds) override;
+
+	UFUNCTION(BlueprintPure, Category = "UI")
+	UDoemitzClockWidget* GetClockWidget() const { return ClockWidget; }
 
 protected:
 	virtual void BeginPlay() override;
 
 private:
+	void TryAttachClockHud();
+
 	UPROPERTY(EditInstanceOnly, Category = "Simulation")
 	double StartMinute = 470.0;
 
@@ -31,4 +39,10 @@ private:
 
 	UPROPERTY(EditInstanceOnly, Category = "Simulation")
 	TArray<FDoemitzCitizenDefinition> Citizens;
+
+	UPROPERTY(EditAnywhere, Category = "UI")
+	TSubclassOf<UDoemitzClockWidget> ClockWidgetClass;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UDoemitzClockWidget> ClockWidget;
 };

@@ -6,6 +6,6 @@ public class DoemitzLivingCity : ModuleRules
 	{
 		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
 		PublicDependencyModuleNames.AddRange(new[] { "Core", "CoreUObject", "Engine" });
-		PrivateDependencyModuleNames.Add("EnhancedInput");
+		PrivateDependencyModuleNames.AddRange(new[] { "EnhancedInput", "UMG", "Slate", "SlateCore" });
 	}
 }
