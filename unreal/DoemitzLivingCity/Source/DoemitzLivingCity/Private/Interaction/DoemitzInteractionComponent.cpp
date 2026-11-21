@@ -5,7 +5,9 @@
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
 #include "Simulation/DoemitzSimulationSubsystem.h"
+#include "UI/DoemitzCitizenDialogWidget.h"
 #include "UI/DoemitzPlaceMenuWidget.h"
+#include "UI/DoemitzUiText.h"
 
 UDoemitzInteractionComponent::UDoemitzInteractionComponent()
 {
@@ -22,9 +24,9 @@ void UDoemitzInteractionComponent::RefreshNearestEntrance()
 {
 	NearestPlaceId = NAME_None;
 	NearestEntranceId = NAME_None;
-	NearestPlaceDisplayName.Reset();
+	NearestCitizenId = NAME_None;
 	bNearestPlaceOpen = false;
-	CurrentPrompt.Reset();
+	CurrentPromptText = FText::GetEmpty();
 
 	AActor* Owner = GetOwner();
 	UWorld* World = GetWorld();
@@ -39,62 +41,92 @@ void UDoemitzInteractionComponent::RefreshNearestEntrance()
 		return;
 	}
 
+	const FVector QueryLoc = Owner->GetActorLocation();
+
 	FDoemitzPlaceDefinition Place;
-	double DistCm = 0.0;
-	if (!Subsystem->FindNearestEntrance(Owner->GetActorLocation(), InteractionRadiusCm, Place, DistCm))
+	double PlaceDistCm = InteractionRadiusCm + 1.0;
+	const bool bHasPlace = Subsystem->FindNearestEntrance(QueryLoc, InteractionRadiusCm, Place, PlaceDistCm);
+
+	FDoemitzCitizenState Citizen;
+	double CitizenDistCm = InteractionRadiusCm + 1.0;
+	const bool bHasCitizen = Subsystem->FindNearestCitizen(QueryLoc, InteractionRadiusCm, Citizen, CitizenDistCm);
+
+	if (!bHasPlace && !bHasCitizen)
 	{
+		return;
+	}
+
+	// Choose whichever target is closer within the 2 m radius
+	if (bHasCitizen && (!bHasPlace || CitizenDistCm < PlaceDistCm))
+	{
+		NearestCitizenId = Citizen.CitizenId;
+		FDoemitzTaskInstance Offered;
+		const bool bHasOffer = Subsystem->GetTaskOfferedByCitizen(Citizen.CitizenId, Offered);
+		FDoemitzTaskInstance ActiveFetch;
+		const bool bCanCompleteFetch = Subsystem->GetActiveFetchTaskForCitizen(Citizen.CitizenId, ActiveFetch) &&
+			Subsystem->GetInventoryQuantity(ActiveFetch.RequestedItemId) >= 1;
+		CurrentPromptText = FDoemitzUiText::FormatCitizenPrompt(Citizen, bHasOffer, bCanCompleteFetch);
 		return;
 	}
 
 	NearestPlaceId = Place.PlaceId;
 	NearestEntranceId = Place.EntranceId;
-	NearestPlaceDisplayName = Place.DisplayName;
-	bNearestPlaceOpen = Subsystem->IsPlaceOpenNow(Place.PlaceId);
-	const FString StatusText = Subsystem->GetPlaceOpeningStatusText(Place.PlaceId);
-
-	if (bNearestPlaceOpen)
-	{
-		CurrentPrompt = FString::Printf(TEXT("E - %s (%s)"), *Place.DisplayName, *StatusText);
-	}
-	else
-	{
-		CurrentPrompt = FString::Printf(TEXT("%s (%s)"), *Place.DisplayName, *StatusText);
-	}
+	const FDoemitzOpeningStatus Status = Subsystem->GetPlaceOpeningStatus(Place.PlaceId);
+	bNearestPlaceOpen = Status.bOpen;
+	CurrentPromptText = FDoemitzUiText::FormatEntrancePrompt(Place, Status);
 }
 
 bool UDoemitzInteractionComponent::TryInteract()
 {
-	if (ActiveMenuWidget)
+	if (ActiveMenuWidget || ActiveCitizenDialogWidget)
 	{
 		CloseMenu();
 		return true;
 	}
 
 	RefreshNearestEntrance();
-	if (NearestPlaceId.IsNone())
+	if (NearestPlaceId.IsNone() && NearestCitizenId.IsNone())
 	{
 		return false;
 	}
 
 	UWorld* World = GetWorld();
 	UDoemitzSimulationSubsystem* Subsystem = World ? World->GetSubsystem<UDoemitzSimulationSubsystem>() : nullptr;
-	if (!Subsystem)
+	APlayerController* PC = World ? World->GetFirstPlayerController() : nullptr;
+	if (!Subsystem || !PC || !PC->IsLocalController())
 	{
 		return false;
 	}
 
+	// Citizen dialog interaction (Milestone 4)
+	if (!NearestCitizenId.IsNone())
+	{
+		ActiveCitizenDialogWidget = CreateWidget<UDoemitzCitizenDialogWidget>(PC, UDoemitzCitizenDialogWidget::StaticClass());
+		if (!ActiveCitizenDialogWidget)
+		{
+			return false;
+		}
+		ActiveDialogCitizenId = NearestCitizenId;
+		Subsystem->SetCitizenDialogPaused(ActiveDialogCitizenId, true);
+		ActiveCitizenDialogWidget->OnCloseRequested.BindUObject(this, &UDoemitzInteractionComponent::CloseMenu);
+		ActiveCitizenDialogWidget->OpenForCitizen(ActiveDialogCitizenId);
+		ActiveCitizenDialogWidget->AddToViewport(20);
+
+		PC->SetShowMouseCursor(true);
+		FInputModeGameAndUI InputMode;
+		InputMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
+		InputMode.SetHideCursorDuringCapture(false);
+		PC->SetInputMode(InputMode);
+		return true;
+	}
+
+	// Place entrance interaction
 	if (!bNearestPlaceOpen)
 	{
-		Subsystem->SetNotification(FString::Printf(
-			TEXT("%s ist geschlossen (%s)"),
-			*NearestPlaceDisplayName,
-			*Subsystem->GetPlaceOpeningStatusText(NearestPlaceId)));
-		return false;
-	}
-
-	APlayerController* PC = World->GetFirstPlayerController();
-	if (!PC || !PC->IsLocalController())
-	{
+		FDoemitzNotificationEvent Ev;
+		Ev.Code = EDoemitzNotificationCode::PlaceClosed;
+		Ev.PlaceId = NearestPlaceId;
+		Subsystem->PushNotificationEvent(Ev);
 		return false;
 	}
 
@@ -122,6 +154,22 @@ void UDoemitzInteractionComponent::CloseMenu()
 	{
 		ActiveMenuWidget->RemoveFromParent();
 		ActiveMenuWidget = nullptr;
+	}
+	if (ActiveCitizenDialogWidget)
+	{
+		ActiveCitizenDialogWidget->RemoveFromParent();
+		ActiveCitizenDialogWidget = nullptr;
+	}
+	if (!ActiveDialogCitizenId.IsNone())
+	{
+		if (UWorld* World = GetWorld())
+		{
+			if (UDoemitzSimulationSubsystem* Subsystem = World->GetSubsystem<UDoemitzSimulationSubsystem>())
+			{
+				Subsystem->SetCitizenDialogPaused(ActiveDialogCitizenId, false);
+			}
+		}
+		ActiveDialogCitizenId = NAME_None;
 	}
 	if (UWorld* World = GetWorld())
 	{

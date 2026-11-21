@@ -17,16 +17,22 @@ public:
 	void RefreshDisplay();
 
 	UFUNCTION(BlueprintPure, Category = "UI")
-	FString GetClockTextString() const { return LastClockString; }
+	FString GetClockTextString() const { return LastClockText.ToString(); }
 
 	UFUNCTION(BlueprintPure, Category = "UI")
-	FString GetStatusTextString() const { return LastStatusString; }
+	FString GetStatusTextString() const { return LastStatusText.ToString(); }
 
 	UFUNCTION(BlueprintPure, Category = "UI")
-	FString GetMoneyTextString() const { return LastMoneyString; }
+	FString GetMoneyTextString() const { return LastMoneyText.ToString(); }
 
 	UFUNCTION(BlueprintPure, Category = "UI")
-	FString GetInteractionPromptString() const { return LastPromptString; }
+	FString GetActiveTaskTextString() const { return LastActiveTaskText.ToString(); }
+
+	UFUNCTION(BlueprintPure, Category = "UI")
+	FString GetNoticeTextString() const { return LastNoticeText.ToString(); }
+
+	UFUNCTION(BlueprintPure, Category = "UI")
+	FString GetInteractionPromptString() const { return LastPromptText.ToString(); }
 
 protected:
 	virtual TSharedRef<SWidget> RebuildWidget() override;
@@ -44,6 +50,9 @@ private:
 	TObjectPtr<UTextBlock> MoneyText;
 
 	UPROPERTY(Transient)
+	TObjectPtr<UTextBlock> ActiveTaskText;
+
+	UPROPERTY(Transient)
 	TObjectPtr<UTextBlock> NoticeText;
 
 	UPROPERTY(Transient)
@@ -52,9 +61,10 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UTextBlock> PromptText;
 
-	FString LastClockString;
-	FString LastStatusString;
-	FString LastMoneyString;
-	FString LastNoticeString;
-	FString LastPromptString;
+	FText LastClockText;
+	FText LastStatusText;
+	FText LastMoneyText;
+	FText LastActiveTaskText;
+	FText LastNoticeText;
+	FText LastPromptText;
 };

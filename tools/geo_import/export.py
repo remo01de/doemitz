@@ -16,7 +16,7 @@ from tools.validation.scene import reference_measurement, validate
 LAYERS = ("roads", "buildings", "water", "pois")
 AREA_TAGS = ("building", "building:levels", "height", "name", "natural", "water", "waterway")
 ROAD_TAGS = ("highway", "name", "bridge", "tunnel", "layer", "lanes", "width", "surface", "oneway", "maxspeed")
-POI_TAGS = ("name", "shop", "amenity", "office", "tourism", "opening_hours", "building", "addr:street", "addr:housenumber")
+POI_TAGS = ("name", "shop", "amenity", "office", "tourism", "opening_hours", "building", "addr:street", "addr:housenumber", "parking", "capacity", "access")
 
 
 def geometry_parts(geometry, geometry_type: str):
@@ -220,6 +220,7 @@ def build(config: dict, raw_dir: Path, output_dir: Path) -> None:
     validate(local_layers)
     crossings = []
     entrances = []
+    priority_signs = []
     for node_id in sorted(dataset.node_tags):
         ntags = dataset.node_tags[node_id]
         if node_id not in dataset.nodes:
@@ -234,6 +235,14 @@ def build(config: dict, raw_dir: Path, output_dir: Path) -> None:
                 "position_m": [round(east, 4), round(north, 4)],
                 "crossing": ntags.get("crossing", "unmarked"),
                 "markings": ntags.get("crossing:markings", ""),
+            })
+        if ntags.get("highway") in ("give_way", "stop"):
+            east, north = frame.xy(lon, lat)
+            priority_signs.append({
+                "id": f"osm:node:{node_id}",
+                "position_m": [round(east, 4), round(north, 4)],
+                "sign": ntags["highway"],
+                "direction": ntags.get("direction", ""),
             })
         if ntags.get("entrance") not in (None, "", "no"):
             east, north = frame.xy(lon, lat)
@@ -262,6 +271,7 @@ def build(config: dict, raw_dir: Path, output_dir: Path) -> None:
         "layers": local_layers,
         "crossings": crossings,
         "entrances": entrances,
+        "priority_signs": priority_signs,
     }
     counts = {layer: len(features) for layer, features in layers.items()}
     files = []

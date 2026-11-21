@@ -25,6 +25,8 @@ private:
 
 	bool bBenchmarkActive = false;
 	bool bFinished = false;
+	bool bOpenCityMap = false;
+	bool bMapOpenedForBenchmark = false;
 	FString ProfileName = TEXT("Default");
 	FString OutputPathOverride;
 

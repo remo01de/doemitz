@@ -71,8 +71,10 @@ def check(_delta_seconds):
                 raise RuntimeError("BuyItem should fail with insufficient funds")
             if sub.get_player_money_cents() != 100 or sub.get_inventory_quantity("item_pflaster") != 1:
                 raise RuntimeError("failed purchase mutated money or inventory")
-            if "Nicht genug Geld" not in sub.get_last_notification():
-                raise RuntimeError(f"expected insufficient funds notice, got {sub.get_last_notification()!r}")
+            widget.refresh_display()
+            notice_text = widget.get_notice_text_string()
+            if "Nicht genug Geld f\u00fcr" not in notice_text:
+                raise RuntimeError(f"expected insufficient funds UI notice with umlaut, got {notice_text!r}")
 
             # 4. Accept job at Kaufhaus (09:00-13:00, 1450 ct/h) and start 1 hour late (10:00 -> 3h = 4350 ct)
             if not sub.accept_job(KAUFHAUS_ID):

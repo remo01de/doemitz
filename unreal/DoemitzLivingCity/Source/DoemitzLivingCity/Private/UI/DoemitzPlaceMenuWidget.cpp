@@ -11,6 +11,7 @@
 #include "Components/VerticalBox.h"
 #include "Components/VerticalBoxSlot.h"
 #include "Simulation/DoemitzSimulationSubsystem.h"
+#include "UI/DoemitzUiText.h"
 
 void UDoemitzShopActionHandler::HandleBuyClicked()
 {
@@ -35,7 +36,7 @@ TSharedRef<SWidget> UDoemitzPlaceMenuWidget::RebuildWidget()
 			PanelSlot->SetAnchors(FAnchors(0.5f, 0.5f, 0.5f, 0.5f));
 			PanelSlot->SetAlignment(FVector2D(0.5f, 0.5f));
 			PanelSlot->SetPosition(FVector2D(0.0f, 0.0f));
-			PanelSlot->SetSize(FVector2D(540.0f, 520.0f));
+			PanelSlot->SetSize(FVector2D(560.0f, 560.0f));
 		}
 
 		UVerticalBox* MainBox = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("MainBox"));
@@ -57,7 +58,7 @@ TSharedRef<SWidget> UDoemitzPlaceMenuWidget::RebuildWidget()
 		UButton* CloseBtn = WidgetTree->ConstructWidget<UButton>(UButton::StaticClass(), TEXT("CloseButton"));
 		CloseBtn->OnClicked.AddDynamic(this, &UDoemitzPlaceMenuWidget::HandleCloseClicked);
 		UTextBlock* CloseLbl = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("CloseLabel"));
-		CloseLbl->SetText(FText::FromString(TEXT("Schliessen [E/Esc]")));
+		CloseLbl->SetText(FText::FromString(TEXT("Schlie\u00dfen [E/Esc]")));
 		FSlateFontInfo BtnFont = CloseLbl->GetFont();
 		BtnFont.Size = 12;
 		CloseLbl->SetFont(BtnFont);
@@ -81,7 +82,13 @@ TSharedRef<SWidget> UDoemitzPlaceMenuWidget::RebuildWidget()
 		RevenueText->SetFont(RevFont);
 		if (UVerticalBoxSlot* RevSlot = MainBox->AddChildToVerticalBox(RevenueText))
 		{
-			RevSlot->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 12.0f));
+			RevSlot->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 10.0f));
+		}
+
+		TaskBox = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("TaskBox"));
+		if (UVerticalBoxSlot* TaskSlot = MainBox->AddChildToVerticalBox(TaskBox))
+		{
+			TaskSlot->SetPadding(FMargin(0.0f, 2.0f, 0.0f, 10.0f));
 		}
 
 		ItemsBox = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("ItemsBox"));
@@ -128,10 +135,11 @@ void UDoemitzPlaceMenuWidget::RefreshContents()
 	}
 	if (SubHeaderText)
 	{
+		const FText StatusTxt = FDoemitzUiText::FormatOpeningStatus(Subsystem->GetPlaceOpeningStatus(CurrentPlaceId));
 		SubHeaderText->SetText(FText::FromString(FString::Printf(
 			TEXT("%s  |  Konto: %s"),
-			*Subsystem->GetPlaceOpeningStatusText(CurrentPlaceId),
-			*UDoemitzSimulationSubsystem::FormatCentsEur(Subsystem->GetPlayerMoneyCents()))));
+			*StatusTxt.ToString(),
+			*FDoemitzUiText::FormatCentsEur(Subsystem->GetPlayerMoneyCents()).ToString())));
 	}
 	if (RevenueText)
 	{
@@ -140,8 +148,48 @@ void UDoemitzPlaceMenuWidget::RefreshContents()
 		Subsystem->GetPlaceRevenue(CurrentPlaceId, DailyCents, WeeklyCents);
 		RevenueText->SetText(FText::FromString(FString::Printf(
 			TEXT("Tagesumsatz: %s  |  Wochenumsatz: %s"),
-			*UDoemitzSimulationSubsystem::FormatCentsEur(DailyCents),
-			*UDoemitzSimulationSubsystem::FormatCentsEur(WeeklyCents))));
+			*FDoemitzUiText::FormatCentsEur(DailyCents).ToString(),
+			*FDoemitzUiText::FormatCentsEur(WeeklyCents).ToString())));
+	}
+
+	ActiveErrandTaskId = NAME_None;
+	bActiveErrandIsDelivery = false;
+	if (TaskBox)
+	{
+		TaskBox->ClearChildren();
+		FDoemitzTaskInstance ErrandTask;
+		bool bIsDelivery = false;
+		if (Subsystem->GetActiveErrandForPlace(CurrentPlaceId, ErrandTask, bIsDelivery))
+		{
+			ActiveErrandTaskId = ErrandTask.TaskId;
+			bActiveErrandIsDelivery = bIsDelivery;
+
+			UTextBlock* TaskHdr = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+			TaskHdr->SetText(FText::FromString(FString::Printf(
+				TEXT("Aktiver Botengang: %s (Frist %02d:%02d)"),
+				*ErrandTask.Title,
+				ErrandTask.DeadlineMinute / 60,
+				ErrandTask.DeadlineMinute % 60)));
+			TaskHdr->SetColorAndOpacity(FSlateColor(FLinearColor(1.0f, 0.88f, 0.42f, 1.0f)));
+			FSlateFontInfo Fnt = TaskHdr->GetFont();
+			Fnt.Size = 13;
+			TaskHdr->SetFont(Fnt);
+			TaskBox->AddChildToVerticalBox(TaskHdr);
+
+			UButton* ActionBtn = WidgetTree->ConstructWidget<UButton>(UButton::StaticClass());
+			ActionBtn->OnClicked.AddDynamic(this, &UDoemitzPlaceMenuWidget::HandleErrandActionClicked);
+			UTextBlock* ActionLbl = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+			ActionLbl->SetText(bIsDelivery
+				? FText::FromString(FString::Printf(
+					TEXT("%s abgeben (+%s)"),
+					*ErrandTask.ParcelName,
+					*FDoemitzUiText::FormatCentsEur(ErrandTask.RewardCents).ToString()))
+				: FText::FromString(FString::Printf(TEXT("%s abholen"), *ErrandTask.ParcelName)));
+			Fnt.Size = 12;
+			ActionLbl->SetFont(Fnt);
+			ActionBtn->AddChild(ActionLbl);
+			TaskBox->AddChildToVerticalBox(ActionBtn);
+		}
 	}
 
 	RowHandlers.Reset();
@@ -170,9 +218,9 @@ void UDoemitzPlaceMenuWidget::RefreshContents()
 				const int32 Owned = Subsystem->GetInventoryQuantity(Item.ItemId);
 				UTextBlock* Info = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
 				Info->SetText(FText::FromString(FString::Printf(
-					TEXT("%s  –  %s  (Inventar: %d)"),
+					TEXT("%s  \u2013  %s  (Inventar: %d)"),
 					*Item.DisplayName,
-					*UDoemitzSimulationSubsystem::FormatCentsEur(Item.PriceCents),
+					*FDoemitzUiText::FormatCentsEur(Item.PriceCents).ToString(),
 					Owned)));
 				Info->SetColorAndOpacity(FSlateColor(FLinearColor(0.92f, 0.92f, 0.92f, 1.0f)));
 				FSlateFontInfo RowFont = Info->GetFont();
@@ -217,11 +265,11 @@ void UDoemitzPlaceMenuWidget::RefreshContents()
 		{
 			UTextBlock* JobHeader = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
 			JobHeader->SetText(FText::FromString(FString::Printf(
-				TEXT("Stelle: %s (%02d:%02d–%02d:%02d, %s/Std.)"),
+				TEXT("Stelle: %s (%02d:%02d\u2013%02d:%02d, %s/Std.)"),
 				*Job.Title,
 				Job.ShiftStartMinute / 60, Job.ShiftStartMinute % 60,
 				Job.ShiftEndMinute / 60, Job.ShiftEndMinute % 60,
-				*UDoemitzSimulationSubsystem::FormatCentsEur(Job.HourlyWageCents))));
+				*FDoemitzUiText::FormatCentsEur(Job.HourlyWageCents).ToString())));
 			JobHeader->SetColorAndOpacity(FSlateColor(FLinearColor(0.78f, 0.90f, 0.98f, 1.0f)));
 			FSlateFontInfo JobFont = JobHeader->GetFont();
 			JobFont.Size = 13;
@@ -243,15 +291,16 @@ void UDoemitzPlaceMenuWidget::RefreshContents()
 			}
 			else
 			{
-				FString Reason;
-				const bool bCanStart = Subsystem->CanStartWorkShift(CurrentPlaceId, Reason);
+				const FDoemitzShiftAvailability Avail = Subsystem->CheckWorkShiftAvailability(CurrentPlaceId);
 				UButton* ShiftBtn = WidgetTree->ConstructWidget<UButton>(UButton::StaticClass());
-				ShiftBtn->SetIsEnabled(bCanStart);
+				ShiftBtn->SetIsEnabled(Avail.bCanStart);
 				ShiftBtn->OnClicked.AddDynamic(this, &UDoemitzPlaceMenuWidget::HandleStartShiftClicked);
 				UTextBlock* ShiftLbl = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-				ShiftLbl->SetText(FText::FromString(bCanStart
-					? TEXT("Schicht beginnen (15x)")
-					: FString::Printf(TEXT("Schicht nicht verfuegbar: %s"), *Reason)));
+				ShiftLbl->SetText(Avail.bCanStart
+					? FText::FromString(TEXT("Schicht beginnen (15x)"))
+					: FText::FromString(FString::Printf(
+						TEXT("Schicht nicht verf\u00fcgbar: %s"),
+						*FDoemitzUiText::FormatShiftAvailability(Avail).ToString())));
 				ShiftLbl->SetFont(JobFont);
 				ShiftBtn->AddChild(ShiftLbl);
 				JobBox->AddChildToVerticalBox(ShiftBtn);
@@ -288,6 +337,25 @@ void UDoemitzPlaceMenuWidget::HandleStartShiftClicked()
 		}
 		else
 		{
+			RefreshContents();
+		}
+	}
+}
+
+void UDoemitzPlaceMenuWidget::HandleErrandActionClicked()
+{
+	if (UDoemitzSimulationSubsystem* Subsystem = UDoemitzSimulationSubsystem::Get(this))
+	{
+		if (!ActiveErrandTaskId.IsNone())
+		{
+			if (bActiveErrandIsDelivery)
+			{
+				Subsystem->DeliverTaskParcel(ActiveErrandTaskId);
+			}
+			else
+			{
+				Subsystem->PickupTaskParcel(ActiveErrandTaskId);
+			}
 			RefreshContents();
 		}
 	}

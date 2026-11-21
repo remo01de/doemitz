@@ -4,6 +4,7 @@
 #include "Components/ActorComponent.h"
 #include "DoemitzInteractionComponent.generated.h"
 
+class UDoemitzCitizenDialogWidget;
 class UDoemitzPlaceMenuWidget;
 
 UCLASS(ClassGroup = (Doemitz), meta = (BlueprintSpawnableComponent))
@@ -29,22 +30,40 @@ public:
 	bool HasInteractableEntrance() const { return !NearestPlaceId.IsNone(); }
 
 	UFUNCTION(BlueprintPure, Category = "Interaction")
+	bool HasInteractableCitizen() const { return !NearestCitizenId.IsNone(); }
+
+	UFUNCTION(BlueprintPure, Category = "Interaction")
+	bool HasInteractableTarget() const { return !NearestPlaceId.IsNone() || !NearestCitizenId.IsNone(); }
+
+	UFUNCTION(BlueprintPure, Category = "Interaction")
 	FName GetNearestPlaceId() const { return NearestPlaceId; }
 
 	UFUNCTION(BlueprintPure, Category = "Interaction")
 	FName GetNearestEntranceId() const { return NearestEntranceId; }
 
 	UFUNCTION(BlueprintPure, Category = "Interaction")
+	FName GetNearestCitizenId() const { return NearestCitizenId; }
+
+	UFUNCTION(BlueprintPure, Category = "Interaction")
 	bool IsNearestPlaceOpen() const { return bNearestPlaceOpen; }
 
 	UFUNCTION(BlueprintPure, Category = "Interaction")
-	FString GetInteractionPrompt() const { return CurrentPrompt; }
+	FText GetInteractionPromptText() const { return CurrentPromptText; }
 
 	UFUNCTION(BlueprintPure, Category = "Interaction")
-	bool IsMenuOpen() const { return ActiveMenuWidget != nullptr; }
+	FString GetInteractionPrompt() const { return CurrentPromptText.ToString(); }
+
+	UFUNCTION(BlueprintPure, Category = "Interaction")
+	bool IsMenuOpen() const { return ActiveMenuWidget != nullptr || ActiveCitizenDialogWidget != nullptr; }
+
+	UFUNCTION(BlueprintPure, Category = "Interaction")
+	bool IsCitizenDialogOpen() const { return ActiveCitizenDialogWidget != nullptr; }
 
 	UFUNCTION(BlueprintPure, Category = "Interaction")
 	UDoemitzPlaceMenuWidget* GetActiveMenuWidget() const { return ActiveMenuWidget; }
+
+	UFUNCTION(BlueprintPure, Category = "Interaction")
+	UDoemitzCitizenDialogWidget* GetActiveCitizenDialogWidget() const { return ActiveCitizenDialogWidget; }
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Interaction", meta = (Units = "cm"))
 	double InteractionRadiusCm = 200.0;
@@ -52,10 +71,14 @@ public:
 private:
 	FName NearestPlaceId;
 	FName NearestEntranceId;
-	FString NearestPlaceDisplayName;
+	FName NearestCitizenId;
+	FName ActiveDialogCitizenId;
 	bool bNearestPlaceOpen = false;
-	FString CurrentPrompt;
+	FText CurrentPromptText;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UDoemitzPlaceMenuWidget> ActiveMenuWidget;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UDoemitzCitizenDialogWidget> ActiveCitizenDialogWidget;
 };

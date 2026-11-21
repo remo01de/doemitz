@@ -26,6 +26,7 @@
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
 #include "Settings/DoemitzGraphicsSettings.h"
+#include "Simulation/DoemitzSimulationConfig.h"
 #include "Traffic/DoemitzTrafficVehicle.h"
 
 namespace
@@ -111,6 +112,8 @@ void UDoemitzBenchmarkSubsystem::OnWorldBeginPlay(UWorld& InWorld)
 	FParse::Value(CmdLine, TEXT("DoemitzBenchmarkDuration="), DurationSeconds);
 	FParse::Value(CmdLine, TEXT("DoemitzBenchmarkWarmup="), WarmupSeconds);
 	FParse::Value(CmdLine, TEXT("DoemitzBenchmarkOut="), OutputPathOverride);
+	bOpenCityMap = FParse::Param(CmdLine, TEXT("DoemitzBenchmarkOpenMap"));
+	bMapOpenedForBenchmark = false;
 	DurationSeconds = FMath::Max(1.0, DurationSeconds);
 	WarmupSeconds = FMath::Max(0.0, WarmupSeconds);
 
@@ -234,6 +237,22 @@ void UDoemitzBenchmarkSubsystem::Tick(float DeltaTime)
 		PC->SetControlRotation(LookRotation);
 	}
 
+	if (bOpenCityMap && !bMapOpenedForBenchmark)
+	{
+		for (TActorIterator<ADoemitzSimulationConfig> It(World); It; ++It)
+		{
+			if (ADoemitzSimulationConfig* Config = *It)
+			{
+				Config->SetCityMapOpen(true);
+				if (Config->IsCityMapOpen())
+				{
+					bMapOpenedForBenchmark = true;
+				}
+				break;
+			}
+		}
+	}
+
 	if (ElapsedWarmup < WarmupSeconds)
 	{
 		ElapsedWarmup += WallDeltaSeconds;
@@ -319,6 +338,7 @@ void UDoemitzBenchmarkSubsystem::FinishBenchmark()
 	Root->SetNumberField(TEXT("resolution_width"), ResX);
 	Root->SetNumberField(TEXT("resolution_height"), ResY);
 	Root->SetNumberField(TEXT("vehicle_count"), VehicleCount);
+	Root->SetBoolField(TEXT("city_map_open"), bMapOpenedForBenchmark);
 	Root->SetStringField(TEXT("cpu"), FPlatformMisc::GetCPUBrand());
 	Root->SetStringField(TEXT("gpu"), FPlatformMisc::GetPrimaryGPUBrand());
 	Root->SetStringField(TEXT("timestamp_utc"), FDateTime::UtcNow().ToIso8601());

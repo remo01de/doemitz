@@ -2,12 +2,15 @@
 
 #include "Blueprint/UserWidget.h"
 #include "Character/DoemitzCharacter.h"
+#include "Engine/Texture2D.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "InputCoreTypes.h"
 #include "Interaction/DoemitzInteractionComponent.h"
 #include "Settings/DoemitzGraphicsSettings.h"
+#include "UI/DoemitzCityMapWidget.h"
 #include "UI/DoemitzClockWidget.h"
+#include "UI/DoemitzTaskJournalWidget.h"
 
 ADoemitzSimulationConfig::ADoemitzSimulationConfig()
 {
@@ -23,10 +26,12 @@ void ADoemitzSimulationConfig::BeginPlay()
 	{
 		Subsystem->ConfigureSimulation(StartMinute, TimeScale, Places, Routes, Citizens);
 		Subsystem->ConfigureEconomy(EconomyData);
+		Subsystem->ConfigureTasks(TaskData);
+		Subsystem->ConfigureCityMap(CityMapTexture, CityMapBounds);
 		Subsystem->ConfigureCitizenPool(CitizenMeshVariants, CitizenLodRadiusCm);
 		if (!RoadEdges.IsEmpty() && !Vehicles.IsEmpty())
 		{
-			Subsystem->ConfigureTrafficNetwork(TrafficSeed, RoadEdges, Vehicles, Crossings);
+			Subsystem->ConfigureTrafficNetwork(TrafficSeed, RoadEdges, Vehicles, Crossings, ParkingLots);
 		}
 	}
 	TryAttachClockHud();
@@ -64,6 +69,140 @@ void ADoemitzSimulationConfig::TryAttachClockHud()
 	}
 }
 
+void ADoemitzSimulationConfig::UpdateCursorAndInputMode()
+{
+	UWorld* World = GetWorld();
+	APlayerController* PC = World ? World->GetFirstPlayerController() : nullptr;
+	if (!PC || !PC->IsLocalController())
+	{
+		return;
+	}
+	bool bInteractionOpen = false;
+	if (const ADoemitzCharacter* Character = Cast<ADoemitzCharacter>(PC->GetPawn()))
+	{
+		if (const UDoemitzInteractionComponent* Interaction = Character->GetInteractionComponent())
+		{
+			bInteractionOpen = Interaction->IsMenuOpen();
+		}
+	}
+	const bool bAnyOverlayOpen = (CityMapWidget != nullptr) || (TaskJournalWidget != nullptr) || bInteractionOpen;
+	if (bAnyOverlayOpen)
+	{
+		PC->SetShowMouseCursor(true);
+		FInputModeGameAndUI InputMode;
+		InputMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
+		InputMode.SetHideCursorDuringCapture(false);
+		PC->SetInputMode(InputMode);
+	}
+	else
+	{
+		PC->SetShowMouseCursor(false);
+		FInputModeGameOnly GameMode;
+		PC->SetInputMode(GameMode);
+	}
+}
+
+void ADoemitzSimulationConfig::SetCityMapOpen(bool bOpen)
+{
+	if (bOpen == (CityMapWidget != nullptr))
+	{
+		return;
+	}
+	if (!bOpen)
+	{
+		if (CityMapWidget)
+		{
+			CityMapWidget->RemoveFromParent();
+			CityMapWidget = nullptr;
+		}
+		UpdateCursorAndInputMode();
+		return;
+	}
+
+	// Close other full overlays cleanly before opening map
+	SetTaskJournalOpen(false);
+	UWorld* World = GetWorld();
+	APlayerController* PC = World ? World->GetFirstPlayerController() : nullptr;
+	if (!PC || !PC->IsLocalController())
+	{
+		return;
+	}
+	if (ADoemitzCharacter* Character = Cast<ADoemitzCharacter>(PC->GetPawn()))
+	{
+		if (UDoemitzInteractionComponent* Interaction = Character->GetInteractionComponent())
+		{
+			if (Interaction->IsMenuOpen())
+			{
+				Interaction->CloseMenu();
+			}
+		}
+	}
+
+	CityMapWidget = CreateWidget<UDoemitzCityMapWidget>(PC, UDoemitzCityMapWidget::StaticClass());
+	if (CityMapWidget)
+	{
+		CityMapWidget->OnCloseRequested.BindLambda([this]() { SetCityMapOpen(false); });
+		CityMapWidget->AddToViewport(30);
+		CityMapWidget->RefreshMapData();
+		UpdateCursorAndInputMode();
+	}
+}
+
+void ADoemitzSimulationConfig::ToggleCityMap()
+{
+	SetCityMapOpen(!IsCityMapOpen());
+}
+
+void ADoemitzSimulationConfig::SetTaskJournalOpen(bool bOpen)
+{
+	if (bOpen == (TaskJournalWidget != nullptr))
+	{
+		return;
+	}
+	if (!bOpen)
+	{
+		if (TaskJournalWidget)
+		{
+			TaskJournalWidget->RemoveFromParent();
+			TaskJournalWidget = nullptr;
+		}
+		UpdateCursorAndInputMode();
+		return;
+	}
+
+	SetCityMapOpen(false);
+	UWorld* World = GetWorld();
+	APlayerController* PC = World ? World->GetFirstPlayerController() : nullptr;
+	if (!PC || !PC->IsLocalController())
+	{
+		return;
+	}
+	if (ADoemitzCharacter* Character = Cast<ADoemitzCharacter>(PC->GetPawn()))
+	{
+		if (UDoemitzInteractionComponent* Interaction = Character->GetInteractionComponent())
+		{
+			if (Interaction->IsMenuOpen())
+			{
+				Interaction->CloseMenu();
+			}
+		}
+	}
+
+	TaskJournalWidget = CreateWidget<UDoemitzTaskJournalWidget>(PC, UDoemitzTaskJournalWidget::StaticClass());
+	if (TaskJournalWidget)
+	{
+		TaskJournalWidget->OnCloseRequested.BindLambda([this]() { SetTaskJournalOpen(false); });
+		TaskJournalWidget->AddToViewport(25);
+		TaskJournalWidget->RefreshContents();
+		UpdateCursorAndInputMode();
+	}
+}
+
+void ADoemitzSimulationConfig::ToggleTaskJournal()
+{
+	SetTaskJournalOpen(!IsTaskJournalOpen());
+}
+
 void ADoemitzSimulationConfig::HandleHotkeys()
 {
 	UWorld* World = GetWorld();
@@ -82,9 +221,25 @@ void ADoemitzSimulationConfig::HandleHotkeys()
 		return;
 	}
 
-	if (PC->WasInputKeyJustPressed(EKeys::E))
+	if (PC->WasInputKeyJustPressed(EKeys::M))
 	{
-		if (ADoemitzCharacter* Character = Cast<ADoemitzCharacter>(PC->GetPawn()))
+		ToggleCityMap();
+	}
+	else if (PC->WasInputKeyJustPressed(EKeys::J))
+	{
+		ToggleTaskJournal();
+	}
+	else if (PC->WasInputKeyJustPressed(EKeys::E))
+	{
+		if (IsCityMapOpen())
+		{
+			SetCityMapOpen(false);
+		}
+		else if (IsTaskJournalOpen())
+		{
+			SetTaskJournalOpen(false);
+		}
+		else if (ADoemitzCharacter* Character = Cast<ADoemitzCharacter>(PC->GetPawn()))
 		{
 			if (UDoemitzInteractionComponent* Interaction = Character->GetInteractionComponent())
 			{
@@ -94,7 +249,15 @@ void ADoemitzSimulationConfig::HandleHotkeys()
 	}
 	else if (PC->WasInputKeyJustPressed(EKeys::Escape))
 	{
-		if (ADoemitzCharacter* Character = Cast<ADoemitzCharacter>(PC->GetPawn()))
+		if (IsCityMapOpen())
+		{
+			SetCityMapOpen(false);
+		}
+		else if (IsTaskJournalOpen())
+		{
+			SetTaskJournalOpen(false);
+		}
+		else if (ADoemitzCharacter* Character = Cast<ADoemitzCharacter>(PC->GetPawn()))
 		{
 			if (UDoemitzInteractionComponent* Interaction = Character->GetInteractionComponent())
 			{
@@ -114,46 +277,62 @@ void ADoemitzSimulationConfig::HandleHotkeys()
 		if (UDoemitzGraphicsSettings* GraphicsSettings = UDoemitzGraphicsSettings::Get())
 		{
 			const FString NewProfile = GraphicsSettings->ToggleProfile(World);
-			Subsystem->SetNotification(FString::Printf(TEXT("Grafikprofil: %s"), *NewProfile));
+			FDoemitzNotificationEvent Ev;
+			Ev.Code = EDoemitzNotificationCode::GraphicsProfileChanged;
+			Ev.ParameterKey = NewProfile;
+			Subsystem->PushNotificationEvent(Ev);
 		}
 	}
 	else if (PC->WasInputKeyJustPressed(EKeys::F9))
 	{
 		if (!Subsystem->LoadCityState())
 		{
-			Subsystem->SetNotification(TEXT("Kein Spielstand vorhanden"));
+			FDoemitzNotificationEvent Ev;
+			Ev.Code = EDoemitzNotificationCode::NoSaveFound;
+			Subsystem->PushNotificationEvent(Ev);
 		}
 	}
 	else if (PC->WasInputKeyJustPressed(EKeys::One))
 	{
 		PreviousActiveTimeScale = 60.0;
 		Subsystem->SetTimeScale(60.0);
-		Subsystem->SetNotification(TEXT("Zeit: 1x"));
+		FDoemitzNotificationEvent Ev;
+		Ev.Code = EDoemitzNotificationCode::TimeScaleChanged;
+		Ev.ParameterKey = TEXT("1x");
+		Subsystem->PushNotificationEvent(Ev);
 	}
 	else if (PC->WasInputKeyJustPressed(EKeys::Two))
 	{
 		PreviousActiveTimeScale = 300.0;
 		Subsystem->SetTimeScale(300.0);
-		Subsystem->SetNotification(TEXT("Zeit: 5x"));
+		FDoemitzNotificationEvent Ev;
+		Ev.Code = EDoemitzNotificationCode::TimeScaleChanged;
+		Ev.ParameterKey = TEXT("5x");
+		Subsystem->PushNotificationEvent(Ev);
 	}
 	else if (PC->WasInputKeyJustPressed(EKeys::Three))
 	{
 		PreviousActiveTimeScale = 900.0;
 		Subsystem->SetTimeScale(900.0);
-		Subsystem->SetNotification(TEXT("Zeit: 15x"));
+		FDoemitzNotificationEvent Ev;
+		Ev.Code = EDoemitzNotificationCode::TimeScaleChanged;
+		Ev.ParameterKey = TEXT("15x");
+		Subsystem->PushNotificationEvent(Ev);
 	}
 	else if (PC->WasInputKeyJustPressed(EKeys::P))
 	{
+		FDoemitzNotificationEvent Ev;
 		if (Subsystem->GetTimeScale() > 0.0)
 		{
 			PreviousActiveTimeScale = Subsystem->GetTimeScale();
 			Subsystem->SetTimeScale(0.0);
-			Subsystem->SetNotification(TEXT("Zeit: Pause"));
+			Ev.Code = EDoemitzNotificationCode::TimePaused;
 		}
 		else
 		{
 			Subsystem->SetTimeScale(FMath::Max(60.0, PreviousActiveTimeScale));
-			Subsystem->SetNotification(TEXT("Zeit: Fortgesetzt"));
+			Ev.Code = EDoemitzNotificationCode::TimeResumed;
 		}
+		Subsystem->PushNotificationEvent(Ev);
 	}
 }

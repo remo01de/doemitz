@@ -5,7 +5,8 @@ param(
     [int] $WarmupSeconds = 3,
     [int] $ResX = 1920,
     [int] $ResY = 1080,
-    [string] $OutputJson
+    [string] $OutputJson,
+    [switch] $OpenMap
 )
 
 $ErrorActionPreference = 'Stop'
@@ -38,6 +39,9 @@ $argsList = @(
     '-NoSound'
     '-unattended'
 )
+if ($OpenMap) {
+    $argsList += '-DoemitzBenchmarkOpenMap'
+}
 
 Write-Host "Running benchmark: profile=$Profile ${ResX}x${ResY} duration=${DurationSeconds}s -> $OutputJson"
 $proc = Start-Process -FilePath $Executable -ArgumentList $argsList -PassThru -Wait

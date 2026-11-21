@@ -5,9 +5,13 @@
 #include "Simulation/DoemitzSimulationSubsystem.h"
 #include "DoemitzSimulationConfig.generated.h"
 
+class UDoemitzCityMapWidget;
 class UDoemitzClockWidget;
 class UDoemitzEconomyDataAsset;
+class UDoemitzTaskDataAsset;
+class UDoemitzTaskJournalWidget;
 class UStaticMesh;
+class UTexture2D;
 
 UCLASS()
 class DOEMITZLIVINGCITY_API ADoemitzSimulationConfig : public AActor
@@ -21,12 +25,37 @@ public:
 	UFUNCTION(BlueprintPure, Category = "UI")
 	UDoemitzClockWidget* GetClockWidget() const { return ClockWidget; }
 
+	UFUNCTION(BlueprintCallable, Category = "UI")
+	void SetCityMapOpen(bool bOpen);
+
+	UFUNCTION(BlueprintCallable, Category = "UI")
+	void ToggleCityMap();
+
+	UFUNCTION(BlueprintPure, Category = "UI")
+	bool IsCityMapOpen() const { return CityMapWidget != nullptr; }
+
+	UFUNCTION(BlueprintPure, Category = "UI")
+	UDoemitzCityMapWidget* GetCityMapWidget() const { return CityMapWidget; }
+
+	UFUNCTION(BlueprintCallable, Category = "UI")
+	void SetTaskJournalOpen(bool bOpen);
+
+	UFUNCTION(BlueprintCallable, Category = "UI")
+	void ToggleTaskJournal();
+
+	UFUNCTION(BlueprintPure, Category = "UI")
+	bool IsTaskJournalOpen() const { return TaskJournalWidget != nullptr; }
+
+	UFUNCTION(BlueprintPure, Category = "UI")
+	UDoemitzTaskJournalWidget* GetTaskJournalWidget() const { return TaskJournalWidget; }
+
 protected:
 	virtual void BeginPlay() override;
 
 private:
 	void TryAttachClockHud();
 	void HandleHotkeys();
+	void UpdateCursorAndInputMode();
 
 	UPROPERTY(EditInstanceOnly, Category = "Simulation")
 	double StartMinute = 470.0;
@@ -61,14 +90,32 @@ private:
 	UPROPERTY(EditInstanceOnly, Category = "Traffic")
 	TArray<FDoemitzCrossingDefinition> Crossings;
 
+	UPROPERTY(EditInstanceOnly, Category = "Traffic")
+	TArray<FDoemitzParkingLotDefinition> ParkingLots;
+
 	UPROPERTY(EditInstanceOnly, Category = "Economy")
 	TObjectPtr<UDoemitzEconomyDataAsset> EconomyData;
+
+	UPROPERTY(EditInstanceOnly, Category = "Tasks")
+	TObjectPtr<UDoemitzTaskDataAsset> TaskData;
+
+	UPROPERTY(EditInstanceOnly, Category = "Map")
+	TObjectPtr<UTexture2D> CityMapTexture;
+
+	UPROPERTY(EditInstanceOnly, Category = "Map")
+	FDoemitzMapBounds CityMapBounds;
 
 	UPROPERTY(EditAnywhere, Category = "UI")
 	TSubclassOf<UDoemitzClockWidget> ClockWidgetClass;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UDoemitzClockWidget> ClockWidget;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UDoemitzCityMapWidget> CityMapWidget;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UDoemitzTaskJournalWidget> TaskJournalWidget;
 
 	double PreviousActiveTimeScale = 60.0;
 };

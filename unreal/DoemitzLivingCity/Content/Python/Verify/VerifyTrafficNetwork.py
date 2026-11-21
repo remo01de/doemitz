@@ -7,7 +7,7 @@ editor = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem)
 level = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
 vehicle_class = unreal.load_class(None, "/Script/DoemitzLivingCity.DoemitzTrafficVehicle")
 
-EXPECTED_IDS = [f"altstadt_vehicle_0{i}" for i in range(1, 6)]
+EXPECTED_IDS = [f"altstadt_vehicle_0{i}" for i in range(1, 9)]
 # Real 90-degree Altstadt junction (Fritz-Reuter-Strasse / Goethestrasse):
 # Edge A approaches from left and must yield to Edge B approaching from the right (dot = 1.0).
 RVL_NODE = "osm:node:277309010"
@@ -49,9 +49,9 @@ def check(_delta_seconds):
         if sub is None or sub.get_vehicle_count() == 0:
             return
         actors = unreal.GameplayStatics.get_all_actors_of_class(world, vehicle_class)
-        if len(actors) != 5:
+        if len(actors) != 8:
             details = [(a.get_name(), str(a.get_vehicle_id())) for a in actors]
-            raise RuntimeError(f"expected 5 traffic vehicle actors, found {len(actors)}: {details}")
+            raise RuntimeError(f"expected 8 traffic vehicle actors, found {len(actors)}: {details}")
 
         if phase == "drive_network":
             unreal.GameplayStatics.set_global_time_dilation(world, 8.0)
@@ -60,8 +60,12 @@ def check(_delta_seconds):
                 st = get_vstate(sub, vid)
                 states[vid] = st
 
-            # Check pairwise 2D distance (no overlap / penetration)
-            locs = [states[vid].get_editor_property("world_location") for vid in EXPECTED_IDS]
+            # Check pairwise 2D distance among driving vehicles (no overlap / penetration)
+            active_ids = [
+                vid for vid in EXPECTED_IDS
+                if states[vid].get_editor_property("phase") == unreal.DoemitzVehiclePhase.DRIVING
+            ]
+            locs = [states[vid].get_editor_property("world_location") for vid in active_ids]
             for i in range(len(locs)):
                 for j in range(i + 1, len(locs)):
                     dx = locs[i].x - locs[j].x
@@ -71,11 +75,11 @@ def check(_delta_seconds):
                         min_pair_dist_cm = d
                     if d < 220.0:
                         raise RuntimeError(
-                            f"vehicle overlap detected between {EXPECTED_IDS[i]} and {EXPECTED_IDS[j]}: {d:.1f} cm"
+                            f"vehicle overlap detected between {active_ids[i]} and {active_ids[j]}: {d:.1f} cm"
                         )
 
             decisions = [states[vid].get_editor_property("junction_decisions") for vid in EXPECTED_IDS]
-            if all(d >= 3 for d in decisions):
+            if sum(1 for d in decisions if d >= 2) >= 6:
                 # Move to Right-before-Left (Rechts vor links) deterministic scenario
                 unreal.GameplayStatics.set_global_time_dilation(world, 1.0)
                 if not sub.set_vehicle_edge_position_for_test("altstadt_vehicle_01", RVL_LEFT_EDGE, RVL_LEFT_DIST_CM, 300.0):
@@ -99,7 +103,7 @@ def check(_delta_seconds):
                     for vid in EXPECTED_IDS
                 }
                 finish(
-                    f"DOEMITZ_TRAFFIC_NETWORK_PIE_OK: 5 vehicles, decisions={decisions_summary}, "
+                    f"DOEMITZ_TRAFFIC_NETWORK_PIE_OK: 8 vehicles, decisions={decisions_summary}, "
                     f"min_pair_dist={min_pair_dist_cm:.1f} cm, rvl_node={RVL_NODE} holder={holder} left_yielded=True",
                     True,
                 )

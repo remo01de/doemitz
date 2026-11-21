@@ -1,6 +1,7 @@
 #include "Simulation/DoemitzSimulationSubsystem.h"
 
 #include "Algo/BinarySearch.h"
+#include "Engine/Texture2D.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "GameFramework/Pawn.h"
@@ -19,6 +20,9 @@ namespace
 	constexpr double JunctionApproachCm = 950.0;
 	constexpr double JunctionStopLineCm = 420.0;
 	constexpr double JunctionClearanceCm = 550.0;
+	constexpr double StopSignHoldSeconds = 0.8;
+	constexpr double ParkingApproachToleranceCm = 320.0;
+	constexpr double ParkingManeuverSeconds = 2.0;
 	constexpr double PedestrianStopDistCm = 620.0;
 	constexpr double PedestrianLateralCm = 185.0;
 	constexpr double CrossingApproachDistCm = 900.0;
@@ -27,15 +31,15 @@ namespace
 	constexpr double VehicleAccelCmPerSecSq = 260.0;
 	constexpr double VehicleDecelCmPerSecSq = 550.0;
 
-	uint32 DeterministicHash(int32 Seed, FName VehicleId, int32 DecisionIndex)
+	uint32 DeterministicHash(int32 Seed, FName KeyId, int32 Salt)
 	{
 		uint32 H = static_cast<uint32>(Seed) * 2654435761u;
-		const FString Str = VehicleId.ToString();
+		const FString Str = KeyId.ToString();
 		for (TCHAR Ch : Str)
 		{
 			H = (H ^ static_cast<uint32>(Ch)) * 16777619u;
 		}
-		H = (H ^ static_cast<uint32>(DecisionIndex * 73856093)) * 2246822519u;
+		H = (H ^ static_cast<uint32>(Salt * 73856093)) * 2246822519u;
 		H ^= (H >> 13);
 		H *= 3266489917u;
 		H ^= (H >> 16);
@@ -108,7 +112,7 @@ void UDoemitzSimulationSubsystem::ConfigureSimulation(
 	TimeOfDayMinutes = FMath::Fmod(FMath::Max(0.0, InStartMinute), 1440.0);
 	TimeScale = FMath::Clamp(InTimeScale, 0.0, 3600.0);
 	DayNumber = 1;
-	DayOfWeek = 0; // Montag
+	DayOfWeek = 0; // Monday
 	CalendarWeek = 1;
 
 	CitizenRecords.Reset();
@@ -131,8 +135,8 @@ void UDoemitzSimulationSubsystem::ConfigureSimulation(
 	}
 
 	bIsConfigured = CitizenRecords.Num() > 0 || VehicleRecords.Num() > 0;
-	UE_LOG(LogTemp, Display, TEXT("Doemitz simulation started (%s, Tag %d, KW %d, %.1f min, scale %.1fx): %d places, %d routes, %d citizens"),
-		*GetDayOfWeekShortName(), DayNumber, CalendarWeek, TimeOfDayMinutes, TimeScale, PlacesById.Num(), RoutesByKey.Num(), CitizenRecords.Num());
+	UE_LOG(LogTemp, Display, TEXT("Doemitz simulation started (day=%d, dow=%d, kw=%d, %.1f min, scale=%.1fx): %d places, %d routes, %d citizens"),
+		DayNumber, DayOfWeek, CalendarWeek, TimeOfDayMinutes, TimeScale, PlacesById.Num(), RoutesByKey.Num(), CitizenRecords.Num());
 }
 
 void UDoemitzSimulationSubsystem::ConfigureCitizenPool(
@@ -142,7 +146,6 @@ void UDoemitzSimulationSubsystem::ConfigureCitizenPool(
 	CitizenMeshVariants = InMeshVariants;
 	CitizenLodRadiusCm = FMath::Max(500.0, InLodRadiusCm);
 
-	// Adopt any pre-existing citizen actors in the level into the active/pooled tracking maps
 	ActiveCitizenActors.Reset();
 	PooledCitizenActors.Reset();
 	if (UWorld* World = GetWorld())
@@ -162,16 +165,37 @@ void UDoemitzSimulationSubsystem::ConfigureCitizenPool(
 	UpdateCitizenLodPool();
 }
 
+void UDoemitzSimulationSubsystem::ConfigureCityMap(UTexture2D* InMapTexture, const FDoemitzMapBounds& InMapBounds)
+{
+	CityMapTexture = InMapTexture;
+	CityMapBounds = InMapBounds;
+}
+
+FVector2D UDoemitzSimulationSubsystem::ProjectWorldToNormalizedMap(const FVector& WorldLocationCm) const
+{
+	// Coordinate contract: UE X = North (cm), UE Y = East (cm)
+	const double EastM = WorldLocationCm.Y / 100.0;
+	const double NorthM = WorldLocationCm.X / 100.0;
+	const double SpanE = FMath::Max(1.0, CityMapBounds.ViewMaxEastM - CityMapBounds.ViewMinEastM);
+	const double SpanN = FMath::Max(1.0, CityMapBounds.ViewMaxNorthM - CityMapBounds.ViewMinNorthM);
+	const double U = (EastM - CityMapBounds.ViewMinEastM) / SpanE;
+	const double V = (CityMapBounds.ViewMaxNorthM - NorthM) / SpanN;
+	return FVector2D(U, V);
+}
+
 void UDoemitzSimulationSubsystem::ConfigureTrafficNetwork(
 	int32 InTrafficSeed,
 	const TArray<FDoemitzRoadEdgeDefinition>& InRoadEdges,
 	const TArray<FDoemitzVehicleDefinition>& InVehicles,
-	const TArray<FDoemitzCrossingDefinition>& InCrossings)
+	const TArray<FDoemitzCrossingDefinition>& InCrossings,
+	const TArray<FDoemitzParkingLotDefinition>& InParkingLots)
 {
 	TrafficSeed = InTrafficSeed;
 	RoadEdgesById.Reset();
 	OutgoingEdgesByNode.Reset();
 	Crossings = InCrossings;
+	ParkingLotsById.Reset();
+	OrderedParkingLotIds.Reset();
 	VehicleRecords.Reset();
 	OrderedVehicleIds.Reset();
 	JunctionReservations.Reset();
@@ -209,6 +233,21 @@ void UDoemitzSimulationSubsystem::ConfigureTrafficNetwork(
 		Pair.Value.Sort(FNameLexicalLess());
 	}
 
+	for (const FDoemitzParkingLotDefinition& LotDef : InParkingLots)
+	{
+		if (LotDef.ParkingLotId.IsNone() || !RoadEdgesById.Contains(LotDef.AccessEdgeId))
+		{
+			continue;
+		}
+		FParkingLotRecord LotRec;
+		LotRec.Definition = LotDef;
+		const int32 SlotCount = FMath::Max(1, LotDef.SlotLocations.Num() > 0 ? LotDef.SlotLocations.Num() : LotDef.Capacity);
+		LotRec.SlotOccupants.Init(NAME_None, SlotCount);
+		ParkingLotsById.Add(LotDef.ParkingLotId, MoveTemp(LotRec));
+		OrderedParkingLotIds.Add(LotDef.ParkingLotId);
+	}
+	OrderedParkingLotIds.Sort(FNameLexicalLess());
+
 	for (const FDoemitzVehicleDefinition& Def : InVehicles)
 	{
 		if (Def.VehicleId.IsNone())
@@ -226,11 +265,20 @@ void UDoemitzSimulationSubsystem::ConfigureTrafficNetwork(
 		FVehicleRecord Rec;
 		Rec.Definition = Def;
 		Rec.State.VehicleId = Def.VehicleId;
+		Rec.State.Phase = EDoemitzVehiclePhase::Driving;
 		Rec.State.CurrentEdgeId = Def.StartEdgeId;
 		Rec.State.DistanceOnEdgeCm = FMath::Clamp(Def.StartDistanceCm, 0.0, FMath::Max(0.0, Edge->LengthCm - 1.0));
 		Rec.State.CurrentSpeedCmPerSecond = FMath::Min(500.0, Edge->Definition.SpeedLimitCmPerSecond);
 		SampleEdgePose(*Edge, Rec.State.DistanceOnEdgeCm, Rec.State.WorldLocation, Rec.State.WorldRotation);
-		Rec.State.NextEdgeId = ChooseNextEdge(Rec);
+		if (!OrderedParkingLotIds.IsEmpty())
+		{
+			const FName TargetLot = ChooseNextParkingLot(Rec, NAME_None);
+			PlanRouteToParking(Rec, TargetLot);
+		}
+		if (Rec.State.NextEdgeId.IsNone())
+		{
+			Rec.State.NextEdgeId = ChooseNextEdge(Rec);
+		}
 
 		VehicleRecords.Add(Def.VehicleId, MoveTemp(Rec));
 		OrderedVehicleIds.Add(Def.VehicleId);
@@ -238,13 +286,14 @@ void UDoemitzSimulationSubsystem::ConfigureTrafficNetwork(
 
 	OrderedVehicleIds.Sort(FNameLexicalLess());
 	bIsConfigured = CitizenRecords.Num() > 0 || VehicleRecords.Num() > 0;
-	UE_LOG(LogTemp, Display, TEXT("Doemitz traffic network configured: seed=%d, %d edges, %d vehicles, %d crossings"),
-		TrafficSeed, RoadEdgesById.Num(), VehicleRecords.Num(), Crossings.Num());
+	UE_LOG(LogTemp, Display, TEXT("Doemitz traffic network configured: seed=%d, %d edges, %d vehicles, %d crossings, %d parking lots"),
+		TrafficSeed, RoadEdgesById.Num(), VehicleRecords.Num(), Crossings.Num(), ParkingLotsById.Num());
 }
 
 void UDoemitzSimulationSubsystem::ConfigureEconomy(const UDoemitzEconomyDataAsset* InEconomyData)
 {
 	AssortmentsByCategory.Reset();
+	ItemsById.Reset();
 	JobsById.Reset();
 	JobIdByPlace.Reset();
 	EconomySeed = 202609;
@@ -259,6 +308,13 @@ void UDoemitzSimulationSubsystem::ConfigureEconomy(const UDoemitzEconomyDataAsse
 			if (!Group.Category.IsNone() && !Group.Items.IsEmpty())
 			{
 				AssortmentsByCategory.Add(Group.Category, Group.Items);
+				for (const FDoemitzItemDefinition& Item : Group.Items)
+				{
+					if (!Item.ItemId.IsNone())
+					{
+						ItemsById.Add(Item.ItemId, Item);
+					}
+				}
 			}
 		}
 		for (const FDoemitzJobDefinition& Job : InEconomyData->Jobs)
@@ -272,8 +328,29 @@ void UDoemitzSimulationSubsystem::ConfigureEconomy(const UDoemitzEconomyDataAsse
 	}
 
 	ResetEconomyToDefaults();
-	UE_LOG(LogTemp, Display, TEXT("Doemitz economy configured: start=%s, %d categories, %d jobs (seed=%d)"),
-		*FormatCentsEur(StartingMoneyCents), AssortmentsByCategory.Num(), JobsById.Num(), EconomySeed);
+	UE_LOG(LogTemp, Display, TEXT("Doemitz economy configured: start=%lld ct, %d categories, %d jobs (seed=%d)"),
+		StartingMoneyCents, AssortmentsByCategory.Num(), JobsById.Num(), EconomySeed);
+}
+
+void UDoemitzSimulationSubsystem::ConfigureTasks(const UDoemitzTaskDataAsset* InTaskData)
+{
+	TaskTemplates.Reset();
+	Tasks.Reset();
+	TaskSeed = 202610;
+	DailyMinTasks = 3;
+	DailyMaxTasks = 5;
+
+	if (InTaskData)
+	{
+		TaskSeed = InTaskData->TaskSeed;
+		DailyMinTasks = FMath::Max(1, InTaskData->DailyMinTasks);
+		DailyMaxTasks = FMath::Max(DailyMinTasks, InTaskData->DailyMaxTasks);
+		TaskTemplates = InTaskData->Templates;
+	}
+
+	GenerateDailyTasks();
+	UE_LOG(LogTemp, Display, TEXT("Doemitz tasks configured: %d templates, %d daily tasks generated (seed=%d)"),
+		TaskTemplates.Num(), Tasks.Num(), TaskSeed);
 }
 
 void UDoemitzSimulationSubsystem::ResetEconomyToDefaults()
@@ -288,15 +365,6 @@ void UDoemitzSimulationSubsystem::ResetEconomyToDefaults()
 	PlayerInventory.Reset();
 	PlaceRevenues.Reset();
 	CitizenDailyShoppingRecorded.Reset();
-}
-
-FString UDoemitzSimulationSubsystem::FormatCentsEur(int64 AmountCents)
-{
-	const bool bNegative = AmountCents < 0;
-	const uint64 AbsCents = bNegative ? static_cast<uint64>(-AmountCents) : static_cast<uint64>(AmountCents);
-	const uint64 Euros = AbsCents / 100;
-	const uint64 Cents = AbsCents % 100;
-	return FString::Printf(TEXT("%s%llu,%02llu EUR"), bNegative ? TEXT("-") : TEXT(""), Euros, Cents);
 }
 
 void UDoemitzSimulationSubsystem::SetPlayerMoneyCentsForTest(int64 NewAmountCents)
@@ -359,6 +427,16 @@ TArray<FDoemitzInventoryItem> UDoemitzSimulationSubsystem::GetAllInventoryItems(
 	return Result;
 }
 
+bool UDoemitzSimulationSubsystem::GetItemDefinition(FName ItemId, FDoemitzItemDefinition& OutItem) const
+{
+	if (const FDoemitzItemDefinition* Found = ItemsById.Find(ItemId))
+	{
+		OutItem = *Found;
+		return true;
+	}
+	return false;
+}
+
 TArray<FDoemitzItemDefinition> UDoemitzSimulationSubsystem::GetItemsForPlace(FName PlaceId) const
 {
 	const FDoemitzPlaceDefinition* Place = PlacesById.Find(PlaceId);
@@ -391,7 +469,10 @@ bool UDoemitzSimulationSubsystem::BuyItem(FName PlaceId, FName ItemId, int32 Qua
 	}
 	if (!IsPlaceOpenNow(PlaceId))
 	{
-		SetNotification(FString::Printf(TEXT("%s ist geschlossen (%s)"), *Place->DisplayName, *GetPlaceOpeningStatusText(PlaceId)));
+		FDoemitzNotificationEvent Ev;
+		Ev.Code = EDoemitzNotificationCode::PlaceClosed;
+		Ev.PlaceId = PlaceId;
+		PushNotificationEvent(Ev);
 		return false;
 	}
 
@@ -407,26 +488,28 @@ bool UDoemitzSimulationSubsystem::BuyItem(FName PlaceId, FName ItemId, int32 Qua
 	const int64 TotalCost = FoundItem->PriceCents * static_cast<int64>(Quantity);
 	if (PlayerMoneyCents < TotalCost)
 	{
-		SetNotification(FString::Printf(
-			TEXT("Nicht genug Geld fuer %s (%s benoetigt, Konto %s)"),
-			*FoundItem->DisplayName,
-			*FormatCentsEur(TotalCost),
-			*FormatCentsEur(PlayerMoneyCents)));
+		FDoemitzNotificationEvent Ev;
+		Ev.Code = EDoemitzNotificationCode::InsufficientFunds;
+		Ev.PlaceId = PlaceId;
+		Ev.ItemId = ItemId;
+		Ev.AmountCents = TotalCost;
+		Ev.SecondaryAmountCents = PlayerMoneyCents;
+		PushNotificationEvent(Ev);
 		return false;
 	}
 
 	PlayerMoneyCents -= TotalCost;
 	PlayerInventory.FindOrAdd(ItemId) += Quantity;
 	AddPlaceRevenue(PlaceId, TotalCost);
-	AppendLedgerEntry(
-		PlaceId,
-		-TotalCost,
-		FString::Printf(TEXT("Kauf %dx %s (%s)"), Quantity, *FoundItem->DisplayName, *Place->DisplayName));
-	SetNotification(FString::Printf(
-		TEXT("Gekauft: %dx %s (-%s)"),
-		Quantity,
-		*FoundItem->DisplayName,
-		*FormatCentsEur(TotalCost)));
+	AppendLedgerEntry(PlaceId, -TotalCost, FString::Printf(TEXT("BUY:%s:%d"), *ItemId.ToString(), Quantity));
+
+	FDoemitzNotificationEvent Ev;
+	Ev.Code = EDoemitzNotificationCode::ItemPurchased;
+	Ev.PlaceId = PlaceId;
+	Ev.ItemId = ItemId;
+	Ev.Quantity = Quantity;
+	Ev.AmountCents = TotalCost;
+	PushNotificationEvent(Ev);
 	return true;
 }
 
@@ -443,6 +526,16 @@ bool UDoemitzSimulationSubsystem::GetJobForPlace(FName PlaceId, FDoemitzJobDefin
 	return false;
 }
 
+bool UDoemitzSimulationSubsystem::GetJobDefinition(FName JobId, FDoemitzJobDefinition& OutJob) const
+{
+	if (const FDoemitzJobDefinition* Job = JobsById.Find(JobId))
+	{
+		OutJob = *Job;
+		return true;
+	}
+	return false;
+}
+
 bool UDoemitzSimulationSubsystem::AcceptJob(FName PlaceId)
 {
 	FDoemitzJobDefinition Job;
@@ -452,63 +545,80 @@ bool UDoemitzSimulationSubsystem::AcceptJob(FName PlaceId)
 	}
 	if (!IsPlaceOpenNow(PlaceId))
 	{
-		SetNotification(TEXT("Stelle kann nur waehrend der Oeffnungszeiten angenommen werden"));
+		FDoemitzNotificationEvent Ev;
+		Ev.Code = EDoemitzNotificationCode::JobNeedsOpenPlace;
+		Ev.PlaceId = PlaceId;
+		PushNotificationEvent(Ev);
 		return false;
 	}
 	ActiveJobId = Job.JobId;
-	SetNotification(FString::Printf(
-		TEXT("Stelle angenommen: %s (%s/Std.)"),
-		*Job.Title,
-		*FormatCentsEur(Job.HourlyWageCents)));
+	FDoemitzNotificationEvent Ev;
+	Ev.Code = EDoemitzNotificationCode::JobAccepted;
+	Ev.PlaceId = PlaceId;
+	Ev.JobId = Job.JobId;
+	Ev.AmountCents = Job.HourlyWageCents;
+	PushNotificationEvent(Ev);
 	return true;
 }
 
-bool UDoemitzSimulationSubsystem::CanStartWorkShift(FName PlaceId, FString& OutReason) const
+FDoemitzShiftAvailability UDoemitzSimulationSubsystem::CheckWorkShiftAvailability(FName PlaceId) const
 {
+	FDoemitzShiftAvailability Out;
 	if (bIsWorkingShift)
 	{
-		OutReason = TEXT("Schicht laeuft bereits");
-		return false;
+		Out.bCanStart = false;
+		Out.Result = EDoemitzShiftCheckResult::AlreadyWorking;
+		return Out;
 	}
 	FDoemitzJobDefinition Job;
 	if (!GetJobForPlace(PlaceId, Job))
 	{
-		OutReason = TEXT("Keine Stelle an diesem Ort");
-		return false;
+		Out.bCanStart = false;
+		Out.Result = EDoemitzShiftCheckResult::NoJobAtPlace;
+		return Out;
 	}
+	Out.ShiftStartMinute = Job.ShiftStartMinute;
 	if (ActiveJobId != Job.JobId)
 	{
-		OutReason = TEXT("Stelle noch nicht angenommen");
-		return false;
+		Out.bCanStart = false;
+		Out.Result = EDoemitzShiftCheckResult::JobNotAccepted;
+		return Out;
 	}
 	if (!Job.WorkDays.Contains(DayOfWeek))
 	{
-		OutReason = TEXT("Heute kein Arbeitstag");
-		return false;
+		Out.bCanStart = false;
+		Out.Result = EDoemitzShiftCheckResult::NotAWorkDay;
+		return Out;
 	}
 	const double EarliestStart = FMath::Max(0.0, static_cast<double>(Job.ShiftStartMinute) - 30.0);
 	if (TimeOfDayMinutes < EarliestStart)
 	{
-		const int32 H = Job.ShiftStartMinute / 60;
-		const int32 M = Job.ShiftStartMinute % 60;
-		OutReason = FString::Printf(TEXT("Schicht beginnt erst um %02d:%02d"), H, M);
-		return false;
+		Out.bCanStart = false;
+		Out.Result = EDoemitzShiftCheckResult::TooEarly;
+		return Out;
 	}
 	if (TimeOfDayMinutes >= static_cast<double>(Job.ShiftEndMinute))
 	{
-		OutReason = TEXT("Heutige Schicht bereits vorbei");
-		return false;
+		Out.bCanStart = false;
+		Out.Result = EDoemitzShiftCheckResult::ShiftEnded;
+		return Out;
 	}
-	OutReason = TEXT("Bereit");
-	return true;
+	Out.bCanStart = true;
+	Out.Result = EDoemitzShiftCheckResult::Ready;
+	return Out;
 }
 
 bool UDoemitzSimulationSubsystem::StartWorkShift(FName PlaceId)
 {
-	FString Reason;
-	if (!CanStartWorkShift(PlaceId, Reason))
+	const FDoemitzShiftAvailability Avail = CheckWorkShiftAvailability(PlaceId);
+	if (!Avail.bCanStart)
 	{
-		SetNotification(Reason);
+		FDoemitzNotificationEvent Ev;
+		Ev.Code = EDoemitzNotificationCode::ShiftUnavailable;
+		Ev.PlaceId = PlaceId;
+		Ev.ShiftResult = Avail.Result;
+		Ev.MinuteValue = Avail.ShiftStartMinute;
+		PushNotificationEvent(Ev);
 		return false;
 	}
 	FDoemitzJobDefinition Job;
@@ -535,9 +645,12 @@ bool UDoemitzSimulationSubsystem::StartWorkShift(FName PlaceId)
 		}
 	}
 
-	const int32 EndH = Job.ShiftEndMinute / 60;
-	const int32 EndM = Job.ShiftEndMinute % 60;
-	SetNotification(FString::Printf(TEXT("Schicht gestartet (%s bis %02d:%02d, 15x)"), *Job.Title, EndH, EndM));
+	FDoemitzNotificationEvent Ev;
+	Ev.Code = EDoemitzNotificationCode::ShiftStarted;
+	Ev.PlaceId = PlaceId;
+	Ev.JobId = Job.JobId;
+	Ev.MinuteValue = Job.ShiftEndMinute;
+	PushNotificationEvent(Ev);
 	return true;
 }
 
@@ -588,16 +701,15 @@ void UDoemitzSimulationSubsystem::FinishWorkShift()
 		if (PayCents > 0)
 		{
 			PlayerMoneyCents += PayCents;
-			AppendLedgerEntry(
-				Job->PlaceId,
-				PayCents,
-				FString::Printf(TEXT("Lohn: %s (%.0f/%.0f min)"), *Job->Title, WorkedMinutes, ScheduledMinutes));
+			AppendLedgerEntry(Job->PlaceId, PayCents, FString::Printf(TEXT("WAGE:%s"), *Job->JobId.ToString()));
 		}
 		const bool bLate = ShiftActualStartMinute > static_cast<double>(Job->ShiftStartMinute) + 0.5;
-		SetNotification(FString::Printf(
-			TEXT("Schicht beendet: +%s%s"),
-			*FormatCentsEur(PayCents),
-			bLate ? TEXT(" (anteilig wegen Verspaetung)") : TEXT("")));
+		FDoemitzNotificationEvent Ev;
+		Ev.Code = EDoemitzNotificationCode::ShiftFinished;
+		Ev.JobId = Job->JobId;
+		Ev.AmountCents = PayCents;
+		Ev.bFlag = bLate;
+		PushNotificationEvent(Ev);
 	}
 	ActiveShiftPlaceId = NAME_None;
 }
@@ -641,6 +753,482 @@ bool UDoemitzSimulationSubsystem::GetPlaceRevenue(FName PlaceId, int64& OutDaily
 	return PlacesById.Contains(PlaceId);
 }
 
+// ============================================================================
+// Daily Tasks (Milestone 3)
+// ============================================================================
+
+bool UDoemitzSimulationSubsystem::FindOpenWindowOnDay(FName PlaceId, int32 DayOfWeekIndex, int32& OutEarliestStart, int32& OutLatestEnd) const
+{
+	const FDoemitzPlaceDefinition* Place = PlacesById.Find(PlaceId);
+	if (!Place)
+	{
+		return false;
+	}
+	if (Place->bAlwaysOpen || Place->WeeklyOpeningHours.IsEmpty())
+	{
+		OutEarliestStart = 480;
+		OutLatestEnd = 1260;
+		return true;
+	}
+	const int32 ClampedDay = ((DayOfWeekIndex % 7) + 7) % 7;
+	if (!Place->WeeklyOpeningHours.IsValidIndex(ClampedDay) || Place->WeeklyOpeningHours[ClampedDay].Intervals.IsEmpty())
+	{
+		return false;
+	}
+	int32 Earliest = 1440;
+	int32 Latest = 0;
+	for (const FDoemitzTimeInterval& Iv : Place->WeeklyOpeningHours[ClampedDay].Intervals)
+	{
+		Earliest = FMath::Min(Earliest, Iv.StartMinute);
+		Latest = FMath::Max(Latest, Iv.EndMinute);
+	}
+	if (Earliest >= Latest)
+	{
+		return false;
+	}
+	OutEarliestStart = Earliest;
+	OutLatestEnd = Latest;
+	return true;
+}
+
+void UDoemitzSimulationSubsystem::GenerateDailyTasks()
+{
+	// Remove stale unaccepted Available tasks from earlier days
+	Tasks.RemoveAll([](const FDoemitzTaskInstance& T) {
+		return T.Status == EDoemitzTaskStatus::Available;
+	});
+
+	if (TaskTemplates.IsEmpty() || CitizenRecords.IsEmpty())
+	{
+		return;
+	}
+
+	// Collect eligible templates whose places actually open on the current DayOfWeek
+	struct FScoredTemplate
+	{
+		const FDoemitzTaskTemplate* Template = nullptr;
+		uint32 Score = 0;
+		int32 DeadlineMinute = 1020;
+	};
+	TArray<FScoredTemplate> EligibleErrands;
+	TArray<FScoredTemplate> EligibleFetches;
+
+	for (const FDoemitzTaskTemplate& Tpl : TaskTemplates)
+	{
+		int32 Deadline = 1020;
+		if (Tpl.TaskType == EDoemitzTaskType::Errand)
+		{
+			int32 PickStart = 0, PickEnd = 0, DelStart = 0, DelEnd = 0;
+			if (!FindOpenWindowOnDay(Tpl.PickupPlaceId, DayOfWeek, PickStart, PickEnd) ||
+				!FindOpenWindowOnDay(Tpl.DeliveryPlaceId, DayOfWeek, DelStart, DelEnd))
+			{
+				continue;
+			}
+			const int32 BaseStart = FMath::Max(PickStart, FMath::FloorToInt(TimeOfDayMinutes));
+			if (BaseStart + 30 > PickEnd || BaseStart + 30 > DelEnd)
+			{
+				continue;
+			}
+			Deadline = FMath::Min(DelEnd, FMath::Max(BaseStart + Tpl.DurationMinutes, DelStart + 90));
+			FScoredTemplate Entry;
+			Entry.Template = &Tpl;
+			Entry.Score = DeterministicHash(TaskSeed, Tpl.TemplateId, DayNumber * 37 + 11);
+			Entry.DeadlineMinute = Deadline;
+			EligibleErrands.Add(Entry);
+		}
+		else
+		{
+			int32 ShopStart = 0, ShopEnd = 0;
+			if (!FindOpenWindowOnDay(Tpl.PreferredShopPlaceId, DayOfWeek, ShopStart, ShopEnd))
+			{
+				continue;
+			}
+			const int32 BaseStart = FMath::Max(ShopStart, FMath::FloorToInt(TimeOfDayMinutes));
+			if (BaseStart + 30 > ShopEnd)
+			{
+				continue;
+			}
+			Deadline = FMath::Min(ShopEnd, BaseStart + Tpl.DurationMinutes);
+			FScoredTemplate Entry;
+			Entry.Template = &Tpl;
+			Entry.Score = DeterministicHash(TaskSeed, Tpl.TemplateId, DayNumber * 37 + 23);
+			Entry.DeadlineMinute = Deadline;
+			EligibleFetches.Add(Entry);
+		}
+	}
+
+	auto SortByScore = [](const FScoredTemplate& A, const FScoredTemplate& B) {
+		if (A.Score != B.Score)
+		{
+			return A.Score < B.Score;
+		}
+		return A.Template->TemplateId.LexicalLess(B.Template->TemplateId);
+	};
+	EligibleErrands.Sort(SortByScore);
+	EligibleFetches.Sort(SortByScore);
+
+	const int32 Span = FMath::Max(1, DailyMaxTasks - DailyMinTasks + 1);
+	const uint32 CountHash = DeterministicHash(TaskSeed, FName(TEXT("DailyCount")), DayNumber);
+	const int32 TargetCount = DailyMinTasks + static_cast<int32>(CountHash % static_cast<uint32>(Span));
+
+	// Interleave errands and fetches so every day reliably has both types when available
+	TArray<FScoredTemplate> Selected;
+	int32 ErrIdx = 0;
+	int32 FetIdx = 0;
+	while (Selected.Num() < TargetCount && (ErrIdx < EligibleErrands.Num() || FetIdx < EligibleFetches.Num()))
+	{
+		if (ErrIdx < EligibleErrands.Num())
+		{
+			Selected.Add(EligibleErrands[ErrIdx++]);
+		}
+		if (Selected.Num() < TargetCount && FetIdx < EligibleFetches.Num())
+		{
+			Selected.Add(EligibleFetches[FetIdx++]);
+		}
+	}
+
+	TArray<FName> SortedCitizens;
+	CitizenRecords.GetKeys(SortedCitizens);
+	SortedCitizens.Sort(FNameLexicalLess());
+	TSet<FName> UsedCitizens;
+
+	for (int32 i = 0; i < Selected.Num(); ++i)
+	{
+		const FScoredTemplate& Pick = Selected[i];
+		const FDoemitzTaskTemplate& Tpl = *Pick.Template;
+
+		// Pick a deterministic citizen not already offering a task today (prefer Anna/Bernd/Clara/Dieter for first tasks)
+		FName GiverId = NAME_None;
+		if (!SortedCitizens.IsEmpty())
+		{
+			const uint32 CitHash = DeterministicHash(TaskSeed, Tpl.TemplateId, DayNumber * 97 + i);
+			const int32 StartIdx = static_cast<int32>(CitHash % static_cast<uint32>(SortedCitizens.Num()));
+			for (int32 Offset = 0; Offset < SortedCitizens.Num(); ++Offset)
+			{
+				const FName Candidate = SortedCitizens[(StartIdx + Offset) % SortedCitizens.Num()];
+				if (!UsedCitizens.Contains(Candidate))
+				{
+					GiverId = Candidate;
+					UsedCitizens.Add(Candidate);
+					break;
+				}
+			}
+		}
+
+		FDoemitzTaskInstance Inst;
+		Inst.TaskId = FName(*FString::Printf(TEXT("task:%d:%s"), DayNumber, *Tpl.TemplateId.ToString()));
+		Inst.TemplateId = Tpl.TemplateId;
+		Inst.TaskType = Tpl.TaskType;
+		Inst.Status = EDoemitzTaskStatus::Available;
+		Inst.Title = Tpl.Title;
+		Inst.Description = Tpl.Description;
+		Inst.GiverCitizenId = GiverId;
+		Inst.PickupPlaceId = Tpl.PickupPlaceId;
+		Inst.DeliveryPlaceId = Tpl.DeliveryPlaceId;
+		Inst.ParcelName = Tpl.ParcelName;
+		Inst.bPickedUp = false;
+		Inst.RequestedItemId = Tpl.RequestedItemId;
+		Inst.PreferredShopPlaceId = Tpl.PreferredShopPlaceId;
+		Inst.DayNumber = DayNumber;
+		Inst.DeadlineMinute = Pick.DeadlineMinute;
+		Inst.RewardCents = Tpl.RewardCents;
+
+		const bool bAlreadyExists = Tasks.ContainsByPredicate([&Inst](const FDoemitzTaskInstance& Existing) {
+			return Existing.TaskId == Inst.TaskId;
+		});
+		if (!bAlreadyExists)
+		{
+			Tasks.Add(MoveTemp(Inst));
+		}
+	}
+}
+
+TArray<FDoemitzTaskInstance> UDoemitzSimulationSubsystem::GetTasksByStatus(EDoemitzTaskStatus Status) const
+{
+	TArray<FDoemitzTaskInstance> Out;
+	for (const FDoemitzTaskInstance& Task : Tasks)
+	{
+		if (Task.Status == Status)
+		{
+			Out.Add(Task);
+		}
+	}
+	return Out;
+}
+
+bool UDoemitzSimulationSubsystem::GetTaskById(FName TaskId, FDoemitzTaskInstance& OutTask) const
+{
+	for (const FDoemitzTaskInstance& Task : Tasks)
+	{
+		if (Task.TaskId == TaskId)
+		{
+			OutTask = Task;
+			return true;
+		}
+	}
+	return false;
+}
+
+bool UDoemitzSimulationSubsystem::GetPrimaryActiveTask(FDoemitzTaskInstance& OutTask) const
+{
+	for (const FDoemitzTaskInstance& Task : Tasks)
+	{
+		if (Task.Status == EDoemitzTaskStatus::Active)
+		{
+			OutTask = Task;
+			return true;
+		}
+	}
+	return false;
+}
+
+bool UDoemitzSimulationSubsystem::GetTaskOfferedByCitizen(FName CitizenId, FDoemitzTaskInstance& OutTask) const
+{
+	if (CitizenId.IsNone())
+	{
+		return false;
+	}
+	for (const FDoemitzTaskInstance& Task : Tasks)
+	{
+		if (Task.Status == EDoemitzTaskStatus::Available && Task.GiverCitizenId == CitizenId)
+		{
+			OutTask = Task;
+			return true;
+		}
+	}
+	return false;
+}
+
+bool UDoemitzSimulationSubsystem::GetActiveFetchTaskForCitizen(FName CitizenId, FDoemitzTaskInstance& OutTask) const
+{
+	if (CitizenId.IsNone())
+	{
+		return false;
+	}
+	for (const FDoemitzTaskInstance& Task : Tasks)
+	{
+		if (Task.Status == EDoemitzTaskStatus::Active &&
+			Task.TaskType == EDoemitzTaskType::Fetch &&
+			Task.GiverCitizenId == CitizenId)
+		{
+			OutTask = Task;
+			return true;
+		}
+	}
+	return false;
+}
+
+bool UDoemitzSimulationSubsystem::GetActiveErrandForPlace(FName PlaceId, FDoemitzTaskInstance& OutTask, bool& bOutIsDelivery) const
+{
+	bOutIsDelivery = false;
+	if (PlaceId.IsNone())
+	{
+		return false;
+	}
+	for (const FDoemitzTaskInstance& Task : Tasks)
+	{
+		if (Task.Status == EDoemitzTaskStatus::Active && Task.TaskType == EDoemitzTaskType::Errand)
+		{
+			if (!Task.bPickedUp && Task.PickupPlaceId == PlaceId)
+			{
+				OutTask = Task;
+				bOutIsDelivery = false;
+				return true;
+			}
+			if (Task.bPickedUp && Task.DeliveryPlaceId == PlaceId)
+			{
+				OutTask = Task;
+				bOutIsDelivery = true;
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+bool UDoemitzSimulationSubsystem::GetActiveTaskTargetLocation(FVector& OutWorldLocation, FName& OutTargetPlaceId, FName& OutTargetCitizenId) const
+{
+	OutTargetPlaceId = NAME_None;
+	OutTargetCitizenId = NAME_None;
+	FDoemitzTaskInstance Active;
+	if (!GetPrimaryActiveTask(Active))
+	{
+		return false;
+	}
+
+	if (Active.TaskType == EDoemitzTaskType::Errand)
+	{
+		const FName TargetPlace = Active.bPickedUp ? Active.DeliveryPlaceId : Active.PickupPlaceId;
+		if (const FDoemitzPlaceDefinition* Place = PlacesById.Find(TargetPlace))
+		{
+			OutWorldLocation = !Place->EntranceLocation.IsNearlyZero() ? Place->EntranceLocation : Place->AccessLocation;
+			OutTargetPlaceId = TargetPlace;
+			return true;
+		}
+		return false;
+	}
+
+	// Fetch task: if player does not yet own the item, point to preferred shop; otherwise point to giver citizen
+	if (GetInventoryQuantity(Active.RequestedItemId) < 1)
+	{
+		if (const FDoemitzPlaceDefinition* Shop = PlacesById.Find(Active.PreferredShopPlaceId))
+		{
+			OutWorldLocation = !Shop->EntranceLocation.IsNearlyZero() ? Shop->EntranceLocation : Shop->AccessLocation;
+			OutTargetPlaceId = Active.PreferredShopPlaceId;
+			return true;
+		}
+	}
+	if (const FCitizenRecord* Cit = CitizenRecords.Find(Active.GiverCitizenId))
+	{
+		OutWorldLocation = Cit->State.WorldLocation;
+		OutTargetCitizenId = Active.GiverCitizenId;
+		return true;
+	}
+	return false;
+}
+
+bool UDoemitzSimulationSubsystem::AcceptTask(FName TaskId)
+{
+	for (FDoemitzTaskInstance& Task : Tasks)
+	{
+		if (Task.TaskId == TaskId && Task.Status == EDoemitzTaskStatus::Available)
+		{
+			Task.Status = EDoemitzTaskStatus::Active;
+			FDoemitzNotificationEvent Ev;
+			Ev.Code = EDoemitzNotificationCode::TaskAccepted;
+			Ev.TaskId = Task.TaskId;
+			Ev.MinuteValue = Task.DeadlineMinute;
+			PushNotificationEvent(Ev);
+			return true;
+		}
+	}
+	return false;
+}
+
+bool UDoemitzSimulationSubsystem::PickupTaskParcel(FName TaskId)
+{
+	for (FDoemitzTaskInstance& Task : Tasks)
+	{
+		if (Task.TaskId == TaskId &&
+			Task.Status == EDoemitzTaskStatus::Active &&
+			Task.TaskType == EDoemitzTaskType::Errand &&
+			!Task.bPickedUp)
+		{
+			if (!IsPlaceOpenNow(Task.PickupPlaceId))
+			{
+				FDoemitzNotificationEvent Ev;
+				Ev.Code = EDoemitzNotificationCode::PlaceClosed;
+				Ev.PlaceId = Task.PickupPlaceId;
+				PushNotificationEvent(Ev);
+				return false;
+			}
+			Task.bPickedUp = true;
+			FDoemitzNotificationEvent Ev;
+			Ev.Code = EDoemitzNotificationCode::TaskParcelPickedUp;
+			Ev.TaskId = Task.TaskId;
+			Ev.PlaceId = Task.DeliveryPlaceId;
+			PushNotificationEvent(Ev);
+			return true;
+		}
+	}
+	return false;
+}
+
+bool UDoemitzSimulationSubsystem::DeliverTaskParcel(FName TaskId)
+{
+	for (FDoemitzTaskInstance& Task : Tasks)
+	{
+		if (Task.TaskId == TaskId &&
+			Task.Status == EDoemitzTaskStatus::Active &&
+			Task.TaskType == EDoemitzTaskType::Errand &&
+			Task.bPickedUp)
+		{
+			if (!IsPlaceOpenNow(Task.DeliveryPlaceId))
+			{
+				FDoemitzNotificationEvent Ev;
+				Ev.Code = EDoemitzNotificationCode::PlaceClosed;
+				Ev.PlaceId = Task.DeliveryPlaceId;
+				PushNotificationEvent(Ev);
+				return false;
+			}
+			Task.Status = EDoemitzTaskStatus::Completed;
+			PlayerMoneyCents += Task.RewardCents;
+			AppendLedgerEntry(Task.DeliveryPlaceId, Task.RewardCents, FString::Printf(TEXT("TASK:%s"), *Task.TaskId.ToString()));
+
+			FDoemitzNotificationEvent Ev;
+			Ev.Code = EDoemitzNotificationCode::TaskCompleted;
+			Ev.TaskId = Task.TaskId;
+			Ev.AmountCents = Task.RewardCents;
+			PushNotificationEvent(Ev);
+			return true;
+		}
+	}
+	return false;
+}
+
+bool UDoemitzSimulationSubsystem::CompleteFetchTask(FName TaskId)
+{
+	for (FDoemitzTaskInstance& Task : Tasks)
+	{
+		if (Task.TaskId == TaskId &&
+			Task.Status == EDoemitzTaskStatus::Active &&
+			Task.TaskType == EDoemitzTaskType::Fetch)
+		{
+			int32* QtyPtr = PlayerInventory.Find(Task.RequestedItemId);
+			if (!QtyPtr || *QtyPtr < 1)
+			{
+				FDoemitzNotificationEvent Ev;
+				Ev.Code = EDoemitzNotificationCode::TaskNeedsItem;
+				Ev.TaskId = Task.TaskId;
+				Ev.ItemId = Task.RequestedItemId;
+				PushNotificationEvent(Ev);
+				return false;
+			}
+			*QtyPtr -= 1;
+			if (*QtyPtr <= 0)
+			{
+				PlayerInventory.Remove(Task.RequestedItemId);
+			}
+			Task.Status = EDoemitzTaskStatus::Completed;
+			PlayerMoneyCents += Task.RewardCents;
+			AppendLedgerEntry(Task.PreferredShopPlaceId, Task.RewardCents, FString::Printf(TEXT("TASK:%s"), *Task.TaskId.ToString()));
+
+			FDoemitzNotificationEvent Ev;
+			Ev.Code = EDoemitzNotificationCode::TaskCompleted;
+			Ev.TaskId = Task.TaskId;
+			Ev.AmountCents = Task.RewardCents;
+			PushNotificationEvent(Ev);
+			return true;
+		}
+	}
+	return false;
+}
+
+void UDoemitzSimulationSubsystem::CheckTaskDeadlines()
+{
+	for (FDoemitzTaskInstance& Task : Tasks)
+	{
+		if (Task.Status != EDoemitzTaskStatus::Active)
+		{
+			continue;
+		}
+		const bool bExpired = (DayNumber > Task.DayNumber) ||
+			(DayNumber == Task.DayNumber && TimeOfDayMinutes >= static_cast<double>(Task.DeadlineMinute));
+		if (bExpired)
+		{
+			Task.Status = EDoemitzTaskStatus::Missed;
+			FDoemitzNotificationEvent Ev;
+			Ev.Code = EDoemitzNotificationCode::TaskMissed;
+			Ev.TaskId = Task.TaskId;
+			PushNotificationEvent(Ev);
+		}
+	}
+}
+
+// ============================================================================
+// Places, Opening Status & Calendar
+// ============================================================================
+
 bool UDoemitzSimulationSubsystem::GetPlaceDefinition(FName PlaceId, FDoemitzPlaceDefinition& OutPlace) const
 {
 	if (const FDoemitzPlaceDefinition* Place = PlacesById.Find(PlaceId))
@@ -649,6 +1237,20 @@ bool UDoemitzSimulationSubsystem::GetPlaceDefinition(FName PlaceId, FDoemitzPlac
 		return true;
 	}
 	return false;
+}
+
+TArray<FDoemitzPlaceDefinition> UDoemitzSimulationSubsystem::GetAllPlaceDefinitions() const
+{
+	TArray<FDoemitzPlaceDefinition> Result;
+	Result.Reserve(PlacesById.Num());
+	for (const TPair<FName, FDoemitzPlaceDefinition>& Pair : PlacesById)
+	{
+		Result.Add(Pair.Value);
+	}
+	Result.Sort([](const FDoemitzPlaceDefinition& A, const FDoemitzPlaceDefinition& B) {
+		return A.PlaceId.LexicalLess(B.PlaceId);
+	});
+	return Result;
 }
 
 bool UDoemitzSimulationSubsystem::FindNearestEntrance(
@@ -695,20 +1297,22 @@ bool UDoemitzSimulationSubsystem::FindNearestEntrance(
 	return false;
 }
 
-FString UDoemitzSimulationSubsystem::GetPlaceOpeningStatusText(FName PlaceId) const
+FDoemitzOpeningStatus UDoemitzSimulationSubsystem::GetPlaceOpeningStatus(FName PlaceId) const
 {
-	static const TCHAR* ShortNames[7] = {
-		TEXT("Mo"), TEXT("Di"), TEXT("Mi"), TEXT("Do"), TEXT("Fr"), TEXT("Sa"), TEXT("So")
-	};
+	FDoemitzOpeningStatus Status;
 	const FDoemitzPlaceDefinition* Place = PlacesById.Find(PlaceId);
 	if (!Place)
 	{
-		return TEXT("unbekannt");
+		return Status;
 	}
+	Status.bKnown = true;
 	if (Place->bAlwaysOpen || Place->WeeklyOpeningHours.IsEmpty())
 	{
-		return TEXT("geoeffnet 24/7");
+		Status.bOpen = true;
+		Status.bAlwaysOpen = true;
+		return Status;
 	}
+
 	const int32 CurDay = FMath::Clamp(DayOfWeek, 0, 6);
 	const double CurMin = FMath::Fmod(FMath::Max(0.0, TimeOfDayMinutes), 1440.0);
 
@@ -718,12 +1322,16 @@ FString UDoemitzSimulationSubsystem::GetPlaceOpeningStatusText(FName PlaceId) co
 		{
 			if (CurMin >= static_cast<double>(Iv.StartMinute) && CurMin < static_cast<double>(Iv.EndMinute))
 			{
-				return FString::Printf(TEXT("geoeffnet bis %02d:%02d"), Iv.EndMinute / 60, Iv.EndMinute % 60);
+				Status.bOpen = true;
+				Status.bHasNextChange = true;
+				Status.NextChangeMinute = Iv.EndMinute;
+				Status.NextChangeWeekday = CurDay;
+				return Status;
 			}
 		}
 	}
 
-	// Find next opening interval across the next 7 days
+	Status.bOpen = false;
 	for (int32 Offset = 0; Offset < 7; ++Offset)
 	{
 		const int32 CheckDay = (CurDay + Offset) % 7;
@@ -737,22 +1345,13 @@ FString UDoemitzSimulationSubsystem::GetPlaceOpeningStatusText(FName PlaceId) co
 			{
 				continue;
 			}
-			return FString::Printf(
-				TEXT("geschlossen, oeffnet %s %02d:%02d"),
-				ShortNames[CheckDay],
-				Iv.StartMinute / 60,
-				Iv.StartMinute % 60);
+			Status.bHasNextChange = true;
+			Status.NextChangeMinute = Iv.StartMinute;
+			Status.NextChangeWeekday = CheckDay;
+			return Status;
 		}
 	}
-	return TEXT("geschlossen");
-}
-
-FString UDoemitzSimulationSubsystem::GetDayOfWeekShortName() const
-{
-	static const TCHAR* ShortNames[7] = {
-		TEXT("Mo"), TEXT("Di"), TEXT("Mi"), TEXT("Do"), TEXT("Fr"), TEXT("Sa"), TEXT("So")
-	};
-	return ShortNames[FMath::Clamp(DayOfWeek, 0, 6)];
+	return Status;
 }
 
 EDoemitzDayKind UDoemitzSimulationSubsystem::GetDayKind() const
@@ -813,6 +1412,10 @@ bool UDoemitzSimulationSubsystem::IsPlaceOpenNow(FName PlaceId) const
 	return IsPlaceOpen(PlaceId, DayOfWeek, TimeOfDayMinutes);
 }
 
+// ============================================================================
+// Citizens & Dialog Pause
+// ============================================================================
+
 const TArray<FDoemitzScheduleEntry>& UDoemitzSimulationSubsystem::GetActiveScheduleForDay(const FDoemitzCitizenDefinition& Def) const
 {
 	const EDoemitzDayKind Kind = GetDayKind();
@@ -868,6 +1471,7 @@ void UDoemitzSimulationSubsystem::ResetCitizenToCurrentSchedule(FCitizenRecord& 
 	Record.State.CurrentPlaceId = Entry.PlaceId;
 	Record.State.TargetPlaceId = Entry.PlaceId;
 	Record.State.bIsMoving = false;
+	Record.State.bIsPausedForDialog = false;
 	Record.State.RouteProgressCm = 0.0;
 	Record.ActiveRoute.Reset();
 	Record.ActiveSegmentEnds.Reset();
@@ -877,6 +1481,58 @@ void UDoemitzSimulationSubsystem::ResetCitizenToCurrentSchedule(FCitizenRecord& 
 	{
 		Record.State.WorldLocation = Place->AccessLocation;
 	}
+}
+
+bool UDoemitzSimulationSubsystem::FindNearestCitizen(
+	const FVector& QueryLocation,
+	double MaxRadiusCm,
+	FDoemitzCitizenState& OutCitizen,
+	double& OutDistanceCm) const
+{
+	const FCitizenRecord* BestRec = nullptr;
+	double BestDist = MaxRadiusCm;
+	for (const TPair<FName, FCitizenRecord>& Pair : CitizenRecords)
+	{
+		const FCitizenRecord& Rec = Pair.Value;
+		if (FMath::Abs(QueryLocation.Z - Rec.State.WorldLocation.Z) > 260.0)
+		{
+			continue;
+		}
+		const double Dist2D = FVector::Dist2D(QueryLocation, Rec.State.WorldLocation);
+		if (Dist2D <= BestDist)
+		{
+			BestDist = Dist2D;
+			BestRec = &Rec;
+		}
+	}
+	if (BestRec)
+	{
+		OutCitizen = BestRec->State;
+		OutDistanceCm = BestDist;
+		return true;
+	}
+	OutDistanceCm = MaxRadiusCm;
+	return false;
+}
+
+bool UDoemitzSimulationSubsystem::SetCitizenDialogPaused(FName CitizenId, bool bPaused)
+{
+	FCitizenRecord* Rec = CitizenRecords.Find(CitizenId);
+	if (!Rec)
+	{
+		return false;
+	}
+	Rec->State.bIsPausedForDialog = bPaused;
+	return true;
+}
+
+bool UDoemitzSimulationSubsystem::IsCitizenDialogPaused(FName CitizenId) const
+{
+	if (const FCitizenRecord* Rec = CitizenRecords.Find(CitizenId))
+	{
+		return Rec->State.bIsPausedForDialog;
+	}
+	return false;
 }
 
 bool UDoemitzSimulationSubsystem::IsCitizenHighDetail(FName CitizenId) const
@@ -1036,7 +1692,6 @@ void UDoemitzSimulationSubsystem::UpdateCitizenLodPool()
 
 		if (bShouldBeHighDetail)
 		{
-			// Flush any pending coarse simulation time immediately so actor spawns at exact simulated position.
 			if (!bWasHighDetail && Record.CoarseAccumulatedSeconds > 0.0)
 			{
 				const double Pending = Record.CoarseAccumulatedSeconds;
@@ -1083,6 +1738,7 @@ void UDoemitzSimulationSubsystem::SetTimeOfDayMinutes(double NewMinutes)
 	if (FMath::IsFinite(NewMinutes) && NewMinutes >= 0.0)
 	{
 		TimeOfDayMinutes = FMath::Fmod(NewMinutes, 1440.0);
+		CheckTaskDeadlines();
 	}
 }
 
@@ -1100,8 +1756,13 @@ TArray<FName> UDoemitzSimulationSubsystem::GetAllCitizenIds() const
 {
 	TArray<FName> Ids;
 	CitizenRecords.GetKeys(Ids);
+	Ids.Sort(FNameLexicalLess());
 	return Ids;
 }
+
+// ============================================================================
+// Traffic, Priority Signs (Milestone 6) & Parking (Milestone 7)
+// ============================================================================
 
 bool UDoemitzSimulationSubsystem::GetVehicleState(FName VehicleId, FDoemitzVehicleState& OutState) const
 {
@@ -1127,6 +1788,48 @@ FName UDoemitzSimulationSubsystem::GetJunctionReservation(FName NodeId) const
 	return NAME_None;
 }
 
+EDoemitzYieldRule UDoemitzSimulationSubsystem::GetEdgeYieldRule(FName EdgeId) const
+{
+	if (const FRoadEdgeRecord* Edge = RoadEdgesById.Find(EdgeId))
+	{
+		return Edge->Definition.YieldRule;
+	}
+	return EDoemitzYieldRule::None;
+}
+
+bool UDoemitzSimulationSubsystem::SetEdgeYieldRuleForTest(FName EdgeId, EDoemitzYieldRule NewRule)
+{
+	if (FRoadEdgeRecord* Edge = RoadEdgesById.Find(EdgeId))
+	{
+		Edge->Definition.YieldRule = NewRule;
+		return true;
+	}
+	return false;
+}
+
+bool UDoemitzSimulationSubsystem::GetParkingLotState(FName ParkingLotId, FDoemitzParkingLotState& OutState) const
+{
+	const FParkingLotRecord* Rec = ParkingLotsById.Find(ParkingLotId);
+	if (!Rec)
+	{
+		return false;
+	}
+	OutState.ParkingLotId = Rec->Definition.ParkingLotId;
+	OutState.DisplayName = Rec->Definition.DisplayName;
+	OutState.Location = Rec->Definition.Location;
+	OutState.Capacity = Rec->Definition.Capacity;
+	OutState.OccupiedByVehicles.Reset();
+	for (FName Vid : Rec->SlotOccupants)
+	{
+		if (!Vid.IsNone())
+		{
+			OutState.OccupiedByVehicles.Add(Vid);
+		}
+	}
+	OutState.OccupiedCount = OutState.OccupiedByVehicles.Num();
+	return true;
+}
+
 bool UDoemitzSimulationSubsystem::SetVehicleEdgePositionForTest(
 	FName VehicleId,
 	FName EdgeId,
@@ -1140,11 +1843,31 @@ bool UDoemitzSimulationSubsystem::SetVehicleEdgePositionForTest(
 		return false;
 	}
 	ReleaseJunctionReservation(*Record);
+	ReleaseParkingSlot(*Record);
+	Record->State.Phase = EDoemitzVehiclePhase::Driving;
+	Record->State.CurrentParkingLotId = NAME_None;
+	Record->State.TargetParkingLotId = NAME_None;
+	Record->State.ParkingSlotIndex = -1;
+	Record->State.RemainingParkSeconds = 0.0;
+	Record->PlannedEdges.Reset();
+	Record->bCompletedStopAtEdge = false;
+	Record->StopHoldElapsedSeconds = 0.0;
 	Record->State.CurrentEdgeId = EdgeId;
 	Record->State.DistanceOnEdgeCm = FMath::Clamp(DistanceOnEdgeCm, 0.0, FMath::Max(0.0, Edge->LengthCm - 1.0));
 	Record->State.CurrentSpeedCmPerSecond = FMath::Max(0.0, SpeedCmPerSecond);
 	Record->State.NextEdgeId = ChooseNextEdge(*Record);
 	SampleEdgePose(*Edge, Record->State.DistanceOnEdgeCm, Record->State.WorldLocation, Record->State.WorldRotation);
+	return true;
+}
+
+bool UDoemitzSimulationSubsystem::SetVehicleTargetParkingForTest(FName VehicleId, FName ParkingLotId)
+{
+	FVehicleRecord* Record = VehicleRecords.Find(VehicleId);
+	if (!Record || !ParkingLotsById.Contains(ParkingLotId))
+	{
+		return false;
+	}
+	PlanRouteToParking(*Record, ParkingLotId);
 	return true;
 }
 
@@ -1170,7 +1893,6 @@ void UDoemitzSimulationSubsystem::SampleEdgePose(
 	if (!Dir.IsNearlyZero())
 	{
 		OutRotation = Dir.Rotation();
-		// Right-hand driving lane offset on two-way streets (UE: X=North, Y=East -> Right=(-Dir.Y, Dir.X))
 		if (!Edge.Definition.bOneWay)
 		{
 			const double LaneOffset = FMath::Min(140.0, Edge.Definition.WidthCm * 0.22);
@@ -1204,7 +1926,6 @@ FName UDoemitzSimulationSubsystem::ChooseNextEdge(const FVehicleRecord& Record) 
 			continue;
 		}
 		Fallback.Add(CandidateId);
-		// Avoid immediate 180-degree U-turn back along the same road segment when alternatives exist
 		if (Candidate->Definition.ToNodeId != CurrentEdge->Definition.FromNodeId)
 		{
 			Preferred.Add(CandidateId);
@@ -1218,6 +1939,172 @@ FName UDoemitzSimulationSubsystem::ChooseNextEdge(const FVehicleRecord& Record) 
 	}
 	const uint32 Hash = DeterministicHash(TrafficSeed, Record.State.VehicleId, Record.State.JunctionDecisions);
 	return Pool[static_cast<int32>(Hash % static_cast<uint32>(Pool.Num()))];
+}
+
+bool UDoemitzSimulationSubsystem::ComputeEdgePath(FName StartEdgeId, FName GoalEdgeId, TArray<FName>& OutPath) const
+{
+	OutPath.Reset();
+	if (StartEdgeId.IsNone() || GoalEdgeId.IsNone() || StartEdgeId == GoalEdgeId)
+	{
+		return StartEdgeId == GoalEdgeId && !StartEdgeId.IsNone();
+	}
+	const FRoadEdgeRecord* StartEdge = RoadEdgesById.Find(StartEdgeId);
+	const FRoadEdgeRecord* GoalEdge = RoadEdgesById.Find(GoalEdgeId);
+	if (!StartEdge || !GoalEdge)
+	{
+		return false;
+	}
+
+	// Simple deterministic Dijkstra over directed road edges (graph has ~170 edges -> microseconds)
+	TMap<FName, double> DistByEdge;
+	TMap<FName, FName> PrevEdge;
+	TSet<FName> Visited;
+	DistByEdge.Add(StartEdgeId, 0.0);
+
+	while (true)
+	{
+		FName BestEdge = NAME_None;
+		double BestDist = TNumericLimits<double>::Max();
+		for (const TPair<FName, double>& Pair : DistByEdge)
+		{
+			if (!Visited.Contains(Pair.Key) && Pair.Value < BestDist)
+			{
+				BestDist = Pair.Value;
+				BestEdge = Pair.Key;
+			}
+		}
+		if (BestEdge.IsNone() || BestEdge == GoalEdgeId)
+		{
+			break;
+		}
+		Visited.Add(BestEdge);
+
+		const FRoadEdgeRecord* Cur = RoadEdgesById.Find(BestEdge);
+		if (!Cur)
+		{
+			continue;
+		}
+		const TArray<FName>* Outgoing = OutgoingEdgesByNode.Find(Cur->Definition.ToNodeId);
+		if (!Outgoing)
+		{
+			continue;
+		}
+		for (FName NextId : *Outgoing)
+		{
+			const FRoadEdgeRecord* NextRec = RoadEdgesById.Find(NextId);
+			if (!NextRec || (NextRec->Definition.bDeadEnd && NextId != GoalEdgeId))
+			{
+				continue;
+			}
+			const double NewDist = BestDist + NextRec->LengthCm;
+			const double* Existing = DistByEdge.Find(NextId);
+			if (!Existing || NewDist < *Existing)
+			{
+				DistByEdge.Add(NextId, NewDist);
+				PrevEdge.Add(NextId, BestEdge);
+			}
+		}
+	}
+
+	if (!PrevEdge.Contains(GoalEdgeId))
+	{
+		return false;
+	}
+	FName Cursor = GoalEdgeId;
+	while (Cursor != StartEdgeId)
+	{
+		OutPath.Add(Cursor);
+		const FName* Parent = PrevEdge.Find(Cursor);
+		if (!Parent)
+		{
+			OutPath.Reset();
+			return false;
+		}
+		Cursor = *Parent;
+	}
+	Algo::Reverse(OutPath);
+	return true;
+}
+
+FName UDoemitzSimulationSubsystem::ChooseNextParkingLot(const FVehicleRecord& Record, FName ExcludeLotId) const
+{
+	if (OrderedParkingLotIds.IsEmpty())
+	{
+		return NAME_None;
+	}
+	TArray<FName> Candidates;
+	for (FName LotId : OrderedParkingLotIds)
+	{
+		if (LotId != ExcludeLotId || OrderedParkingLotIds.Num() == 1)
+		{
+			Candidates.Add(LotId);
+		}
+	}
+	const uint32 Hash = DeterministicHash(TrafficSeed + 101, Record.State.VehicleId, Record.TripCounter);
+	return Candidates[static_cast<int32>(Hash % static_cast<uint32>(Candidates.Num()))];
+}
+
+void UDoemitzSimulationSubsystem::PlanRouteToParking(FVehicleRecord& Record, FName ParkingLotId)
+{
+	Record.State.TargetParkingLotId = ParkingLotId;
+	Record.PlannedEdges.Reset();
+	const FParkingLotRecord* Lot = ParkingLotsById.Find(ParkingLotId);
+	if (!Lot)
+	{
+		return;
+	}
+	if (Record.State.CurrentEdgeId != Lot->Definition.AccessEdgeId)
+	{
+		ComputeEdgePath(Record.State.CurrentEdgeId, Lot->Definition.AccessEdgeId, Record.PlannedEdges);
+	}
+	if (!Record.PlannedEdges.IsEmpty())
+	{
+		Record.State.NextEdgeId = Record.PlannedEdges[0];
+	}
+	else
+	{
+		Record.State.NextEdgeId = ChooseNextEdge(Record);
+	}
+}
+
+int32 UDoemitzSimulationSubsystem::TryReserveParkingSlot(FName ParkingLotId, FName VehicleId, FVector& OutSlotLocation)
+{
+	FParkingLotRecord* Lot = ParkingLotsById.Find(ParkingLotId);
+	if (!Lot)
+	{
+		return -1;
+	}
+	for (int32 i = 0; i < Lot->SlotOccupants.Num(); ++i)
+	{
+		if (Lot->SlotOccupants[i].IsNone() || Lot->SlotOccupants[i] == VehicleId)
+		{
+			Lot->SlotOccupants[i] = VehicleId;
+			OutSlotLocation = Lot->Definition.SlotLocations.IsValidIndex(i)
+				? Lot->Definition.SlotLocations[i]
+				: Lot->Definition.Location;
+			return i;
+		}
+	}
+	return -1;
+}
+
+void UDoemitzSimulationSubsystem::ReleaseParkingSlot(FVehicleRecord& Record)
+{
+	if (!Record.State.CurrentParkingLotId.IsNone())
+	{
+		if (FParkingLotRecord* Lot = ParkingLotsById.Find(Record.State.CurrentParkingLotId))
+		{
+			for (FName& Occupant : Lot->SlotOccupants)
+			{
+				if (Occupant == Record.State.VehicleId)
+				{
+					Occupant = NAME_None;
+				}
+			}
+		}
+	}
+	Record.State.CurrentParkingLotId = NAME_None;
+	Record.State.ParkingSlotIndex = -1;
 }
 
 FName UDoemitzSimulationSubsystem::FindNearestDrivableEdge(const FVector& Location, double& OutDistanceCm) const
@@ -1275,7 +2162,6 @@ void UDoemitzSimulationSubsystem::UpdateTraffic(double DeltaSeconds)
 		return;
 	}
 
-	// Gather player and citizen locations once per frame for pedestrian yielding
 	TArray<FVector> PedestrianLocations;
 	PedestrianLocations.Reserve(CitizenRecords.Num() + 1);
 	if (UWorld* World = GetWorld())
@@ -1293,7 +2179,6 @@ void UDoemitzSimulationSubsystem::UpdateTraffic(double DeltaSeconds)
 		PedestrianLocations.Add(Pair.Value.State.WorldLocation);
 	}
 
-	// Precompute occupied pedestrian crossings (any citizen or player entering / standing on crossing)
 	TArray<FVector> OccupiedCrossings;
 	if (!Crossings.IsEmpty())
 	{
@@ -1318,13 +2203,97 @@ void UDoemitzSimulationSubsystem::UpdateTraffic(double DeltaSeconds)
 		{
 			continue;
 		}
+
+		// Handle Parking / Parked / Leaving phases
+		if (Record->State.Phase == EDoemitzVehiclePhase::Parking)
+		{
+			Record->ManeuverProgress = FMath::Min(1.0, Record->ManeuverProgress + (DeltaSeconds / ParkingManeuverSeconds));
+			Record->State.WorldLocation = FMath::Lerp(Record->ManeuverStartLocation, Record->ManeuverEndLocation, Record->ManeuverProgress);
+			Record->State.WorldRotation = FMath::Lerp(Record->ManeuverStartRotation, Record->ManeuverEndRotation, Record->ManeuverProgress);
+			Record->State.CurrentSpeedCmPerSecond = 0.0;
+			if (Record->ManeuverProgress >= 1.0)
+			{
+				Record->State.Phase = EDoemitzVehiclePhase::Parked;
+				const uint32 ParkHash = DeterministicHash(TrafficSeed + 303, VehicleId, Record->TripCounter);
+				Record->State.RemainingParkSeconds = 12.0 + static_cast<double>(ParkHash % 20);
+			}
+			continue;
+		}
+
+		if (Record->State.Phase == EDoemitzVehiclePhase::Parked)
+		{
+			Record->State.CurrentSpeedCmPerSecond = 0.0;
+			Record->State.RemainingParkSeconds = FMath::Max(0.0, Record->State.RemainingParkSeconds - DeltaSeconds);
+			if (Record->State.RemainingParkSeconds <= 0.0)
+			{
+				const FParkingLotRecord* Lot = ParkingLotsById.Find(Record->State.CurrentParkingLotId);
+				const FRoadEdgeRecord* AccessEdge = Lot ? RoadEdgesById.Find(Lot->Definition.AccessEdgeId) : nullptr;
+				if (Lot && AccessEdge)
+				{
+					FVector RoadLoc;
+					FRotator RoadRot;
+					SampleEdgePose(*AccessEdge, Lot->Definition.AccessDistanceCm, RoadLoc, RoadRot);
+
+					// Check road is clear before pulling out
+					bool bRoadClear = true;
+					for (FName OtherId : OrderedVehicleIds)
+					{
+						if (OtherId == VehicleId)
+						{
+							continue;
+						}
+						const FVehicleRecord* Other = VehicleRecords.Find(OtherId);
+						if (Other && Other->State.Phase != EDoemitzVehiclePhase::Parked &&
+							FVector::Dist2D(Other->State.WorldLocation, RoadLoc) < MinCenterSpacingCm)
+						{
+							bRoadClear = false;
+							break;
+						}
+					}
+
+					if (bRoadClear)
+					{
+						Record->State.Phase = EDoemitzVehiclePhase::Leaving;
+						Record->ManeuverProgress = 0.0;
+						Record->ManeuverStartLocation = Record->State.WorldLocation;
+						Record->ManeuverStartRotation = Record->State.WorldRotation;
+						Record->ManeuverEndLocation = RoadLoc;
+						Record->ManeuverEndRotation = RoadRot;
+						Record->State.CurrentEdgeId = Lot->Definition.AccessEdgeId;
+						Record->State.DistanceOnEdgeCm = FMath::Clamp(Lot->Definition.AccessDistanceCm, 0.0, FMath::Max(0.0, AccessEdge->LengthCm - 1.0));
+					}
+				}
+			}
+			continue;
+		}
+
+		if (Record->State.Phase == EDoemitzVehiclePhase::Leaving)
+		{
+			Record->ManeuverProgress = FMath::Min(1.0, Record->ManeuverProgress + (DeltaSeconds / ParkingManeuverSeconds));
+			Record->State.WorldLocation = FMath::Lerp(Record->ManeuverStartLocation, Record->ManeuverEndLocation, Record->ManeuverProgress);
+			Record->State.WorldRotation = FMath::Lerp(Record->ManeuverStartRotation, Record->ManeuverEndRotation, Record->ManeuverProgress);
+			if (Record->ManeuverProgress >= 1.0)
+			{
+				const FName LeftLot = Record->State.CurrentParkingLotId;
+				ReleaseParkingSlot(*Record);
+				Record->TripCounter += 1;
+				Record->State.Phase = EDoemitzVehiclePhase::Driving;
+				Record->State.CurrentSpeedCmPerSecond = 120.0;
+				Record->bCompletedStopAtEdge = false;
+				Record->StopHoldElapsedSeconds = 0.0;
+				const FName NextLot = ChooseNextParkingLot(*Record, LeftLot);
+				PlanRouteToParking(*Record, NextLot);
+			}
+			continue;
+		}
+
+		// --- Driving phase ---
 		const FRoadEdgeRecord* Edge = RoadEdgesById.Find(Record->State.CurrentEdgeId);
 		if (!Edge)
 		{
 			continue;
 		}
 
-		// Release junction reservation once safely clear of the previous junction
 		if (!Record->ReservedNodeId.IsNone() &&
 			Record->ReservedNodeId == Edge->Definition.FromNodeId &&
 			Record->State.DistanceOnEdgeCm >= JunctionClearanceCm)
@@ -1332,14 +2301,60 @@ void UDoemitzSimulationSubsystem::UpdateTraffic(double DeltaSeconds)
 			ReleaseJunctionReservation(*Record);
 		}
 
+		// Check if arrived at target parking lot's access edge & distance
+		if (!Record->State.TargetParkingLotId.IsNone())
+		{
+			if (const FParkingLotRecord* TargetLot = ParkingLotsById.Find(Record->State.TargetParkingLotId))
+			{
+				if (Record->State.CurrentEdgeId == TargetLot->Definition.AccessEdgeId &&
+					FMath::Abs(Record->State.DistanceOnEdgeCm - TargetLot->Definition.AccessDistanceCm) <= ParkingApproachToleranceCm)
+				{
+					FVector SlotLoc;
+					const int32 SlotIdx = TryReserveParkingSlot(Record->State.TargetParkingLotId, VehicleId, SlotLoc);
+					if (SlotIdx >= 0)
+					{
+						ReleaseJunctionReservation(*Record);
+						Record->State.Phase = EDoemitzVehiclePhase::Parking;
+						Record->State.CurrentParkingLotId = Record->State.TargetParkingLotId;
+						Record->State.ParkingSlotIndex = SlotIdx;
+						Record->State.CurrentSpeedCmPerSecond = 0.0;
+						Record->PlannedEdges.Reset();
+						Record->ManeuverProgress = 0.0;
+						Record->ManeuverStartLocation = Record->State.WorldLocation;
+						Record->ManeuverStartRotation = Record->State.WorldRotation;
+						Record->ManeuverEndLocation = SlotLoc;
+						const FVector ToSlot = SlotLoc - Record->State.WorldLocation;
+						Record->ManeuverEndRotation = ToSlot.IsNearlyZero() ? Record->State.WorldRotation : ToSlot.Rotation();
+						continue;
+					}
+					else
+					{
+						// Lot full: pick another parking lot
+						Record->TripCounter += 1;
+						const FName AltLot = ChooseNextParkingLot(*Record, Record->State.TargetParkingLotId);
+						PlanRouteToParking(*Record, AltLot);
+					}
+				}
+			}
+		}
+
 		if (Record->State.NextEdgeId.IsNone())
 		{
-			Record->State.NextEdgeId = ChooseNextEdge(*Record);
+			if (!Record->PlannedEdges.IsEmpty())
+			{
+				Record->State.NextEdgeId = Record->PlannedEdges[0];
+			}
+			else
+			{
+				Record->State.NextEdgeId = ChooseNextEdge(*Record);
+			}
 		}
 
 		const double EdgeLimitCmPerSec = FMath::Clamp(Edge->Definition.SpeedLimitCmPerSecond, 200.0, 1400.0);
 		double DesiredSpeed = EdgeLimitCmPerSec;
 		Record->State.bYieldingForRightOfWay = false;
+		Record->State.bYieldingForPrioritySign = false;
+		Record->State.bStoppingForStopSign = false;
 		Record->State.bYieldingForVehicle = false;
 		Record->State.bYieldingForPedestrian = false;
 		Record->State.bYieldingForCrossing = false;
@@ -1348,7 +2363,7 @@ void UDoemitzSimulationSubsystem::UpdateTraffic(double DeltaSeconds)
 		const FVector MyForward = Record->State.WorldRotation.Vector().GetSafeNormal2D();
 		const FVector MyRight(-MyForward.Y, MyForward.X, 0.0);
 
-		// 1. Pedestrian & Player yielding (direct path + occupied pedestrian crossings)
+		// 1. Pedestrian & Player yielding (direct path + occupied crossings)
 		for (const FVector& PedPos : PedestrianLocations)
 		{
 			const FVector Delta = PedPos - Record->State.WorldLocation;
@@ -1382,7 +2397,7 @@ void UDoemitzSimulationSubsystem::UpdateTraffic(double DeltaSeconds)
 			}
 		}
 
-		// 2. Car-following distance & 2D anti-penetration against all other vehicles
+		// 2. Car-following distance & 2D anti-penetration against active (non-parked) vehicles
 		for (FName OtherId : OrderedVehicleIds)
 		{
 			if (OtherId == VehicleId)
@@ -1390,13 +2405,13 @@ void UDoemitzSimulationSubsystem::UpdateTraffic(double DeltaSeconds)
 				continue;
 			}
 			const FVehicleRecord* Other = VehicleRecords.Find(OtherId);
-			if (!Other)
+			if (!Other || Other->State.Phase == EDoemitzVehiclePhase::Parked || Other->State.Phase == EDoemitzVehiclePhase::Parking)
 			{
 				continue;
 			}
 
-			// Same-edge ahead check
-			if (Other->State.CurrentEdgeId == Record->State.CurrentEdgeId &&
+			if (Other->State.Phase == EDoemitzVehiclePhase::Driving &&
+				Other->State.CurrentEdgeId == Record->State.CurrentEdgeId &&
 				Other->State.DistanceOnEdgeCm > Record->State.DistanceOnEdgeCm)
 			{
 				const double Gap = Other->State.DistanceOnEdgeCm - Record->State.DistanceOnEdgeCm;
@@ -1412,8 +2427,8 @@ void UDoemitzSimulationSubsystem::UpdateTraffic(double DeltaSeconds)
 					Record->State.bYieldingForVehicle = true;
 				}
 			}
-			// Next-edge entrance check (don't enter junction if target edge start is occupied)
-			else if (!Record->State.NextEdgeId.IsNone() &&
+			else if (Other->State.Phase == EDoemitzVehiclePhase::Driving &&
+				!Record->State.NextEdgeId.IsNone() &&
 				Other->State.CurrentEdgeId == Record->State.NextEdgeId)
 			{
 				const double Gap = RemainingOnEdge + Other->State.DistanceOnEdgeCm;
@@ -1430,7 +2445,6 @@ void UDoemitzSimulationSubsystem::UpdateTraffic(double DeltaSeconds)
 				}
 			}
 
-			// General 2D forward clearance check to guarantee zero overlap at junctions or merges
 			const FVector Delta = Other->State.WorldLocation - Record->State.WorldLocation;
 			const double FwdDist = FVector::DotProduct(Delta, MyForward);
 			const double LatDist = FMath::Abs(FVector::DotProduct(Delta, MyRight));
@@ -1441,23 +2455,50 @@ void UDoemitzSimulationSubsystem::UpdateTraffic(double DeltaSeconds)
 			}
 		}
 
-		// 3. Right-before-left (Rechts vor links) & junction reservation
+		// 3. Priority signs (give_way / stop) overriding Right-before-Left (Rechts vor links) & junction reservation
 		const FName ApproachNode = Edge->Definition.ToNodeId;
 		if (RemainingOnEdge <= JunctionApproachCm && !ApproachNode.IsNone())
 		{
-			const FName* CurrentHolder = JunctionReservations.Find(ApproachNode);
-			bool bCanProceed = (CurrentHolder != nullptr && *CurrentHolder == VehicleId);
+			const bool bMeStopSign = (Edge->Definition.YieldRule == EDoemitzYieldRule::Stop);
+			const bool bMeYieldSign = (Edge->Definition.YieldRule != EDoemitzYieldRule::None);
 
-			if (!bCanProceed)
+			// Full stop requirement for highway=stop before entering junction
+			bool bNeedsMandatoryStop = false;
+			if (bMeStopSign && !Record->bCompletedStopAtEdge)
+			{
+				bNeedsMandatoryStop = true;
+				Record->State.bStoppingForStopSign = true;
+				Record->State.bYieldingForPrioritySign = true;
+				Record->State.bYieldingForRightOfWay = true;
+				if (RemainingOnEdge <= JunctionStopLineCm + 90.0 && Record->State.CurrentSpeedCmPerSecond <= 15.0)
+				{
+					Record->StopHoldElapsedSeconds += DeltaSeconds;
+					if (Record->StopHoldElapsedSeconds >= StopSignHoldSeconds)
+					{
+						Record->bCompletedStopAtEdge = true;
+						bNeedsMandatoryStop = false;
+						Record->State.bStoppingForStopSign = false;
+					}
+				}
+			}
+
+			const FName* CurrentHolder = JunctionReservations.Find(ApproachNode);
+			bool bCanProceed = !bNeedsMandatoryStop && (CurrentHolder != nullptr && *CurrentHolder == VehicleId);
+
+			if (!bNeedsMandatoryStop && !bCanProceed)
 			{
 				if (CurrentHolder != nullptr && *CurrentHolder != VehicleId)
 				{
 					Record->State.bYieldingForRightOfWay = true;
+					if (bMeYieldSign)
+					{
+						Record->State.bYieldingForPrioritySign = true;
+					}
 				}
 				else
 				{
-					// Check other vehicles approaching the exact same junction node
 					bool bMustYieldRightOfWay = false;
+					bool bYieldDueToSign = false;
 					const FVector2D MyInDir = Edge->EndDir2D;
 					const FVector2D MyRight2D(-MyInDir.Y, MyInDir.X);
 
@@ -1468,7 +2509,7 @@ void UDoemitzSimulationSubsystem::UpdateTraffic(double DeltaSeconds)
 							continue;
 						}
 						const FVehicleRecord* Other = VehicleRecords.Find(OtherId);
-						if (!Other)
+						if (!Other || Other->State.Phase != EDoemitzVehiclePhase::Driving)
 						{
 							continue;
 						}
@@ -1483,6 +2524,21 @@ void UDoemitzSimulationSubsystem::UpdateTraffic(double DeltaSeconds)
 							continue;
 						}
 
+						const bool bOtherYieldSign = (OtherEdge->Definition.YieldRule != EDoemitzYieldRule::None);
+						// Priority sign overrides Rechts vor links
+						if (bMeYieldSign && !bOtherYieldSign)
+						{
+							bMustYieldRightOfWay = true;
+							bYieldDueToSign = true;
+							break;
+						}
+						if (!bMeYieldSign && bOtherYieldSign)
+						{
+							// I have priority over the yielding vehicle even if it approaches from my right
+							continue;
+						}
+
+						// Neither or both have a sign: standard Rechts vor links
 						const FVector2D OtherInDir = OtherEdge->EndDir2D;
 						const FVector2D OtherRight2D(-OtherInDir.Y, OtherInDir.X);
 						const bool bOtherFromMyRight = FVector2D::DotProduct(-OtherInDir, MyRight2D) > 0.35;
@@ -1495,7 +2551,6 @@ void UDoemitzSimulationSubsystem::UpdateTraffic(double DeltaSeconds)
 						}
 						if (bOtherFromMyRight == bMeFromOtherRight)
 						{
-							// Symmetric conflict tie-breaker: closer vehicle wins, then deterministic ID order
 							if (OtherRemaining + 100.0 < RemainingOnEdge ||
 								(FMath::Abs(OtherRemaining - RemainingOnEdge) <= 100.0 && OtherId.LexicalLess(VehicleId)))
 							{
@@ -1508,6 +2563,7 @@ void UDoemitzSimulationSubsystem::UpdateTraffic(double DeltaSeconds)
 					if (bMustYieldRightOfWay)
 					{
 						Record->State.bYieldingForRightOfWay = true;
+						Record->State.bYieldingForPrioritySign = bYieldDueToSign;
 					}
 					else
 					{
@@ -1578,8 +2634,22 @@ void UDoemitzSimulationSubsystem::UpdateTraffic(double DeltaSeconds)
 			Record->State.CurrentEdgeId = ChosenNext;
 			Record->State.DistanceOnEdgeCm = Overflow;
 			Record->State.JunctionDecisions += 1;
+			Record->bCompletedStopAtEdge = false;
+			Record->StopHoldElapsedSeconds = 0.0;
 			Edge = NextEdge;
-			Record->State.NextEdgeId = ChooseNextEdge(*Record);
+
+			if (!Record->PlannedEdges.IsEmpty() && Record->PlannedEdges[0] == ChosenNext)
+			{
+				Record->PlannedEdges.RemoveAt(0);
+			}
+			if (!Record->PlannedEdges.IsEmpty())
+			{
+				Record->State.NextEdgeId = Record->PlannedEdges[0];
+			}
+			else
+			{
+				Record->State.NextEdgeId = ChooseNextEdge(*Record);
+			}
 		}
 
 		if (Edge)
@@ -1639,6 +2709,11 @@ void UDoemitzSimulationSubsystem::StartTrip(FCitizenRecord& Record, FName Destin
 
 void UDoemitzSimulationSubsystem::UpdateCitizen(FCitizenRecord& Record, double DeltaSeconds)
 {
+	if (Record.State.bIsPausedForDialog)
+	{
+		return;
+	}
+
 	int32 DesiredIndex = 0;
 	const FDoemitzScheduleEntry DesiredEntry = ResolveDesiredEntry(Record.Definition, DesiredIndex);
 	Record.State.ActiveScheduleIndex = DesiredIndex;
@@ -1708,7 +2783,7 @@ void UDoemitzSimulationSubsystem::Tick(float DeltaTime)
 		NotificationRemainingSeconds = FMath::Max(0.0, NotificationRemainingSeconds - static_cast<double>(DeltaTime));
 		if (NotificationRemainingSeconds <= 0.0)
 		{
-			LastNotification.Reset();
+			LastNotificationEvent = FDoemitzNotificationEvent();
 		}
 	}
 
@@ -1720,11 +2795,13 @@ void UDoemitzSimulationSubsystem::Tick(float DeltaTime)
 	const double ClampedDelta = FMath::Min(static_cast<double>(DeltaTime), 0.1);
 	const double SimMinutesDelta = (static_cast<double>(DeltaTime) * TimeScale) / 60.0;
 	TimeOfDayMinutes += SimMinutesDelta;
+	bool bDayRolledOver = false;
 	while (TimeOfDayMinutes >= 1440.0)
 	{
 		TimeOfDayMinutes -= 1440.0;
 		DayNumber += 1;
 		DayOfWeek = (DayOfWeek + 1) % 7;
+		bDayRolledOver = true;
 		CitizenDailyShoppingRecorded.Reset();
 		for (TPair<FName, FDoemitzPlaceRevenue>& Pair : PlaceRevenues)
 		{
@@ -1742,6 +2819,12 @@ void UDoemitzSimulationSubsystem::Tick(float DeltaTime)
 		{
 			FinishWorkShift();
 		}
+	}
+
+	CheckTaskDeadlines();
+	if (bDayRolledOver)
+	{
+		GenerateDailyTasks();
 	}
 
 	UpdateActiveWorkShift();
@@ -1769,16 +2852,20 @@ void UDoemitzSimulationSubsystem::Tick(float DeltaTime)
 	UpdateTraffic(ClampedDelta);
 }
 
-void UDoemitzSimulationSubsystem::SetNotification(const FString& Message, double DurationSeconds)
+void UDoemitzSimulationSubsystem::PushNotificationEvent(const FDoemitzNotificationEvent& Event, double DurationSeconds)
 {
-	LastNotification = Message;
+	LastNotificationEvent = Event;
 	NotificationRemainingSeconds = FMath::Max(0.5, DurationSeconds);
 }
 
-FString UDoemitzSimulationSubsystem::GetLastNotification() const
+FDoemitzNotificationEvent UDoemitzSimulationSubsystem::GetLastNotificationEvent() const
 {
-	return NotificationRemainingSeconds > 0.0 ? LastNotification : FString();
+	return NotificationRemainingSeconds > 0.0 ? LastNotificationEvent : FDoemitzNotificationEvent();
 }
+
+// ============================================================================
+// SaveGame v5 + Migration v1..v4 (Milestone 8)
+// ============================================================================
 
 bool UDoemitzSimulationSubsystem::DoesSaveExist(const FString& SlotName) const
 {
@@ -1809,9 +2896,20 @@ bool UDoemitzSimulationSubsystem::SaveCityState(const FString& SlotName)
 	SaveObj->ActiveJobId = ActiveJobId;
 	SaveObj->LedgerEntries = LedgerEntries;
 	SaveObj->InventoryItems = GetAllInventoryItems();
+	SaveObj->Tasks = Tasks;
 	for (const TPair<FName, FDoemitzPlaceRevenue>& Pair : PlaceRevenues)
 	{
 		SaveObj->PlaceRevenues.Add(Pair.Value);
+	}
+	for (FName LotId : OrderedParkingLotIds)
+	{
+		if (const FParkingLotRecord* Lot = ParkingLotsById.Find(LotId))
+		{
+			FDoemitzSavedParkingOccupancy Occ;
+			Occ.ParkingLotId = LotId;
+			Occ.SlotOccupants = Lot->SlotOccupants;
+			SaveObj->ParkingOccupancy.Add(MoveTemp(Occ));
+		}
 	}
 
 	if (UWorld* World = GetWorld())
@@ -1840,22 +2938,12 @@ bool UDoemitzSimulationSubsystem::SaveCityState(const FString& SlotName)
 				SavedVehicle.SpeedCmPerSecond = Rec->State.CurrentSpeedCmPerSecond;
 				SavedVehicle.JunctionDecisions = Rec->State.JunctionDecisions;
 				SavedVehicle.WorldLocation = Rec->State.WorldLocation;
-				SaveObj->Vehicles.Add(SavedVehicle);
-			}
-		}
-	}
-	else if (UWorld* World = GetWorld())
-	{
-		for (TActorIterator<ADoemitzTrafficVehicle> It(World); It; ++It)
-		{
-			const ADoemitzTrafficVehicle* Vehicle = *It;
-			if (Vehicle && !Vehicle->GetVehicleId().IsNone())
-			{
-				FDoemitzSavedVehicle SavedVehicle;
-				SavedVehicle.VehicleId = Vehicle->GetVehicleId();
-				SavedVehicle.DistanceCm = Vehicle->GetDistanceAlongRoute();
-				SavedVehicle.CompletedLaps = Vehicle->GetCompletedLaps();
-				SavedVehicle.WorldLocation = Vehicle->GetActorLocation();
+				SavedVehicle.Phase = Rec->State.Phase;
+				SavedVehicle.TargetParkingLotId = Rec->State.TargetParkingLotId;
+				SavedVehicle.CurrentParkingLotId = Rec->State.CurrentParkingLotId;
+				SavedVehicle.ParkingSlotIndex = Rec->State.ParkingSlotIndex;
+				SavedVehicle.RemainingParkSeconds = Rec->State.RemainingParkSeconds;
+				SavedVehicle.TripCounter = Rec->TripCounter;
 				SaveObj->Vehicles.Add(SavedVehicle);
 			}
 		}
@@ -1881,9 +2969,12 @@ bool UDoemitzSimulationSubsystem::SaveCityState(const FString& SlotName)
 	const bool bSaved = UGameplayStatics::SaveGameToSlot(SaveObj, SlotName, 0);
 	if (bSaved)
 	{
-		SetNotification(FString::Printf(TEXT("Gespeichert: %s"), *SlotName));
-		UE_LOG(LogTemp, Display, TEXT("Doemitz save v%d written to slot '%s' (Day %d, %.1f min, %d citizens, %d vehicles)"),
-			SaveObj->SaveSchemaVersion, *SlotName, DayNumber, TimeOfDayMinutes, SaveObj->Citizens.Num(), SaveObj->Vehicles.Num());
+		FDoemitzNotificationEvent Ev;
+		Ev.Code = EDoemitzNotificationCode::SaveSucceeded;
+		Ev.ParameterKey = SlotName;
+		PushNotificationEvent(Ev);
+		UE_LOG(LogTemp, Display, TEXT("Doemitz save v%d written to slot '%s' (Day %d, %.1f min, %d citizens, %d vehicles, %d tasks)"),
+			SaveObj->SaveSchemaVersion, *SlotName, DayNumber, TimeOfDayMinutes, SaveObj->Citizens.Num(), SaveObj->Vehicles.Num(), SaveObj->Tasks.Num());
 	}
 	return bSaved;
 }
@@ -1904,6 +2995,7 @@ bool UDoemitzSimulationSubsystem::LoadCityState(const FString& SlotName)
 	const bool bMigratingFromV1 = (SaveObj->SaveSchemaVersion == 1);
 	const bool bMigratingFromPreV3 = (SaveObj->SaveSchemaVersion < 3);
 	const bool bMigratingFromPreV4 = (SaveObj->SaveSchemaVersion < 4);
+	const bool bMigratingFromPreV5 = (SaveObj->SaveSchemaVersion < 5);
 
 	if (bIsWorkingShift)
 	{
@@ -1925,7 +3017,7 @@ bool UDoemitzSimulationSubsystem::LoadCityState(const FString& SlotName)
 	DayNumber = FMath::Max(1, SaveObj->DayNumber);
 	if (bMigratingFromPreV3)
 	{
-		DayOfWeek = 0; // Montag (Migration from v1/v2)
+		DayOfWeek = 0;
 		CalendarWeek = 1 + ((DayNumber - 1) / 7);
 	}
 	else
@@ -1969,6 +3061,16 @@ bool UDoemitzSimulationSubsystem::LoadCityState(const FString& SlotName)
 		CitizenDailyShoppingRecorded.Reset();
 	}
 
+	// Tasks (v5+; v1..v4 migration leaves tasks empty)
+	if (bMigratingFromPreV5)
+	{
+		Tasks.Reset();
+	}
+	else
+	{
+		Tasks = SaveObj->Tasks;
+	}
+
 	TSet<FName> RestoredCitizenIds;
 	for (const FDoemitzSavedCitizen& Saved : SaveObj->Citizens)
 	{
@@ -1979,6 +3081,7 @@ bool UDoemitzSimulationSubsystem::LoadCityState(const FString& SlotName)
 			Record->State.CurrentPlaceId = Saved.CurrentPlaceId;
 			Record->State.TargetPlaceId = Saved.TargetPlaceId;
 			Record->State.bIsMoving = Saved.bIsMoving;
+			Record->State.bIsPausedForDialog = false;
 			Record->State.WorldLocation = Saved.WorldLocation;
 			Record->State.WorldRotation = Saved.WorldRotation;
 			Record->State.RouteProgressCm = FMath::Max(0.0, Saved.RouteProgressCm);
@@ -1998,12 +3101,20 @@ bool UDoemitzSimulationSubsystem::LoadCityState(const FString& SlotName)
 		}
 	}
 
-	// Any citizen not present in an older save (e.g. v1/v2 with 4 citizens -> v3 with 30 citizens) starts cleanly.
 	for (TPair<FName, FCitizenRecord>& Pair : CitizenRecords)
 	{
 		if (!RestoredCitizenIds.Contains(Pair.Key))
 		{
 			ResetCitizenToCurrentSchedule(Pair.Value);
+		}
+	}
+
+	// Clear parking occupancy before restoring vehicles
+	for (TPair<FName, FParkingLotRecord>& LotPair : ParkingLotsById)
+	{
+		for (FName& Occ : LotPair.Value.SlotOccupants)
+		{
+			Occ = NAME_None;
 		}
 	}
 
@@ -2013,6 +3124,9 @@ bool UDoemitzSimulationSubsystem::LoadCityState(const FString& SlotName)
 		for (TPair<FName, FVehicleRecord>& Pair : VehicleRecords)
 		{
 			Pair.Value.ReservedNodeId = NAME_None;
+			Pair.Value.PlannedEdges.Reset();
+			Pair.Value.bCompletedStopAtEdge = false;
+			Pair.Value.StopHoldElapsedSeconds = 0.0;
 		}
 
 		TMap<FName, FDoemitzSavedVehicle> SavedVehiclesById;
@@ -2030,13 +3144,21 @@ bool UDoemitzSimulationSubsystem::LoadCityState(const FString& SlotName)
 			}
 
 			const FDoemitzSavedVehicle* Saved = SavedVehiclesById.Find(VehicleId);
-			// Schema v1 migration: legacy altstadt_compact_01 maps to altstadt_vehicle_01
 			if (!Saved && bMigratingFromV1 && VehicleId == FName(TEXT("altstadt_vehicle_01")))
 			{
 				Saved = SavedVehiclesById.Find(FName(TEXT("altstadt_compact_01")));
 			}
 			if (!Saved)
 			{
+				// Newly added vehicles (e.g. v4 had 5 vehicles -> v5 has 8) start driving cleanly
+				Rec->State.Phase = EDoemitzVehiclePhase::Driving;
+				Rec->State.CurrentParkingLotId = NAME_None;
+				Rec->State.ParkingSlotIndex = -1;
+				Rec->State.RemainingParkSeconds = 0.0;
+				if (!OrderedParkingLotIds.IsEmpty())
+				{
+					PlanRouteToParking(*Rec, ChooseNextParkingLot(*Rec, NAME_None));
+				}
 				continue;
 			}
 
@@ -2066,14 +3188,73 @@ bool UDoemitzSimulationSubsystem::LoadCityState(const FString& SlotName)
 					? Saved->SpeedCmPerSecond
 					: FMath::Min(500.0, Edge->Definition.SpeedLimitCmPerSecond);
 				Rec->State.JunctionDecisions = FMath::Max(0, Saved->JunctionDecisions);
-				Rec->State.NextEdgeId = ChooseNextEdge(*Rec);
-				SampleEdgePose(*Edge, Rec->State.DistanceOnEdgeCm, Rec->State.WorldLocation, Rec->State.WorldRotation);
-			}
-		}
 
-		if (bMigratingFromV1)
-		{
-			UE_LOG(LogTemp, Display, TEXT("Migrated SaveGame v1 -> v2 for slot '%s'"), *SlotName);
+				if (bMigratingFromPreV5)
+				{
+					Rec->State.Phase = EDoemitzVehiclePhase::Driving;
+					Rec->State.CurrentParkingLotId = NAME_None;
+					Rec->State.ParkingSlotIndex = -1;
+					Rec->State.RemainingParkSeconds = 0.0;
+					Rec->TripCounter = 0;
+					SampleEdgePose(*Edge, Rec->State.DistanceOnEdgeCm, Rec->State.WorldLocation, Rec->State.WorldRotation);
+					if (!OrderedParkingLotIds.IsEmpty())
+					{
+						PlanRouteToParking(*Rec, ChooseNextParkingLot(*Rec, NAME_None));
+					}
+					else
+					{
+						Rec->State.NextEdgeId = ChooseNextEdge(*Rec);
+					}
+				}
+				else
+				{
+					Rec->TripCounter = FMath::Max(0, Saved->TripCounter);
+					Rec->State.Phase = Saved->Phase;
+					Rec->State.TargetParkingLotId = Saved->TargetParkingLotId;
+					Rec->State.CurrentParkingLotId = Saved->CurrentParkingLotId;
+					Rec->State.ParkingSlotIndex = Saved->ParkingSlotIndex;
+					Rec->State.RemainingParkSeconds = FMath::Max(0.0, Saved->RemainingParkSeconds);
+
+					if (Rec->State.Phase == EDoemitzVehiclePhase::Parked || Rec->State.Phase == EDoemitzVehiclePhase::Parking)
+					{
+						if (FParkingLotRecord* Lot = ParkingLotsById.Find(Rec->State.CurrentParkingLotId))
+						{
+							const int32 Idx = FMath::Clamp(Rec->State.ParkingSlotIndex, 0, Lot->SlotOccupants.Num() - 1);
+							Lot->SlotOccupants[Idx] = VehicleId;
+							Rec->State.ParkingSlotIndex = Idx;
+							Rec->State.Phase = EDoemitzVehiclePhase::Parked;
+							Rec->State.CurrentSpeedCmPerSecond = 0.0;
+							Rec->State.WorldLocation = Lot->Definition.SlotLocations.IsValidIndex(Idx)
+								? Lot->Definition.SlotLocations[Idx]
+								: Lot->Definition.Location;
+						}
+						else
+						{
+							Rec->State.Phase = EDoemitzVehiclePhase::Driving;
+							SampleEdgePose(*Edge, Rec->State.DistanceOnEdgeCm, Rec->State.WorldLocation, Rec->State.WorldRotation);
+						}
+					}
+					else
+					{
+						Rec->State.Phase = EDoemitzVehiclePhase::Driving;
+						Rec->State.CurrentParkingLotId = NAME_None;
+						Rec->State.ParkingSlotIndex = -1;
+						SampleEdgePose(*Edge, Rec->State.DistanceOnEdgeCm, Rec->State.WorldLocation, Rec->State.WorldRotation);
+						if (!Rec->State.TargetParkingLotId.IsNone() && ParkingLotsById.Contains(Rec->State.TargetParkingLotId))
+						{
+							PlanRouteToParking(*Rec, Rec->State.TargetParkingLotId);
+						}
+						else if (!OrderedParkingLotIds.IsEmpty())
+						{
+							PlanRouteToParking(*Rec, ChooseNextParkingLot(*Rec, NAME_None));
+						}
+						else
+						{
+							Rec->State.NextEdgeId = ChooseNextEdge(*Rec);
+						}
+					}
+				}
+			}
 		}
 	}
 
@@ -2090,32 +3271,11 @@ bool UDoemitzSimulationSubsystem::LoadCityState(const FString& SlotName)
 			}
 		}
 
-		if (VehicleRecords.IsEmpty())
+		for (TActorIterator<ADoemitzTrafficVehicle> It(World); It; ++It)
 		{
-			TMap<FName, FDoemitzSavedVehicle> SavedVehiclesById;
-			for (const FDoemitzSavedVehicle& SavedVehicle : SaveObj->Vehicles)
+			if (ADoemitzTrafficVehicle* Vehicle = *It)
 			{
-				SavedVehiclesById.Add(SavedVehicle.VehicleId, SavedVehicle);
-			}
-			for (TActorIterator<ADoemitzTrafficVehicle> It(World); It; ++It)
-			{
-				if (ADoemitzTrafficVehicle* Vehicle = *It)
-				{
-					if (const FDoemitzSavedVehicle* SavedVehicle = SavedVehiclesById.Find(Vehicle->GetVehicleId()))
-					{
-						Vehicle->RestoreMotionState(SavedVehicle->DistanceCm, SavedVehicle->CompletedLaps);
-					}
-				}
-			}
-		}
-		else
-		{
-			for (TActorIterator<ADoemitzTrafficVehicle> It(World); It; ++It)
-			{
-				if (ADoemitzTrafficVehicle* Vehicle = *It)
-				{
-					Vehicle->SyncFromSimulation();
-				}
+				Vehicle->SyncFromSimulation();
 			}
 		}
 
@@ -2137,14 +3297,17 @@ bool UDoemitzSimulationSubsystem::LoadCityState(const FString& SlotName)
 		}
 	}
 
-	if (bMigratingFromPreV4)
+	if (bMigratingFromPreV5)
 	{
 		UE_LOG(LogTemp, Display, TEXT("Migrated SaveGame v%d -> v%d for slot '%s'"),
 			SaveObj->SaveSchemaVersion, UDoemitzSaveGame::CurrentSchemaVersion, *SlotName);
 	}
 
-	SetNotification(FString::Printf(TEXT("Geladen: %s"), *SlotName));
-	UE_LOG(LogTemp, Display, TEXT("Doemitz save v%d loaded from slot '%s' (%s, Day %d, KW %d, %.1f min)"),
-		SaveObj->SaveSchemaVersion, *SlotName, *GetDayOfWeekShortName(), DayNumber, CalendarWeek, TimeOfDayMinutes);
+	FDoemitzNotificationEvent Ev;
+	Ev.Code = EDoemitzNotificationCode::LoadSucceeded;
+	Ev.ParameterKey = SlotName;
+	PushNotificationEvent(Ev);
+	UE_LOG(LogTemp, Display, TEXT("Doemitz save v%d loaded from slot '%s' (Day %d, dow %d, KW %d, %.1f min, %d tasks)"),
+		SaveObj->SaveSchemaVersion, *SlotName, DayNumber, DayOfWeek, CalendarWeek, TimeOfDayMinutes, Tasks.Num());
 	return true;
 }

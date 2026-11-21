@@ -43,9 +43,9 @@ def check(_delta_seconds):
             return
 
         if phase == "check_initial":
-            if sub.get_day_of_week() != 0 or sub.get_day_of_week_short_name() != "Mo" or sub.get_calendar_week() != 1:
+            if sub.get_day_of_week() != 0 or sub.get_calendar_week() != 1:
                 raise RuntimeError(
-                    f"expected initial Monday KW 1, got dow={sub.get_day_of_week()} ({sub.get_day_of_week_short_name()}) KW={sub.get_calendar_week()}"
+                    f"expected initial Monday KW 1, got dow={sub.get_day_of_week()} KW={sub.get_calendar_week()}"
                 )
             gfx = unreal.DoemitzGraphicsSettings.get()
             if gfx is None or gfx.get_active_profile_name() != "DoemitzLow":
@@ -68,9 +68,11 @@ def check(_delta_seconds):
         if phase == "wait_rollover":
             if sub.get_day_number() < 2:
                 return
-            if sub.get_day_of_week() != 1 or sub.get_day_of_week_short_name() != "Di":
+            widget.refresh_display()
+            tue_clock = widget.get_clock_text_string()
+            if sub.get_day_of_week() != 1 or "Di, Tag 2" not in tue_clock:
                 raise RuntimeError(
-                    f"expected Tuesday after rollover, got dow={sub.get_day_of_week()} ({sub.get_day_of_week_short_name()})"
+                    f"expected Tuesday after rollover, got dow={sub.get_day_of_week()} HUD={tue_clock!r}"
                 )
 
             # Switch to Sunday (Day 7, So) at 10:00 (600 min): Kaufhaus is closed on Sunday.

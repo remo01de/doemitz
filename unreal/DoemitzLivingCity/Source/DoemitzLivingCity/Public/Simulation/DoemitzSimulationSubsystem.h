@@ -3,10 +3,12 @@
 #include "CoreMinimal.h"
 #include "Economy/DoemitzEconomyDataAsset.h"
 #include "Subsystems/WorldSubsystem.h"
+#include "Tasks/DoemitzTaskDataAsset.h"
 #include "DoemitzSimulationSubsystem.generated.h"
 
 class ADoemitzCitizenActor;
 class UStaticMesh;
+class UTexture2D;
 
 UENUM(BlueprintType)
 enum class EDoemitzCitizenActivity : uint8
@@ -24,6 +26,166 @@ enum class EDoemitzDayKind : uint8
 	Weekday,
 	Saturday,
 	Sunday
+};
+
+UENUM(BlueprintType)
+enum class EDoemitzYieldRule : uint8
+{
+	None,
+	GiveWay,
+	Stop
+};
+
+UENUM(BlueprintType)
+enum class EDoemitzVehiclePhase : uint8
+{
+	Driving,
+	Parking,
+	Parked,
+	Leaving
+};
+
+UENUM(BlueprintType)
+enum class EDoemitzShiftCheckResult : uint8
+{
+	Ready,
+	AlreadyWorking,
+	NoJobAtPlace,
+	JobNotAccepted,
+	NotAWorkDay,
+	TooEarly,
+	ShiftEnded
+};
+
+UENUM(BlueprintType)
+enum class EDoemitzNotificationCode : uint8
+{
+	None,
+	PlaceClosed,
+	InsufficientFunds,
+	ItemPurchased,
+	JobNeedsOpenPlace,
+	JobAccepted,
+	ShiftUnavailable,
+	ShiftStarted,
+	ShiftFinished,
+	TaskAccepted,
+	TaskParcelPickedUp,
+	TaskCompleted,
+	TaskMissed,
+	TaskNeedsItem,
+	SaveSucceeded,
+	LoadSucceeded,
+	NoSaveFound,
+	TimeScaleChanged,
+	TimePaused,
+	TimeResumed,
+	GraphicsProfileChanged
+};
+
+USTRUCT(BlueprintType)
+struct DOEMITZLIVINGCITY_API FDoemitzOpeningStatus
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "Simulation")
+	bool bKnown = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Simulation")
+	bool bOpen = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Simulation")
+	bool bAlwaysOpen = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Simulation")
+	bool bHasNextChange = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Simulation")
+	int32 NextChangeMinute = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Simulation")
+	int32 NextChangeWeekday = 0;
+};
+
+USTRUCT(BlueprintType)
+struct DOEMITZLIVINGCITY_API FDoemitzShiftAvailability
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "Economy")
+	bool bCanStart = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Economy")
+	EDoemitzShiftCheckResult Result = EDoemitzShiftCheckResult::NoJobAtPlace;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Economy")
+	int32 ShiftStartMinute = 0;
+};
+
+USTRUCT(BlueprintType)
+struct DOEMITZLIVINGCITY_API FDoemitzNotificationEvent
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "Simulation")
+	EDoemitzNotificationCode Code = EDoemitzNotificationCode::None;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Simulation")
+	FName PlaceId;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Simulation")
+	FName ItemId;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Simulation")
+	FName JobId;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Simulation")
+	FName TaskId;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Simulation")
+	int64 AmountCents = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Simulation")
+	int64 SecondaryAmountCents = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Simulation")
+	int32 Quantity = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Simulation")
+	int32 MinuteValue = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Simulation")
+	bool bFlag = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Simulation")
+	EDoemitzShiftCheckResult ShiftResult = EDoemitzShiftCheckResult::Ready;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Simulation")
+	FString ParameterKey;
+};
+
+USTRUCT(BlueprintType)
+struct DOEMITZLIVINGCITY_API FDoemitzMapBounds
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Map")
+	double ViewMinEastM = -400.0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Map")
+	double ViewMinNorthM = -400.0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Map")
+	double ViewMaxEastM = 400.0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Map")
+	double ViewMaxNorthM = 400.0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Map")
+	int32 WidthPx = 2048;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Map")
+	int32 HeightPx = 2048;
 };
 
 USTRUCT(BlueprintType)
@@ -185,6 +347,9 @@ struct DOEMITZLIVINGCITY_API FDoemitzCitizenState
 	bool bIsHighDetail = false;
 
 	UPROPERTY(BlueprintReadOnly, Category = "Simulation")
+	bool bIsPausedForDialog = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Simulation")
 	FVector WorldLocation = FVector::ZeroVector;
 
 	UPROPERTY(BlueprintReadOnly, Category = "Simulation")
@@ -242,7 +407,67 @@ struct DOEMITZLIVINGCITY_API FDoemitzRoadEdgeDefinition
 	double SpeedLimitCmPerSecond = 833.33;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic")
+	EDoemitzYieldRule YieldRule = EDoemitzYieldRule::None;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic")
+	FName YieldSignId;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic")
 	TArray<FVector> Points;
+};
+
+USTRUCT(BlueprintType)
+struct DOEMITZLIVINGCITY_API FDoemitzParkingLotDefinition
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic")
+	FName ParkingLotId;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic")
+	FString DisplayName;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic")
+	FVector Location = FVector::ZeroVector;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic")
+	int32 Capacity = 4;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic")
+	FString CapacitySource;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic")
+	FName AccessEdgeId;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic", meta = (Units = "cm"))
+	double AccessDistanceCm = 0.0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic")
+	TArray<FVector> SlotLocations;
+};
+
+USTRUCT(BlueprintType)
+struct DOEMITZLIVINGCITY_API FDoemitzParkingLotState
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
+	FName ParkingLotId;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
+	FString DisplayName;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
+	FVector Location = FVector::ZeroVector;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
+	int32 Capacity = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
+	int32 OccupiedCount = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
+	TArray<FName> OccupiedByVehicles;
 };
 
 USTRUCT(BlueprintType)
@@ -269,10 +494,25 @@ struct DOEMITZLIVINGCITY_API FDoemitzVehicleState
 	FName VehicleId;
 
 	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
+	EDoemitzVehiclePhase Phase = EDoemitzVehiclePhase::Driving;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
 	FName CurrentEdgeId;
 
 	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
 	FName NextEdgeId;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
+	FName TargetParkingLotId;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
+	FName CurrentParkingLotId;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
+	int32 ParkingSlotIndex = -1;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
+	double RemainingParkSeconds = 0.0;
 
 	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
 	double DistanceOnEdgeCm = 0.0;
@@ -291,6 +531,12 @@ struct DOEMITZLIVINGCITY_API FDoemitzVehicleState
 
 	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
 	bool bYieldingForRightOfWay = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
+	bool bYieldingForPrioritySign = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
+	bool bStoppingForStopSign = false;
 
 	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
 	bool bYieldingForVehicle = false;
@@ -328,16 +574,26 @@ public:
 		int32 InTrafficSeed,
 		const TArray<FDoemitzRoadEdgeDefinition>& InRoadEdges,
 		const TArray<FDoemitzVehicleDefinition>& InVehicles,
-		const TArray<FDoemitzCrossingDefinition>& InCrossings = TArray<FDoemitzCrossingDefinition>());
+		const TArray<FDoemitzCrossingDefinition>& InCrossings = TArray<FDoemitzCrossingDefinition>(),
+		const TArray<FDoemitzParkingLotDefinition>& InParkingLots = TArray<FDoemitzParkingLotDefinition>());
 
 	void ConfigureEconomy(const UDoemitzEconomyDataAsset* InEconomyData);
+	void ConfigureTasks(const UDoemitzTaskDataAsset* InTaskData);
+	void ConfigureCityMap(UTexture2D* InMapTexture, const FDoemitzMapBounds& InMapBounds);
 
 	UFUNCTION(BlueprintPure, Category = "Simulation", meta = (WorldContext = "WorldContextObject"))
 	static UDoemitzSimulationSubsystem* Get(const UObject* WorldContextObject);
 
-	UFUNCTION(BlueprintPure, Category = "Economy")
-	static FString FormatCentsEur(int64 AmountCents);
+	UFUNCTION(BlueprintPure, Category = "Map")
+	UTexture2D* GetCityMapTexture() const { return CityMapTexture.Get(); }
 
+	UFUNCTION(BlueprintPure, Category = "Map")
+	FDoemitzMapBounds GetCityMapBounds() const { return CityMapBounds; }
+
+	UFUNCTION(BlueprintPure, Category = "Map")
+	FVector2D ProjectWorldToNormalizedMap(const FVector& WorldLocationCm) const;
+
+	// --- Economy ---
 	UFUNCTION(BlueprintPure, Category = "Economy")
 	int64 GetPlayerMoneyCents() const { return PlayerMoneyCents; }
 
@@ -357,6 +613,9 @@ public:
 	TArray<FDoemitzInventoryItem> GetAllInventoryItems() const;
 
 	UFUNCTION(BlueprintPure, Category = "Economy")
+	bool GetItemDefinition(FName ItemId, FDoemitzItemDefinition& OutItem) const;
+
+	UFUNCTION(BlueprintPure, Category = "Economy")
 	TArray<FDoemitzItemDefinition> GetItemsForPlace(FName PlaceId) const;
 
 	UFUNCTION(BlueprintCallable, Category = "Economy")
@@ -364,6 +623,9 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Economy")
 	bool GetJobForPlace(FName PlaceId, FDoemitzJobDefinition& OutJob) const;
+
+	UFUNCTION(BlueprintPure, Category = "Economy")
+	bool GetJobDefinition(FName JobId, FDoemitzJobDefinition& OutJob) const;
 
 	UFUNCTION(BlueprintPure, Category = "Economy")
 	FName GetActiveJobId() const { return ActiveJobId; }
@@ -375,7 +637,7 @@ public:
 	bool AcceptJob(FName PlaceId);
 
 	UFUNCTION(BlueprintPure, Category = "Economy")
-	bool CanStartWorkShift(FName PlaceId, FString& OutReason) const;
+	FDoemitzShiftAvailability CheckWorkShiftAvailability(FName PlaceId) const;
 
 	UFUNCTION(BlueprintCallable, Category = "Economy")
 	bool StartWorkShift(FName PlaceId);
@@ -383,14 +645,58 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Economy")
 	bool GetPlaceRevenue(FName PlaceId, int64& OutDailyCents, int64& OutWeeklyCents) const;
 
+	// --- Tasks ---
+	UFUNCTION(BlueprintPure, Category = "Tasks")
+	TArray<FDoemitzTaskInstance> GetAllTasks() const { return Tasks; }
+
+	UFUNCTION(BlueprintPure, Category = "Tasks")
+	TArray<FDoemitzTaskInstance> GetTasksByStatus(EDoemitzTaskStatus Status) const;
+
+	UFUNCTION(BlueprintPure, Category = "Tasks")
+	bool GetTaskById(FName TaskId, FDoemitzTaskInstance& OutTask) const;
+
+	UFUNCTION(BlueprintPure, Category = "Tasks")
+	bool GetPrimaryActiveTask(FDoemitzTaskInstance& OutTask) const;
+
+	UFUNCTION(BlueprintPure, Category = "Tasks")
+	bool GetTaskOfferedByCitizen(FName CitizenId, FDoemitzTaskInstance& OutTask) const;
+
+	UFUNCTION(BlueprintPure, Category = "Tasks")
+	bool GetActiveFetchTaskForCitizen(FName CitizenId, FDoemitzTaskInstance& OutTask) const;
+
+	UFUNCTION(BlueprintPure, Category = "Tasks")
+	bool GetActiveErrandForPlace(FName PlaceId, FDoemitzTaskInstance& OutTask, bool& bOutIsDelivery) const;
+
+	UFUNCTION(BlueprintPure, Category = "Tasks")
+	bool GetActiveTaskTargetLocation(FVector& OutWorldLocation, FName& OutTargetPlaceId, FName& OutTargetCitizenId) const;
+
+	UFUNCTION(BlueprintCallable, Category = "Tasks")
+	bool AcceptTask(FName TaskId);
+
+	UFUNCTION(BlueprintCallable, Category = "Tasks")
+	bool PickupTaskParcel(FName TaskId);
+
+	UFUNCTION(BlueprintCallable, Category = "Tasks")
+	bool DeliverTaskParcel(FName TaskId);
+
+	UFUNCTION(BlueprintCallable, Category = "Tasks")
+	bool CompleteFetchTask(FName TaskId);
+
+	UFUNCTION(BlueprintCallable, Category = "Tasks")
+	void CheckTaskDeadlines();
+
+	// --- Places & Time ---
 	UFUNCTION(BlueprintPure, Category = "Simulation")
 	bool GetPlaceDefinition(FName PlaceId, FDoemitzPlaceDefinition& OutPlace) const;
+
+	UFUNCTION(BlueprintPure, Category = "Simulation")
+	TArray<FDoemitzPlaceDefinition> GetAllPlaceDefinitions() const;
 
 	UFUNCTION(BlueprintPure, Category = "Simulation")
 	bool FindNearestEntrance(const FVector& QueryLocation, double MaxRadiusCm, FDoemitzPlaceDefinition& OutPlace, double& OutDistanceCm) const;
 
 	UFUNCTION(BlueprintPure, Category = "Simulation")
-	FString GetPlaceOpeningStatusText(FName PlaceId) const;
+	FDoemitzOpeningStatus GetPlaceOpeningStatus(FName PlaceId) const;
 
 	UFUNCTION(BlueprintPure, Category = "Simulation")
 	double GetTimeOfDayMinutes() const { return TimeOfDayMinutes; }
@@ -403,9 +709,6 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Simulation")
 	int32 GetCalendarWeek() const { return CalendarWeek; }
-
-	UFUNCTION(BlueprintPure, Category = "Simulation")
-	FString GetDayOfWeekShortName() const;
 
 	UFUNCTION(BlueprintPure, Category = "Simulation")
 	EDoemitzDayKind GetDayKind() const;
@@ -431,6 +734,7 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Simulation")
 	bool IsPlaceOpenNow(FName PlaceId) const;
 
+	// --- Citizens ---
 	UFUNCTION(BlueprintPure, Category = "Simulation")
 	int32 GetCitizenCount() const { return CitizenRecords.Num(); }
 
@@ -439,6 +743,15 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Simulation")
 	TArray<FName> GetAllCitizenIds() const;
+
+	UFUNCTION(BlueprintPure, Category = "Simulation")
+	bool FindNearestCitizen(const FVector& QueryLocation, double MaxRadiusCm, FDoemitzCitizenState& OutCitizen, double& OutDistanceCm) const;
+
+	UFUNCTION(BlueprintCallable, Category = "Simulation")
+	bool SetCitizenDialogPaused(FName CitizenId, bool bPaused);
+
+	UFUNCTION(BlueprintPure, Category = "Simulation")
+	bool IsCitizenDialogPaused(FName CitizenId) const;
 
 	UFUNCTION(BlueprintPure, Category = "Simulation")
 	int32 GetActiveCitizenActorCount() const { return ActiveCitizenActors.Num(); }
@@ -458,6 +771,7 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Simulation")
 	bool SetCitizenPositionForTest(FName CitizenId, const FVector& NewLocation);
 
+	// --- Traffic & Parking ---
 	UFUNCTION(BlueprintPure, Category = "Traffic")
 	int32 GetVehicleCount() const { return VehicleRecords.Num(); }
 
@@ -482,9 +796,28 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Traffic")
 	FName GetJunctionReservation(FName NodeId) const;
 
+	UFUNCTION(BlueprintPure, Category = "Traffic")
+	EDoemitzYieldRule GetEdgeYieldRule(FName EdgeId) const;
+
+	UFUNCTION(BlueprintCallable, Category = "Traffic")
+	bool SetEdgeYieldRuleForTest(FName EdgeId, EDoemitzYieldRule NewRule);
+
+	UFUNCTION(BlueprintPure, Category = "Traffic")
+	int32 GetParkingLotCount() const { return ParkingLotsById.Num(); }
+
+	UFUNCTION(BlueprintPure, Category = "Traffic")
+	TArray<FName> GetAllParkingLotIds() const { return OrderedParkingLotIds; }
+
+	UFUNCTION(BlueprintPure, Category = "Traffic")
+	bool GetParkingLotState(FName ParkingLotId, FDoemitzParkingLotState& OutState) const;
+
 	UFUNCTION(BlueprintCallable, Category = "Traffic")
 	bool SetVehicleEdgePositionForTest(FName VehicleId, FName EdgeId, double DistanceOnEdgeCm, double SpeedCmPerSecond = 0.0);
 
+	UFUNCTION(BlueprintCallable, Category = "Traffic")
+	bool SetVehicleTargetParkingForTest(FName VehicleId, FName ParkingLotId);
+
+	// --- SaveGame ---
 	UFUNCTION(BlueprintCallable, Category = "SaveGame")
 	bool SaveCityState(const FString& SlotName = TEXT("DoemitzQuicksave"));
 
@@ -494,11 +827,12 @@ public:
 	UFUNCTION(BlueprintPure, Category = "SaveGame")
 	bool DoesSaveExist(const FString& SlotName = TEXT("DoemitzQuicksave")) const;
 
+	// --- Structured Notification Events (formatted in UI layer) ---
 	UFUNCTION(BlueprintCallable, Category = "Simulation")
-	void SetNotification(const FString& Message, double DurationSeconds = 4.0);
+	void PushNotificationEvent(const FDoemitzNotificationEvent& Event, double DurationSeconds = 4.0);
 
 	UFUNCTION(BlueprintPure, Category = "Simulation")
-	FString GetLastNotification() const;
+	FDoemitzNotificationEvent GetLastNotificationEvent() const;
 
 private:
 	struct FCitizenRecord
@@ -520,11 +854,26 @@ private:
 		FVector2D EndDir2D = FVector2D(1.0, 0.0);
 	};
 
+	struct FParkingLotRecord
+	{
+		FDoemitzParkingLotDefinition Definition;
+		TArray<FName> SlotOccupants; // size = max(1, SlotLocations.Num()), NAME_None when free
+	};
+
 	struct FVehicleRecord
 	{
 		FDoemitzVehicleDefinition Definition;
 		FDoemitzVehicleState State;
 		FName ReservedNodeId;
+		TArray<FName> PlannedEdges;
+		int32 TripCounter = 0;
+		bool bCompletedStopAtEdge = false;
+		double StopHoldElapsedSeconds = 0.0;
+		double ManeuverProgress = 0.0;
+		FVector ManeuverStartLocation = FVector::ZeroVector;
+		FRotator ManeuverStartRotation = FRotator::ZeroRotator;
+		FVector ManeuverEndLocation = FVector::ZeroVector;
+		FRotator ManeuverEndRotation = FRotator::ZeroRotator;
 	};
 
 	static int32 FindScheduleIndex(const TArray<FDoemitzScheduleEntry>& Schedule, double MinuteOfDay);
@@ -541,6 +890,11 @@ private:
 
 	void SampleEdgePose(const FRoadEdgeRecord& Edge, double DistanceCm, FVector& OutLocation, FRotator& OutRotation) const;
 	FName ChooseNextEdge(const FVehicleRecord& Record) const;
+	bool ComputeEdgePath(FName StartEdgeId, FName GoalEdgeId, TArray<FName>& OutPath) const;
+	FName ChooseNextParkingLot(const FVehicleRecord& Record, FName ExcludeLotId) const;
+	void PlanRouteToParking(FVehicleRecord& Record, FName ParkingLotId);
+	int32 TryReserveParkingSlot(FName ParkingLotId, FName VehicleId, FVector& OutSlotLocation);
+	void ReleaseParkingSlot(FVehicleRecord& Record);
 	FName FindNearestDrivableEdge(const FVector& Location, double& OutDistanceCm) const;
 	void UpdateTraffic(double DeltaSeconds);
 	void ReleaseJunctionReservation(FVehicleRecord& Record);
@@ -552,6 +906,9 @@ private:
 	void FinishWorkShift();
 	void ResetEconomyToDefaults();
 
+	void GenerateDailyTasks();
+	bool FindOpenWindowOnDay(FName PlaceId, int32 DayOfWeekIndex, int32& OutEarliestStart, int32& OutLatestEnd) const;
+
 	bool bIsConfigured = false;
 	double TimeOfDayMinutes = 470.0;
 	double TimeScale = 60.0;
@@ -561,8 +918,13 @@ private:
 	int32 TrafficSeed = 202607;
 	double CitizenLodRadiusCm = 15000.0;
 	double CoarseUpdateIntervalSeconds = 1.0;
-	FString LastNotification;
+
+	FDoemitzNotificationEvent LastNotificationEvent;
 	double NotificationRemainingSeconds = 0.0;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UTexture2D> CityMapTexture;
+	FDoemitzMapBounds CityMapBounds;
 
 	static constexpr int32 MaxLedgerEntries = 200;
 	int32 EconomySeed = 202609;
@@ -575,12 +937,19 @@ private:
 	double ShiftActualStartMinute = 0.0;
 	double PreShiftTimeScale = 60.0;
 	TMap<FName, TArray<FDoemitzItemDefinition>> AssortmentsByCategory;
+	TMap<FName, FDoemitzItemDefinition> ItemsById;
 	TMap<FName, FDoemitzJobDefinition> JobsById;
 	TMap<FName, FName> JobIdByPlace;
 	TArray<FDoemitzLedgerEntry> LedgerEntries;
 	TMap<FName, int32> PlayerInventory;
 	TMap<FName, FDoemitzPlaceRevenue> PlaceRevenues;
 	TSet<FName> CitizenDailyShoppingRecorded;
+
+	int32 TaskSeed = 202610;
+	int32 DailyMinTasks = 3;
+	int32 DailyMaxTasks = 5;
+	TArray<FDoemitzTaskTemplate> TaskTemplates;
+	TArray<FDoemitzTaskInstance> Tasks;
 
 	TMap<FName, FDoemitzPlaceDefinition> PlacesById;
 	TMap<FName, FDoemitzCitizenRoute> RoutesByKey;
@@ -598,6 +967,8 @@ private:
 	TMap<FName, FRoadEdgeRecord> RoadEdgesById;
 	TMap<FName, TArray<FName>> OutgoingEdgesByNode;
 	TArray<FDoemitzCrossingDefinition> Crossings;
+	TMap<FName, FParkingLotRecord> ParkingLotsById;
+	TArray<FName> OrderedParkingLotIds;
 	TMap<FName, FVehicleRecord> VehicleRecords;
 	TArray<FName> OrderedVehicleIds;
 	TMap<FName, FName> JunctionReservations;

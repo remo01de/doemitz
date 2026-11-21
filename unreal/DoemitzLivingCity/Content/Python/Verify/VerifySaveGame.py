@@ -30,6 +30,11 @@ def get_state(sub, cid):
     return res[1] if isinstance(res, tuple) else res
 
 
+def get_vstate(sub, vid):
+    res = sub.get_vehicle_state(vid)
+    return res[1] if isinstance(res, tuple) else res
+
+
 def check(_delta_seconds):
     global phase, saved_player_loc, saved_vehicle_dist, saved_anna_loc, saved_anna_moving
     try:
@@ -52,7 +57,6 @@ def check(_delta_seconds):
         dn = dns[0]
 
         if phase == "prepare":
-            # Move clock to 07:55 so Anna starts commuting, set 5x speed.
             sub.set_time_of_day_minutes(475.0)
             sub.set_time_scale(300.0)
             unreal.GameplayStatics.set_global_time_dilation(world, 4.0)
@@ -64,42 +68,49 @@ def check(_delta_seconds):
             if not anna.get_editor_property("is_moving") or anna.get_editor_property("route_progress_cm") < 200.0:
                 return
 
-            # Pause and perform economy actions before saving so v4 economy persistence is also verified.
             sub.set_time_scale(0.0)
-            saved_min = sub.get_time_of_day_minutes()
             saved_player_loc = pawn.get_actor_location()
             saved_vehicle_dist = car.get_distance_along_route()
             saved_anna_loc = anna.get_editor_property("world_location")
             saved_anna_moving = anna.get_editor_property("is_moving")
 
-            # Perform an open-hours purchase and accept a job before saving
+            # Perform economy & task actions before saving v5
             sub.set_time_of_day_minutes(600.0)
             saved_min = sub.get_time_of_day_minutes()
             if not sub.buy_item("poi:osm:node:1794647095", "item_pflaster", 1):
                 raise RuntimeError("pre-save BuyItem failed")
             if not sub.accept_job("place_kaufhaus"):
                 raise RuntimeError("pre-save AcceptJob failed")
+
+            avail_tasks = sub.get_tasks_by_status(unreal.DoemitzTaskStatus.AVAILABLE)
+            if len(avail_tasks) < 2:
+                raise RuntimeError(f"expected >=2 available tasks, got {len(avail_tasks)}")
+            accepted_task_id = str(avail_tasks[0].get_editor_property("task_id"))
+            if not sub.accept_task(accepted_task_id):
+                raise RuntimeError(f"AcceptTask({accepted_task_id}) failed")
+
             saved_money = sub.get_player_money_cents()
             saved_qty = sub.get_inventory_quantity("item_pflaster")
             saved_job = str(sub.get_active_job_id())
             saved_rev_daily, _ = sub.get_place_revenue("poi:osm:node:1794647095")
+            saved_active_count = len(sub.get_tasks_by_status(unreal.DoemitzTaskStatus.ACTIVE))
 
             if not sub.save_city_state(slot_name):
                 raise RuntimeError("SaveCityState returned False")
             if not sub.does_save_exist(slot_name):
                 raise RuntimeError("Save slot does not exist after SaveCityState")
 
-            # Mutate world & economy state heavily before loading back.
+            # Mutate world, economy, and task state heavily before loading back
+            sub.set_time_of_day_minutes(1430.0)  # Expires active task -> MISSED
+            if len(sub.get_tasks_by_status(unreal.DoemitzTaskStatus.ACTIVE)) != 0:
+                raise RuntimeError("expected active task to expire when mutating time to 23:50")
             sub.set_time_of_day_minutes(15.0)
             sub.set_player_money_cents_for_test(99999)
             dn.update_lighting_from_simulation()
             if dn.is_daytime():
                 raise RuntimeError("expected night lighting after mutating time to 00:15")
             pawn.set_actor_location(saved_player_loc + unreal.Vector(800.0, 0.0, 0.0), False, True)
-            if sub.get_vehicle_count() > 0:
-                sub.set_vehicle_edge_position_for_test("altstadt_vehicle_01", "edge:osm:way:157877527:0:0:fwd", 1234.0, 0.0)
-            else:
-                car.restore_motion_state(saved_vehicle_dist + 5000.0, 3)
+            sub.set_vehicle_edge_position_for_test("altstadt_vehicle_01", "edge:osm:way:157877527:0:0:fwd", 1234.0, 0.0)
 
             if not sub.load_city_state(slot_name):
                 raise RuntimeError("LoadCityState returned False")
@@ -110,6 +121,7 @@ def check(_delta_seconds):
             restored_anna = get_state(sub, "citizen_anna_01")
             restored_anna_loc = restored_anna.get_editor_property("world_location")
             restored_rev_daily, _ = sub.get_place_revenue("poi:osm:node:1794647095")
+            restored_active = sub.get_tasks_by_status(unreal.DoemitzTaskStatus.ACTIVE)
 
             if abs(restored_min - saved_min) > 0.5:
                 raise RuntimeError(f"restored time mismatch: {restored_min} vs {saved_min}")
@@ -131,32 +143,39 @@ def check(_delta_seconds):
                 raise RuntimeError("active job was not restored")
             if restored_rev_daily != saved_rev_daily:
                 raise RuntimeError(f"place revenue mismatch: {restored_rev_daily} vs {saved_rev_daily}")
+            if len(restored_active) != saved_active_count or str(restored_active[0].get_editor_property("task_id")) != accepted_task_id:
+                raise RuntimeError("active task was not restored from SaveGame v5")
 
-            # Also verify SaveSchemaVersion 3 -> 4 migration (starting balance 12500 ct, empty inventory)
-            v3_slot = "DoemitzVerifyV3Migration"
-            v3_save = unreal.GameplayStatics.create_save_game_object(unreal.DoemitzSaveGame)
-            v3_save.set_editor_property("save_schema_version", 3)
-            v3_save.set_editor_property("day_number", 4)
-            v3_save.set_editor_property("day_of_week", 3)
-            v3_save.set_editor_property("calendar_week", 1)
-            v3_save.set_editor_property("time_of_day_minutes", 600.0)
-            v3_save.set_editor_property("time_scale", 60.0)
-            if not unreal.GameplayStatics.save_game_to_slot(v3_save, v3_slot, 0):
-                raise RuntimeError("failed to write synthetic v3 save")
-            if not sub.load_city_state(v3_slot):
-                raise RuntimeError("LoadCityState failed to migrate SaveSchemaVersion 3")
-            if sub.get_day_number() != 4 or sub.get_day_of_week() != 3:
-                raise RuntimeError(f"v3 migration did not restore day/dow: {sub.get_day_number()}/{sub.get_day_of_week()}")
-            if sub.get_player_money_cents() != 12500 or sub.get_inventory_quantity("item_pflaster") != 0:
-                raise RuntimeError(
-                    f"v3 migration did not initialize economy defaults: money={sub.get_player_money_cents()}, inv={sub.get_inventory_quantity('item_pflaster')}"
-                )
-            unreal.GameplayStatics.delete_game_in_slot(v3_slot, 0)
+            # Verify SaveSchemaVersion 4 -> 5 migration (vehicles Driving, 0 tasks, economy preserved)
+            v4_slot = "DoemitzVerifyV4Migration"
+            v4_save = unreal.GameplayStatics.create_save_game_object(unreal.DoemitzSaveGame)
+            v4_save.set_editor_property("save_schema_version", 4)
+            v4_save.set_editor_property("day_number", 3)
+            v4_save.set_editor_property("day_of_week", 2)
+            v4_save.set_editor_property("calendar_week", 1)
+            v4_save.set_editor_property("time_of_day_minutes", 600.0)
+            v4_save.set_editor_property("time_scale", 60.0)
+            v4_save.set_editor_property("player_money_cents", 18800)
+            if not unreal.GameplayStatics.save_game_to_slot(v4_save, v4_slot, 0):
+                raise RuntimeError("failed to write synthetic v4 save")
+            if not sub.load_city_state(v4_slot):
+                raise RuntimeError("LoadCityState failed to migrate SaveSchemaVersion 4")
+            if sub.get_day_number() != 3 or sub.get_day_of_week() != 2:
+                raise RuntimeError(f"v4 migration did not restore day/dow: {sub.get_day_number()}/{sub.get_day_of_week()}")
+            if sub.get_player_money_cents() != 18800:
+                raise RuntimeError(f"v4 migration did not preserve money: {sub.get_player_money_cents()}")
+            if len(sub.get_all_tasks()) != 0:
+                raise RuntimeError(f"v4 migration expected 0 tasks, got {len(sub.get_all_tasks())}")
+            for vid in sub.get_all_vehicle_ids():
+                vst = get_vstate(sub, vid)
+                if vst.get_editor_property("phase") != unreal.DoemitzVehiclePhase.DRIVING:
+                    raise RuntimeError(f"v4 migration expected vehicle {vid} in DRIVING phase")
+            unreal.GameplayStatics.delete_game_in_slot(v4_slot, 0)
 
             finish(
-                f"DOEMITZ_SAVEGAME_PIE_OK: v4 saved & restored time={restored_min:.1f}m, "
-                f"money={saved_money}ct, inv={saved_qty}, job={saved_job}, rev={saved_rev_daily}ct, "
-                f"30 citizens, player/vehicle states, and v3->v4 migration verified",
+                f"DOEMITZ_SAVEGAME_PIE_OK: v5 saved & restored time={restored_min:.1f}m, "
+                f"money={saved_money}ct, inv={saved_qty}, job={saved_job}, active_task={accepted_task_id}, "
+                f"30 citizens, 8 vehicles, and v4->v5 migration verified",
                 True,
             )
             phase = "done"

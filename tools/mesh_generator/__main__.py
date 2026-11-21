@@ -16,9 +16,11 @@ from shapely.ops import nearest_points
 from tools.geo_import.export import geometry_parts, write_json
 from tools.mesh_generator.architecture import ROOF_STYLES, WALL_STYLES, add_stylized_building
 from tools.mesh_generator.citizens import build_citizens
+from tools.mesh_generator.city_map import render_city_map
 from tools.mesh_generator.economy import build_economy
 from tools.mesh_generator.props import add_street_lamps, add_stylized_trees
 from tools.mesh_generator.road_graph import build_road_graph
+from tools.mesh_generator.tasks import build_tasks
 from tools.mesh_generator.traffic import build_vehicle_route
 
 
@@ -27,6 +29,7 @@ DEFAULT_SCENE = ROOT / "data/processed/doemitz-altstadt/scene.json"
 STREET_LAYOUT = ROOT / "data/manifests/doemitz-altstadt-streets.json"
 CITIZENS_LAYOUT = ROOT / "data/manifests/doemitz-altstadt-citizens.json"
 ECONOMY_LAYOUT = ROOT / "data/manifests/doemitz-altstadt-economy.json"
+TASKS_LAYOUT = ROOT / "data/manifests/doemitz-altstadt-tasks.json"
 PALETTE = {
     "Terrain": (0.22, 0.42, 0.14),
     "Water": (0.06, 0.34, 0.42),
@@ -200,7 +203,7 @@ def add_streets(meshes, roads, bounds, obstacles, base_m, sidewalk_widths, defau
 def build(
     scene, report, sidewalk_widths=None, vehicle_config=None,
     citizens_config=None, default_sidewalk_widths=None, traffic_network_config=None,
-    economy_config=None,
+    economy_config=None, tasks_config=None, map_output_png=None,
 ):
     if scene["schema_version"] != 1 or scene["coordinates"]["local_axes"] != ["east", "north"]:
         raise ValueError("expected scene schema 1 with local [east, north] coordinates")
@@ -257,7 +260,12 @@ def build(
     )
     vegetation_instances = add_stylized_trees(meshes, bounds, excluded_for_trees, base_m)
     prop_instances = {**street_prop_instances, **vegetation_instances}
-    road_graph = build_road_graph(roads, road_width, base_m + ROAD_ELEVATION_M, scene.get("crossings"))
+    road_graph = build_road_graph(
+        roads, road_width, base_m + ROAD_ELEVATION_M,
+        crossings=scene.get("crossings"),
+        priority_signs=scene.get("priority_signs"),
+        pois=scene["layers"].get("pois"),
+    )
     traffic_network = None
     if traffic_network_config:
         edges_by_id = {edge["id"]: edge for edge in road_graph["edges"]}
@@ -303,6 +311,12 @@ def build(
     economy = None
     if economy_config and citizens:
         economy = build_economy(economy_config, citizens["places"])
+    tasks = None
+    if tasks_config and citizens:
+        tasks = build_tasks(tasks_config, citizens["places"], economy)
+    city_map = None
+    if map_output_png is not None:
+        _, city_map = render_city_map(scene, road_width, sidewalks=sidewalks, output_png=map_output_png)
     reference = report["reference"]
     if scene["id"] != report["id"]:
         raise ValueError("scene and report belong to different areas")
@@ -336,6 +350,8 @@ def build(
         "vehicle": vehicle,
         "citizens": citizens,
         "economy": economy,
+        "tasks": tasks,
+        "city_map": city_map,
         "sidewalks": {
             "width_source": "estimated_from_pilot_layout",
             "widths_m": sidewalk_widths,
@@ -383,31 +399,61 @@ def main():
         economy_layout = json.loads(ECONOMY_LAYOUT.read_text(encoding="utf-8"))
         if scene["id"] == economy_layout["scene_id"]:
             economy_config = economy_layout
+    tasks_config = None
+    if TASKS_LAYOUT.exists():
+        tasks_layout = json.loads(TASKS_LAYOUT.read_text(encoding="utf-8"))
+        if scene["id"] == tasks_layout["scene_id"]:
+            tasks_config = tasks_layout
+    map_png_path = args.scene.with_name("city-map.png")
     package = build(
         scene, report, layout.get("sidewalk_widths_m"), layout.get("vehicle"),
         citizens_config, layout.get("default_sidewalk_widths_m"), layout.get("traffic_network"),
-        economy_config,
+        economy_config, tasks_config, map_output_png=map_png_path,
     )
     package["source_scene_sha256"] = sha256(scene_bytes).hexdigest()
     destination = args.scene.with_name("unreal-city-meshes.json")
     write_json(destination, package)
+    if package.get("city_map"):
+        write_json(args.scene.with_name("city-map-meta.json"), package["city_map"])
+        cm = package["city_map"]
+        print(
+            f"CityMap: {cm['width_px']}x{cm['height_px']} px "
+            f"({cm['meters_per_pixel']:.4f} m/px, sha256={cm['image_sha256'][:12]}...): {map_png_path}"
+        )
     if package.get("citizens"):
         cit = package["citizens"]
         osm_oh = cit.get("osm_opening_hours_places", [])
+        ent_rep = cit.get("osm_entrances_report", [])
+        used_ent = sum(1 for item in ent_rep if item["status"] == "used")
         print(
             f"Citizens: {len(cit['citizens'])}, places: {len(cit['places'])}, "
             f"routes: {len(cit['routes'])} ({cit.get('routes_using_crossings', 0)} via crossings), "
-            f"entrances: {cit.get('entrance_sources', {})}, "
+            f"entrances: {cit.get('entrance_sources', {})} (OSM {used_ent}/{len(ent_rep)} used), "
             f"opening_hours_sources: {cit.get('opening_hours_sources', {})}"
         )
         if osm_oh:
             osm_summary = ", ".join(f"{p['name']} ({p['raw']})" for p in osm_oh)
             print(f"OSM opening_hours ({len(osm_oh)}): {osm_summary}")
+    if package.get("road-graph"):
+        rg = package["road-graph"]
+        prio_junctions = sum(1 for j in rg.get("junctions", []) if j["rule"] == "priority_sign")
+        print(
+            f"RoadGraph: {rg['edge_count']} edges, {rg['junction_count']} junctions "
+            f"({prio_junctions} priority_sign, {rg['junction_count'] - prio_junctions} right_before_left), "
+            f"{rg['priority_sign_count']} signs, {rg['parking_lot_count']} parking lots"
+        )
     if package.get("economy"):
         econ = package["economy"]
         print(
             f"Economy: start={econ['starting_money_cents']} ct ({econ['starting_money_source']}), "
             f"{econ['item_count']} items, {econ['job_count']} jobs (seed={econ['economy_seed']})"
+        )
+    if package.get("tasks"):
+        tsk = package["tasks"]
+        print(
+            f"Tasks: {tsk['template_count']} templates "
+            f"({tsk['errand_count']} errands, {tsk['fetch_count']} fetches, "
+            f"{tsk['daily_min_tasks']}-{tsk['daily_max_tasks']}/day, seed={tsk['task_seed']})"
         )
     print(f"{len(package['meshes'])} meshes, "
           f"{sum(len(mesh['triangles']) for mesh in package['meshes'].values())} triangles: {destination}")

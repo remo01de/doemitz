@@ -1,0 +1,123 @@
+{
+  "scene_id": "doemitz-altstadt",
+  "task_seed": 202610,
+  "daily_min_tasks": 3,
+  "daily_max_tasks": 5,
+  "templates": [
+    {
+      "id": "task_tpl_errand_apotheke_rathaus",
+      "type": "errand",
+      "title": "Rezeptumschlag fürs Rathaus",
+      "description": "Hole den versiegelten Rezeptumschlag in der Fritz-Reuter-Apotheke ab und bringe ihn ins Rathaus.",
+      "pickup_place_id": "poi:osm:node:1794647095",
+      "delivery_place_id": "poi:osm:way:41020272",
+      "parcel_name": "Rezeptumschlag",
+      "duration_minutes": 150,
+      "reward_cents": 850,
+      "reward_source": "assumed_fictional_task_reward"
+    },
+    {
+      "id": "task_tpl_errand_amt_touristeninfo",
+      "type": "errand",
+      "title": "Aushang für die Touristeninformation",
+      "description": "Hole die neuen Veranstaltungshinweise in der Amtsverwaltung ab und liefere sie bei der Touristeninformation ab.",
+      "pickup_place_id": "place_amtsverwaltung",
+      "delivery_place_id": "poi:osm:node:2874556071",
+      "parcel_name": "Veranstaltungsaushänge",
+      "duration_minutes": 180,
+      "reward_cents": 950,
+      "reward_source": "assumed_fictional_task_reward"
+    },
+    {
+      "id": "task_tpl_errand_kaufhaus_elbcafe",
+      "type": "errand",
+      "title": "Serviettenpaket fürs Elb-Café",
+      "description": "Hole das Paket mit Tischservietten im Kaufhaus Goethestraße ab und bringe es ins Elb-Café.",
+      "pickup_place_id": "place_kaufhaus",
+      "delivery_place_id": "poi:osm:way:1352322155",
+      "parcel_name": "Serviettenpaket",
+      "duration_minutes": 180,
+      "reward_cents": 900,
+      "reward_source": "assumed_fictional_task_reward"
+    },
+    {
+      "id": "task_tpl_errand_festung_biergarten",
+      "type": "errand",
+      "title": "Flyer-Kiste von der Festung",
+      "description": "Hole die Kiste mit Festungsflyern an der Festung Dömitz ab und gib sie im Biergarten mit Storchennest ab.",
+      "pickup_place_id": "poi:osm:way:42318561",
+      "delivery_place_id": "poi:osm:way:587880279",
+      "parcel_name": "Flyer-Kiste",
+      "duration_minutes": 180,
+      "reward_cents": 1100,
+      "reward_source": "assumed_fictional_task_reward"
+    },
+    {
+      "id": "task_tpl_errand_zunft_festung",
+      "type": "errand",
+      "title": "Gästebuch für die Festung",
+      "description": "Hole das gebundene Gästebuch in der Alten Zunft ab und liefere es an der Festung Dömitz ab.",
+      "pickup_place_id": "poi:osm:way:95207377",
+      "delivery_place_id": "poi:osm:way:42318561",
+      "parcel_name": "Gästebuch",
+      "duration_minutes": 180,
+      "reward_cents": 1050,
+      "reward_source": "assumed_fictional_task_reward"
+    },
+    {
+      "id": "task_tpl_fetch_pflaster",
+      "type": "fetch",
+      "title": "Besorgung: Pflasterset",
+      "description": "Besorge ein Pflasterset aus der Fritz-Reuter-Apotheke und bringe es zurück.",
+      "requested_item_id": "item_pflaster",
+      "preferred_shop_place_id": "poi:osm:node:1794647095",
+      "duration_minutes": 180,
+      "reward_cents": 950,
+      "reward_source": "assumed_fictional_task_reward"
+    },
+    {
+      "id": "task_tpl_fetch_brot",
+      "type": "fetch",
+      "title": "Besorgung: Frisches Landbrot",
+      "description": "Kaufe ein Landbrot im Kaufhaus Goethestraße und übergib es persönlich.",
+      "requested_item_id": "item_brot",
+      "preferred_shop_place_id": "place_kaufhaus",
+      "duration_minutes": 180,
+      "reward_cents": 850,
+      "reward_source": "assumed_fictional_task_reward"
+    },
+    {
+      "id": "task_tpl_fetch_kaffee",
+      "type": "fetch",
+      "title": "Besorgung: Filterkaffee",
+      "description": "Hole einen frischen Filterkaffee in der Alten Zunft oder im Biergarten und bringe ihn vorbei.",
+      "requested_item_id": "item_kaffee",
+      "preferred_shop_place_id": "poi:osm:way:95207377",
+      "duration_minutes": 180,
+      "reward_cents": 800,
+      "reward_source": "assumed_fictional_task_reward"
+    },
+    {
+      "id": "task_tpl_fetch_softeis",
+      "type": "fetch",
+      "title": "Besorgung: DDR-Softeis",
+      "description": "Hole ein DDR-Softeis beim Eispirat und bringe es vorbei.",
+      "requested_item_id": "item_softeis",
+      "preferred_shop_place_id": "poi:osm:way:168171460",
+      "duration_minutes": 150,
+      "reward_cents": 750,
+      "reward_source": "assumed_fictional_task_reward"
+    },
+    {
+      "id": "task_tpl_fetch_postkarte",
+      "type": "fetch",
+      "title": "Besorgung: Ansichtskarte Festung Dömitz",
+      "description": "Kaufe eine Ansichtskarte an der Festung Dömitz und bringe sie zurück.",
+      "requested_item_id": "item_postkarte",
+      "preferred_shop_place_id": "poi:osm:way:42318561",
+      "duration_minutes": 180,
+      "reward_cents": 700,
+      "reward_source": "assumed_fictional_task_reward"
+    }
+  ]
+}

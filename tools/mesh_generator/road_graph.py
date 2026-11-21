@@ -87,11 +87,44 @@ def _strongly_connected_components(node_ids: list[str], adj: dict[str, list[str]
     return components
 
 
+def _generate_parking_slots(geom, center: Point, capacity: int, elevation_m: float, max_slots: int = 12) -> list[list[float]]:
+    """Generate deterministic, non-overlapping parking slot positions inside a polygon or around a point."""
+    slot_count = max(1, min(capacity, max_slots))
+    z = round(float(elevation_m), 4)
+    slots: list[list[float]] = []
+
+    if geom.geom_type in {"Polygon", "MultiPolygon"} and geom.area >= 12.5:
+        minx, miny, maxx, maxy = geom.bounds
+        step = 4.2
+        y = miny + 2.0
+        while y <= maxy - 1.5 and len(slots) < slot_count:
+            x = minx + 2.0
+            while x <= maxx - 1.5 and len(slots) < slot_count:
+                pt = Point(x, y)
+                if geom.contains(pt):
+                    slots.append([round(x, 4), round(y, 4), z])
+                x += step
+            y += step
+        if not slots:
+            rp = geom.representative_point()
+            slots.append([round(rp.x, 4), round(rp.y, 4), z])
+        return slots
+
+    # Point parking fallback: compact deterministic 2x2 grid around the OSM point
+    offsets = [(0.0, 0.0), (3.5, 0.0), (0.0, 3.5), (3.5, 3.5)]
+    for idx in range(min(slot_count, len(offsets))):
+        ox, oy = offsets[idx]
+        slots.append([round(center.x + ox, 4), round(center.y + oy, 4), z])
+    return slots
+
+
 def build_road_graph(
     roads: list[dict],
     width_resolver,
     elevation_m: float,
     crossings: list[dict] | None = None,
+    priority_signs: list[dict] | None = None,
+    pois: list[dict] | None = None,
 ) -> dict:
     """Construct a directed road graph from OSM road features in local meters."""
     parts: list[tuple[dict, int, list[tuple[float, float]], list[str | None]]] = []
@@ -251,11 +284,15 @@ def build_road_graph(
     crossings_out: list[dict] = []
     for edge in edges_sorted:
         edge["crossings"] = []
+        edge["yield_rule"] = "none"
+        edge["yield_sign_id"] = ""
+        edge["yield_source"] = "assumed_right_before_left"
+
+    edge_lines = [
+        (edge, LineString([(p[0], p[1]) for p in edge["points_m"]]))
+        for edge in edges_sorted
+    ]
     if crossings:
-        edge_lines = [
-            (edge, LineString([(p[0], p[1]) for p in edge["points_m"]]))
-            for edge in edges_sorted
-        ]
         for crossing in sorted(crossings, key=lambda c: c["id"]):
             pos = crossing["position_m"]
             pt = Point(float(pos[0]), float(pos[1]))
@@ -281,6 +318,142 @@ def build_road_graph(
         for edge in edges_sorted:
             edge["crossings"].sort(key=lambda c: (c["distance_m"], c["id"]))
 
+    # Attach OSM highway=give_way and highway=stop priority signs to directed road edges.
+    priority_signs_out: list[dict] = []
+    sign_priority_rank = {"stop": 2, "give_way": 1, "none": 0}
+    if priority_signs:
+        for sign in sorted(priority_signs, key=lambda s: s["id"]):
+            sign_type = str(sign.get("sign", "")).strip().lower()
+            if sign_type not in {"give_way", "stop"}:
+                continue
+            pos = sign["position_m"]
+            pt = Point(float(pos[0]), float(pos[1]))
+            direction = str(sign.get("direction", "")).strip().lower()
+
+            candidates = []
+            for edge, line in edge_lines:
+                d = line.distance(pt)
+                if d > 1.5:
+                    continue
+                is_fwd = edge["id"].endswith(":fwd")
+                is_rev = edge["id"].endswith(":rev")
+                if direction == "forward" and not is_fwd:
+                    continue
+                if direction == "backward" and not is_rev:
+                    continue
+                along_m = float(line.project(pt))
+                dist_to_end = max(0.0, edge["length_m"] - along_m)
+                candidates.append((d, dist_to_end, edge))
+
+            matched_edge = None
+            if candidates:
+                # Prefer exact/closest match; if undirected on a two-way road, choose direction approaching its nearer junction
+                candidates.sort(key=lambda item: (round(item[0], 3), item[1], item[2]["id"]))
+                matched_edge = candidates[0][2]
+                if sign_priority_rank[sign_type] > sign_priority_rank[matched_edge["yield_rule"]]:
+                    matched_edge["yield_rule"] = sign_type
+                    matched_edge["yield_sign_id"] = sign["id"]
+                    matched_edge["yield_source"] = f"osm_{sign_type}"
+
+            priority_signs_out.append({
+                "id": sign["id"],
+                "sign": sign_type,
+                "direction": direction,
+                "position_m": [round(float(pos[0]), 4), round(float(pos[1]), 4), round(float(elevation_m), 4)],
+                "edge_id": matched_edge["id"] if matched_edge else "",
+                "to_node": matched_edge["to_node"] if matched_edge else "",
+            })
+
+    # Build junction report listing every junction with its rule and source.
+    incoming_by_node: dict[str, list[dict]] = defaultdict(list)
+    for edge in edges_sorted:
+        incoming_by_node[edge["to_node"]].append(edge)
+
+    junctions_report: list[dict] = []
+    for node in nodes_sorted:
+        nid = node["id"]
+        inc = incoming_by_node.get(nid, [])
+        if not node["is_junction"] and len(inc) < 2:
+            continue
+        sign_edges = [e for e in inc if e["yield_rule"] != "none"]
+        if sign_edges:
+            rule = "priority_sign"
+            sources = sorted({e["yield_source"] for e in sign_edges})
+            source = ",".join(sources)
+        else:
+            rule = "right_before_left"
+            source = "assumed_right_before_left"
+        junctions_report.append({
+            "node_id": nid,
+            "position_m": node["position_m"],
+            "in_main_scc": node["in_main_scc"],
+            "rule": rule,
+            "source": source,
+            "incoming_edges": [
+                {
+                    "edge_id": e["id"],
+                    "name": e["name"],
+                    "yield_rule": e["yield_rule"],
+                    "yield_sign_id": e["yield_sign_id"],
+                    "yield_source": e["yield_source"],
+                }
+                for e in inc
+            ],
+        })
+
+    # Compile amenity=parking POIs with estimated capacity (area / 12.5 m²) and nearest main-SCC access edge.
+    main_edge_lines = [(e, line) for e, line in edge_lines if not e["dead_end"]]
+    parking_lots_out: list[dict] = []
+    if pois and main_edge_lines:
+        for poi in sorted(pois, key=lambda p: p["id"]):
+            props = poi.get("properties") or {}
+            if props.get("amenity") != "parking":
+                continue
+            geom = shape(poi["geometry"])
+            center = geom.representative_point() if geom.geom_type != "Point" else geom
+            area_m2 = round(float(geom.area), 2) if geom.geom_type in {"Polygon", "MultiPolygon"} else 0.0
+
+            osm_cap = None
+            raw_cap = str(props.get("capacity", "")).strip()
+            if raw_cap.isdigit() and int(raw_cap) > 0:
+                osm_cap = int(raw_cap)
+
+            if osm_cap is not None:
+                capacity = osm_cap
+                capacity_source = "osm_capacity"
+            elif area_m2 > 0.0:
+                capacity = max(1, int(area_m2 // 12.5))
+                capacity_source = "estimated_area_div_12_5_m2"
+            else:
+                capacity = 4
+                capacity_source = "assumed_point_parking_4"
+
+            best_edge, best_line = min(
+                main_edge_lines,
+                key=lambda item: (item[1].distance(center), item[0]["id"]),
+            )
+            access_along_m = round(float(best_line.project(center)), 4)
+            access_along_m = max(1.0, min(best_edge["length_m"] - 1.0, access_along_m))
+            osm_ref = props.get("osm_id") or poi["id"].removeprefix("poi:")
+            lot_id = f"parking:{osm_ref}"
+            name = str(props.get("name", "")).strip()
+            if not name:
+                street_hint = best_edge["name"] or osm_ref.rsplit(":", 1)[-1]
+                name = f"Parkplatz {street_hint}"
+            slots_m = _generate_parking_slots(geom, center, capacity, elevation_m)
+            parking_lots_out.append({
+                "id": lot_id,
+                "osm_id": osm_ref,
+                "name": name,
+                "position_m": [round(center.x, 4), round(center.y, 4), round(float(elevation_m), 4)],
+                "area_m2": area_m2,
+                "capacity": capacity,
+                "capacity_source": capacity_source,
+                "access_edge_id": best_edge["id"],
+                "access_distance_m": round(access_along_m, 4),
+                "slots_m": slots_m,
+            })
+
     return {
         "schema_version": 1,
         "node_count": len(nodes_sorted),
@@ -289,8 +462,14 @@ def build_road_graph(
         "main_scc_edge_count": len(edges_sorted) - dead_end_count,
         "dead_end_edge_count": dead_end_count,
         "crossing_count": len(crossings_out),
+        "priority_sign_count": len(priority_signs_out),
+        "junction_count": len(junctions_report),
+        "parking_lot_count": len(parking_lots_out),
         "speed_sources": dict(sorted(speed_sources.items())),
         "nodes": nodes_sorted,
         "edges": edges_sorted,
         "crossings": crossings_out,
+        "priority_signs": priority_signs_out,
+        "junctions": junctions_report,
+        "parking_lots": parking_lots_out,
     }

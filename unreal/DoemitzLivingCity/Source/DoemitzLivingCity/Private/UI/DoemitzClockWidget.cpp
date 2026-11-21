@@ -12,6 +12,7 @@
 #include "Interaction/DoemitzInteractionComponent.h"
 #include "Settings/DoemitzGraphicsSettings.h"
 #include "Simulation/DoemitzSimulationSubsystem.h"
+#include "UI/DoemitzUiText.h"
 
 TSharedRef<SWidget> UDoemitzClockWidget::RebuildWidget()
 {
@@ -53,6 +54,14 @@ TSharedRef<SWidget> UDoemitzClockWidget::RebuildWidget()
 		MoneyFont.Size = 13;
 		MoneyText->SetFont(MoneyFont);
 		VBox->AddChildToVerticalBox(MoneyText);
+
+		ActiveTaskText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("ActiveTaskText"));
+		ActiveTaskText->SetColorAndOpacity(FSlateColor(FLinearColor(1.0f, 0.88f, 0.42f, 1.0f)));
+		FSlateFontInfo TaskFont = ActiveTaskText->GetFont();
+		TaskFont.Size = 12;
+		ActiveTaskText->SetFont(TaskFont);
+		ActiveTaskText->SetVisibility(ESlateVisibility::Collapsed);
+		VBox->AddChildToVerticalBox(ActiveTaskText);
 
 		NoticeText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("NoticeText"));
 		NoticeText->SetColorAndOpacity(FSlateColor(FLinearColor(0.95f, 0.82f, 0.45f, 1.0f)));
@@ -111,14 +120,14 @@ void UDoemitzClockWidget::RefreshDisplay()
 	const FString SpeedLabel = Scale <= 0.0
 		? TEXT("Pause")
 		: FString::Printf(TEXT("%.0fx"), FMath::Max(1.0, Scale / 60.0));
-	const FString DayShort = Subsystem->GetDayOfWeekShortName();
-	LastClockString = FString::Printf(
+	const FString DayShort = FDoemitzUiText::FormatWeekdayShort(Subsystem->GetDayOfWeek()).ToString();
+	LastClockText = FText::FromString(FString::Printf(
 		TEXT("%s, Tag %d  |  %02d:%02d  (%s)"),
 		*DayShort,
 		Subsystem->GetDayNumber(),
 		Hours,
 		Minutes,
-		*SpeedLabel);
+		*SpeedLabel));
 
 	int32 MovingCount = 0;
 	const TArray<FName> CitizenIds = Subsystem->GetAllCitizenIds();
@@ -133,24 +142,35 @@ void UDoemitzClockWidget::RefreshDisplay()
 	const FString ProfileLabel = UDoemitzGraphicsSettings::Get()
 		? UDoemitzGraphicsSettings::Get()->GetActiveProfileShortLabel()
 		: TEXT("Low");
-	LastStatusString = FString::Printf(
-		TEXT("Doemitz Altstadt  |  %d Einwohner (%d unterwegs, %d nah)  |  Grafik: %s"),
+	LastStatusText = FText::FromString(FString::Printf(
+		TEXT("D\u00f6mitz Altstadt  |  %d Einwohner (%d unterwegs, %d nah)  |  Grafik: %s"),
 		CitizenIds.Num(),
 		MovingCount,
 		Subsystem->GetActiveCitizenActorCount(),
-		*ProfileLabel);
+		*ProfileLabel));
 
-	LastMoneyString = FString::Printf(
+	LastMoneyText = FText::FromString(FString::Printf(
 		TEXT("Konto: %s%s"),
-		*UDoemitzSimulationSubsystem::FormatCentsEur(Subsystem->GetPlayerMoneyCents()),
-		Subsystem->IsWorkingShift() ? TEXT("  |  Schicht aktiv") : TEXT(""));
+		*FDoemitzUiText::FormatCentsEur(Subsystem->GetPlayerMoneyCents()).ToString(),
+		Subsystem->IsWorkingShift() ? TEXT("  |  Schicht aktiv") : TEXT("")));
 
-	const FString ActiveNotice = Subsystem->GetLastNotification();
-	LastNoticeString = ActiveNotice.IsEmpty()
-		? TEXT("E Interaktion  |  F5 Speichern  |  F9 Laden  |  F7 Grafik  |  1/2/3/P Zeit")
-		: ActiveNotice;
+	FDoemitzTaskInstance ActiveTask;
+	if (Subsystem->GetPrimaryActiveTask(ActiveTask))
+	{
+		LastActiveTaskText = FDoemitzUiText::FormatActiveTaskHud(ActiveTask, Subsystem);
+	}
+	else
+	{
+		LastActiveTaskText = FText::GetEmpty();
+	}
 
-	LastPromptString.Reset();
+	const FDoemitzNotificationEvent NoticeEv = Subsystem->GetLastNotificationEvent();
+	const FText FormattedNotice = FDoemitzUiText::FormatNotification(NoticeEv, Subsystem);
+	LastNoticeText = FormattedNotice.IsEmpty()
+		? FText::FromString(TEXT("M Karte  |  J Aufgaben  |  E Interaktion  |  F5/F9 Speichern/Laden  |  F7 Grafik  |  1/2/3/P Zeit"))
+		: FormattedNotice;
+
+	LastPromptText = FText::GetEmpty();
 	if (UWorld* World = GetWorld())
 	{
 		if (const APlayerController* PC = World->GetFirstPlayerController())
@@ -159,9 +179,9 @@ void UDoemitzClockWidget::RefreshDisplay()
 			{
 				if (const UDoemitzInteractionComponent* Interaction = Character->GetInteractionComponent())
 				{
-					if (Interaction->HasInteractableEntrance() && !Interaction->IsMenuOpen())
+					if (Interaction->HasInteractableTarget() && !Interaction->IsMenuOpen())
 					{
-						LastPromptString = Interaction->GetInteractionPrompt();
+						LastPromptText = Interaction->GetInteractionPromptText();
 					}
 				}
 			}
@@ -170,25 +190,37 @@ void UDoemitzClockWidget::RefreshDisplay()
 
 	if (ClockText)
 	{
-		ClockText->SetText(FText::FromString(LastClockString));
+		ClockText->SetText(LastClockText);
 	}
 	if (StatusText)
 	{
-		StatusText->SetText(FText::FromString(LastStatusString));
+		StatusText->SetText(LastStatusText);
 	}
 	if (MoneyText)
 	{
-		MoneyText->SetText(FText::FromString(LastMoneyString));
+		MoneyText->SetText(LastMoneyText);
+	}
+	if (ActiveTaskText)
+	{
+		if (!LastActiveTaskText.IsEmpty())
+		{
+			ActiveTaskText->SetText(LastActiveTaskText);
+			ActiveTaskText->SetVisibility(ESlateVisibility::SelfHitTestInvisible);
+		}
+		else
+		{
+			ActiveTaskText->SetVisibility(ESlateVisibility::Collapsed);
+		}
 	}
 	if (NoticeText)
 	{
-		NoticeText->SetText(FText::FromString(LastNoticeString));
+		NoticeText->SetText(LastNoticeText);
 	}
 	if (PromptPanel && PromptText)
 	{
-		if (!LastPromptString.IsEmpty())
+		if (!LastPromptText.IsEmpty())
 		{
-			PromptText->SetText(FText::FromString(LastPromptString));
+			PromptText->SetText(LastPromptText);
 			PromptPanel->SetVisibility(ESlateVisibility::SelfHitTestInvisible);
 		}
 		else

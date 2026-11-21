@@ -65,9 +65,12 @@ def check(_delta_seconds):
             raise RuntimeError(f"expected nearest place {APOTHEKE_ID}, got {interaction.get_nearest_place_id()}")
         if not interaction.is_nearest_place_open():
             raise RuntimeError("expected Apotheke to be open on Monday 10:00")
+        open_status = sub.get_place_opening_status(APOTHEKE_ID)
+        if not open_status.get_editor_property("open") or open_status.get_editor_property("next_change_minute") != 750:
+            raise RuntimeError(f"unexpected open status struct: {open_status}")
         open_prompt = interaction.get_interaction_prompt()
         hud_prompt = widget.get_interaction_prompt_string()
-        if "Fritz-Reuter-Apotheke" not in open_prompt or "geoeffnet bis 12:30" not in open_prompt:
+        if "Fritz-Reuter-Apotheke" not in open_prompt or "ge\u00f6ffnet bis 12:30" not in open_prompt:
             raise RuntimeError(f"unexpected open prompt: {open_prompt!r}")
         if hud_prompt != open_prompt:
             raise RuntimeError(f"HUD prompt mismatch: {hud_prompt!r} vs {open_prompt!r}")
@@ -86,8 +89,11 @@ def check(_delta_seconds):
 
         if interaction.is_nearest_place_open():
             raise RuntimeError("expected Apotheke to be closed on Sunday 10:00")
+        closed_status = sub.get_place_opening_status(APOTHEKE_ID)
+        if closed_status.get_editor_property("open") or closed_status.get_editor_property("next_change_weekday") != 0:
+            raise RuntimeError(f"unexpected closed status struct: {closed_status}")
         closed_prompt = interaction.get_interaction_prompt()
-        if "geschlossen, oeffnet Mo 08:00" not in closed_prompt:
+        if "geschlossen, \u00f6ffnet Mo 08:00" not in closed_prompt:
             raise RuntimeError(f"unexpected closed prompt: {closed_prompt!r}")
         if interaction.try_interact() or interaction.is_menu_open():
             raise RuntimeError("closed Apotheke must not allow entering/opening menu")

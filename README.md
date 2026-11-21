@@ -43,3 +43,4 @@ Das Unreal-Projekt öffnet die Altstadt-Karte als Startlevel. Im Editor startet 
 - [Sprint 7 – Performance-Basis und vernetzter Straßenverkehr](docs/SPRINT_07.md)
 - [Sprint 8 – Wochenkalender, mehr Einwohner und Fußgängerüberwege](docs/SPRINT_08.md)
 - [Sprint 9 – Wirtschaft und Interaktion an Gebäudeeingängen](docs/SPRINT_09.md)
+- [Sprint 10 – Stadtkarte, erste Aufgaben, Vorfahrt und Parken](docs/SPRINT_10.md)

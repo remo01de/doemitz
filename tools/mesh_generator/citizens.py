@@ -695,7 +695,53 @@ def build_citizens(
                     "sunday_schedule": sun_sched,
                 })
 
-    # 5. Compile pedestrian routes (pilot sidewalk routing + multi-street Altstadt graph + crossing awareness).
+    # 5. Compile OSM entrance report explaining usage of every OSM entrance=* node.
+    used_osm_entrance_by_node: dict[str, str] = {}
+    places_by_building: dict[str, list[str]] = defaultdict(list)
+    for place in places_out:
+        bid = place.get("building_id") or ""
+        if bid:
+            places_by_building[bid].append(place["id"])
+        ent = place.get("entrance") or {}
+        if ent.get("source") == "osm" and ent.get("osm_node_id"):
+            used_osm_entrance_by_node[ent["osm_node_id"]] = place["id"]
+
+    osm_entrances_report = []
+    for eid, ept, etype, _ in osm_entrances:
+        nearest_bid = ""
+        nearest_dist = float("inf")
+        for bid, bgeom in sorted(buildings_by_id.items()):
+            d = bgeom.distance(ept)
+            if d < nearest_dist:
+                nearest_dist = d
+                nearest_bid = bid
+                if d == 0.0:
+                    break
+        used_by = used_osm_entrance_by_node.get(eid, "")
+        if used_by:
+            status = "used"
+            reason = "used_by_place"
+        elif nearest_dist > 3.0 or not nearest_bid:
+            status = "unused"
+            reason = "no_building_within_3m"
+        elif places_by_building.get(nearest_bid):
+            status = "unused"
+            reason = "secondary_entrance_same_building"
+        else:
+            status = "unused"
+            reason = "building_without_place"
+        osm_entrances_report.append({
+            "osm_node_id": eid,
+            "entrance_type": etype,
+            "position_m": [round(ept.x, 4), round(ept.y, 4)],
+            "status": status,
+            "used_by_place_id": used_by,
+            "nearest_building_id": nearest_bid,
+            "nearest_building_distance_m": round(nearest_dist, 2) if nearest_dist < float("inf") else None,
+            "reason": reason,
+        })
+
+    # 6. Compile pedestrian routes (pilot sidewalk routing + multi-street Altstadt graph + crossing awareness).
     coords_by_idx, adj, _, _ = _build_pedestrian_graph(roads, crossings)
     crossing_pts = [
         (c["id"], Point(float(c["position_m"][0]), float(c["position_m"][1])))
@@ -736,6 +782,7 @@ def build_citizens(
         "opening_hours_sources": dict(sorted(opening_hours_sources.items())),
         "osm_opening_hours_places": osm_opening_hours_places,
         "entrance_sources": dict(sorted(entrance_sources.items())),
+        "osm_entrances_report": osm_entrances_report,
         "routes_using_crossings": routes_using_crossings,
         "places": [
             {k: v for k, v in place.items() if k not in {"along_m", "side", "on_pilot"}}

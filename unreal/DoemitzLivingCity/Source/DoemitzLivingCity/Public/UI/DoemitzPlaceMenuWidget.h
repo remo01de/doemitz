@@ -59,7 +59,12 @@ private:
 	UFUNCTION()
 	void HandleStartShiftClicked();
 
+	UFUNCTION()
+	void HandleErrandActionClicked();
+
 	FName CurrentPlaceId;
+	FName ActiveErrandTaskId;
+	bool bActiveErrandIsDelivery = false;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UTextBlock> HeaderText;
@@ -69,6 +74,9 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<UTextBlock> RevenueText;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UVerticalBox> TaskBox;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UVerticalBox> ItemsBox;

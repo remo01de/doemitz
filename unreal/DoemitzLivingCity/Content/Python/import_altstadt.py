@@ -243,7 +243,10 @@ def place_instanced_props(existing, prop_instances):
         result = []
         for entry in entries:
             pos = ue_position(entry[:3])
-            rot = unreal.Rotator(0.0, float(entry[3]), 0.0)
+            # unreal.Rotator positional order is (roll, pitch, yaw); use keyword args so props stay strictly upright.
+            rot = unreal.Rotator(roll=0.0, pitch=0.0, yaw=float(entry[3]))
+            if abs(rot.pitch) > 1e-3 or abs(rot.roll) > 1e-3:
+                raise RuntimeError(f"Non-upright HISM prop rotation generated: {rot}")
             s = float(entry[4]) if has_scale else 1.0
             result.append(unreal.Transform(pos, rot, unreal.Vector(s, s, s)))
         return result
@@ -288,13 +291,18 @@ def place_traffic_network(existing, road_graph, traffic_network, legacy_vehicle)
 
     if not traffic_network or not road_graph:
         place_vehicle(existing, legacy_vehicle)
-        return [], [], [], 202607
+        return [], [], [], [], 202607
 
     # Remove legacy single test vehicle if present
     legacy_actor = existing.get("Altstadt Test Vehicle")
     if legacy_actor and not ACTORS.destroy_actor(legacy_actor):
         raise RuntimeError("Could not remove obsolete Altstadt Test Vehicle")
 
+    yield_enum = {
+        "none": unreal.DoemitzYieldRule.NONE,
+        "give_way": unreal.DoemitzYieldRule.GIVE_WAY,
+        "stop": unreal.DoemitzYieldRule.STOP,
+    }
     edges_by_id = {edge["id"]: edge for edge in road_graph["edges"]}
     edge_structs = []
     for edge in road_graph["edges"]:
@@ -306,6 +314,8 @@ def place_traffic_network(existing, road_graph, traffic_network, legacy_vehicle)
         edef.set_editor_property("dead_end", bool(edge["dead_end"]))
         edef.set_editor_property("width_cm", float(edge["width_m"]) * 100.0)
         edef.set_editor_property("speed_limit_cm_per_second", float(edge["speed_kmh"]) / 0.036)
+        edef.set_editor_property("yield_rule", yield_enum.get(str(edge.get("yield_rule", "none")), unreal.DoemitzYieldRule.NONE))
+        edef.set_editor_property("yield_sign_id", str(edge.get("yield_sign_id", "")))
         edef.set_editor_property("points", list(map(ue_position, edge["points_m"])))
         edge_structs.append(edef)
 
@@ -353,11 +363,25 @@ def place_traffic_network(existing, road_graph, traffic_network, legacy_vehicle)
         cdef.set_editor_property("trigger_radius_cm", 350.0)
         crossing_structs.append(cdef)
 
+    parking_structs = []
+    for lot in road_graph.get("parking_lots", []):
+        pdef = unreal.DoemitzParkingLotDefinition()
+        pdef.set_editor_property("parking_lot_id", lot["id"])
+        pdef.set_editor_property("display_name", lot["name"])
+        pdef.set_editor_property("location", ue_position(lot["position_m"]))
+        pdef.set_editor_property("capacity", int(lot["capacity"]))
+        pdef.set_editor_property("capacity_source", str(lot.get("capacity_source", "")))
+        pdef.set_editor_property("access_edge_id", lot["access_edge_id"])
+        pdef.set_editor_property("access_distance_cm", float(lot["access_distance_m"]) * 100.0)
+        pdef.set_editor_property("slot_locations", list(map(ue_position, lot.get("slots_m", []))))
+        parking_structs.append(pdef)
+
     unreal.log(
         f"DOEMITZ_TRAFFIC_NETWORK_IMPORT_OK: {len(vehicle_structs)} vehicles, "
-        f"{len(edge_structs)} road edges, {len(crossing_structs)} crossings (seed={traffic_network['seed']})"
+        f"{len(edge_structs)} road edges, {len(crossing_structs)} crossings, "
+        f"{len(parking_structs)} parking lots (seed={traffic_network['seed']})"
     )
-    return edge_structs, vehicle_structs, crossing_structs, int(traffic_network["seed"])
+    return edge_structs, vehicle_structs, crossing_structs, parking_structs, int(traffic_network["seed"])
 
 
 def place_vehicle(existing, config):
@@ -442,9 +466,109 @@ def build_economy_data_asset(economy_config):
     return asset
 
 
+def build_tasks_data_asset(tasks_config):
+    if not tasks_config:
+        return None
+    asset_class = unreal.load_class(None, "/Script/DoemitzLivingCity.DoemitzTaskDataAsset")
+    if not asset_class:
+        raise RuntimeError("Build the DoemitzLivingCityEditor target before importing task data")
+
+    path = f"{ASSETS}/DA_DoemitzTasks"
+    asset = EDITOR.load_asset(path) if EDITOR.does_asset_exist(path) else None
+    if asset is None:
+        factory = unreal.DataAssetFactory()
+        factory.set_editor_property("data_asset_class", asset_class)
+        asset = TOOLS.create_asset("DA_DoemitzTasks", ASSETS, asset_class, factory)
+    if asset is None:
+        raise RuntimeError(f"Could not create task data asset {path}")
+
+    asset.set_editor_property("task_seed", int(tasks_config["task_seed"]))
+    asset.set_editor_property("daily_min_tasks", int(tasks_config["daily_min_tasks"]))
+    asset.set_editor_property("daily_max_tasks", int(tasks_config["daily_max_tasks"]))
+
+    type_enum = {
+        "errand": unreal.DoemitzTaskType.ERRAND,
+        "fetch": unreal.DoemitzTaskType.FETCH,
+    }
+    tpl_structs = []
+    for tpl in tasks_config.get("templates", []):
+        st = unreal.DoemitzTaskTemplate()
+        st.set_editor_property("template_id", tpl["id"])
+        st.set_editor_property("task_type", type_enum[tpl["type"]])
+        st.set_editor_property("title", tpl["title"])
+        st.set_editor_property("description", tpl["description"])
+        st.set_editor_property("pickup_place_id", tpl.get("pickup_place_id", ""))
+        st.set_editor_property("delivery_place_id", tpl.get("delivery_place_id", ""))
+        st.set_editor_property("parcel_name", tpl.get("parcel_name", ""))
+        st.set_editor_property("requested_item_id", tpl.get("requested_item_id", ""))
+        st.set_editor_property("preferred_shop_place_id", tpl.get("preferred_shop_place_id", ""))
+        st.set_editor_property("duration_minutes", int(tpl["duration_minutes"]))
+        st.set_editor_property("reward_cents", int(tpl["reward_cents"]))
+        st.set_editor_property("reward_source", str(tpl["reward_source"]))
+        tpl_structs.append(st)
+    asset.set_editor_property("templates", tpl_structs)
+
+    if not EDITOR.save_loaded_asset(asset):
+        raise RuntimeError(f"Could not save task data asset {path}")
+    unreal.log(
+        f"DOEMITZ_TASKS_IMPORT_OK: {len(tpl_structs)} templates "
+        f"({tasks_config['daily_min_tasks']}-{tasks_config['daily_max_tasks']}/day, seed={tasks_config['task_seed']}) -> {path}"
+    )
+    return asset
+
+
+def import_city_map_texture(city_map_meta):
+    if not city_map_meta:
+        return None, None
+    png_path = PACKAGE.with_name(city_map_meta.get("image_file", "city-map.png"))
+    if not png_path.is_file():
+        raise RuntimeError(f"Offline city map PNG not found at {png_path}")
+
+    task = unreal.AssetImportTask()
+    task.set_editor_property("automated", True)
+    task.set_editor_property("destination_name", "T_DoemitzCityMap")
+    task.set_editor_property("destination_path", ASSETS)
+    task.set_editor_property("filename", str(png_path))
+    task.set_editor_property("replace_existing", True)
+    task.set_editor_property("save", True)
+    TOOLS.import_asset_tasks([task])
+
+    tex_path = f"{ASSETS}/T_DoemitzCityMap"
+    tex = EDITOR.load_asset(tex_path)
+    if tex is None:
+        raise RuntimeError(f"Could not import city map texture to {tex_path}")
+    ui_comp = getattr(
+        unreal.TextureCompressionSettings,
+        "TC_USER_INTERFACE_2D",
+        unreal.TextureCompressionSettings.TC_DEFAULT,
+    )
+    tex.set_editor_property("compression_settings", ui_comp)
+    tex.set_editor_property("mip_gen_settings", unreal.TextureMipGenSettings.TMGS_NO_MIPMAPS)
+    tex.set_editor_property("srgb", True)
+    if hasattr(unreal.TextureGroup, "TEXTUREGROUP_UI"):
+        tex.set_editor_property("lod_group", unreal.TextureGroup.TEXTUREGROUP_UI)
+    if not EDITOR.save_loaded_asset(tex):
+        raise RuntimeError(f"Could not save city map texture {tex_path}")
+
+    v_min_e, v_min_n, v_max_e, v_max_n = city_map_meta["view_bounds_m"]
+    bounds_struct = unreal.DoemitzMapBounds()
+    bounds_struct.set_editor_property("view_min_east_m", float(v_min_e))
+    bounds_struct.set_editor_property("view_min_north_m", float(v_min_n))
+    bounds_struct.set_editor_property("view_max_east_m", float(v_max_e))
+    bounds_struct.set_editor_property("view_max_north_m", float(v_max_n))
+    bounds_struct.set_editor_property("width_px", int(city_map_meta["width_px"]))
+    bounds_struct.set_editor_property("height_px", int(city_map_meta["height_px"]))
+    unreal.log(
+        f"DOEMITZ_CITYMAP_IMPORT_OK: {city_map_meta['width_px']}x{city_map_meta['height_px']} px "
+        f"({city_map_meta['meters_per_pixel']:.4f} m/px) -> {tex_path}"
+    )
+    return tex, bounds_struct
+
+
 def place_citizens(
     existing, config, road_edge_structs=None, vehicle_structs=None, crossing_structs=None,
-    traffic_seed=202607, economy_asset=None,
+    parking_structs=None, traffic_seed=202607, economy_asset=None, tasks_asset=None,
+    city_map_tex=None, city_map_bounds=None,
 ):
     config_name = "Altstadt Simulation Config"
     if not config:
@@ -571,11 +695,18 @@ def place_citizens(
     sim_actor.set_editor_property("citizen_lod_radius_cm", 15000.0)
     if economy_asset is not None:
         sim_actor.set_editor_property("economy_data", economy_asset)
+    if tasks_asset is not None:
+        sim_actor.set_editor_property("task_data", tasks_asset)
+    if city_map_tex is not None:
+        sim_actor.set_editor_property("city_map_texture", city_map_tex)
+    if city_map_bounds is not None:
+        sim_actor.set_editor_property("city_map_bounds", city_map_bounds)
     if road_edge_structs is not None and vehicle_structs is not None:
         sim_actor.set_editor_property("traffic_seed", traffic_seed)
         sim_actor.set_editor_property("road_edges", road_edge_structs)
         sim_actor.set_editor_property("vehicles", vehicle_structs)
         sim_actor.set_editor_property("crossings", crossing_structs or [])
+        sim_actor.set_editor_property("parking_lots", parking_structs or [])
     unreal.log(
         f"DOEMITZ_CITIZENS_IMPORT_OK: {len(citizen_structs)} citizens, "
         f"{len(place_structs)} places, {len(route_structs)} routes, {len(variant_meshes)} mesh variants"
@@ -613,13 +744,15 @@ def import_level(package):
             if not ACTORS.destroy_actor(actor):
                 raise RuntimeError(f"Could not remove obsolete generated actor {actor.get_actor_label()}")
     place_instanced_props(existing, package.get("props", {}).get("instances", {}))
-    road_edge_structs, vehicle_structs, crossing_structs, traffic_seed = place_traffic_network(
+    road_edge_structs, vehicle_structs, crossing_structs, parking_structs, traffic_seed = place_traffic_network(
         existing, package.get("road-graph"), package.get("traffic_network"), package.get("vehicle"),
     )
     economy_asset = build_economy_data_asset(package.get("economy"))
+    tasks_asset = build_tasks_data_asset(package.get("tasks"))
+    city_map_tex, city_map_bounds = import_city_map_texture(package.get("city_map"))
     place_citizens(
         existing, package.get("citizens"), road_edge_structs, vehicle_structs, crossing_structs,
-        traffic_seed, economy_asset,
+        parking_structs, traffic_seed, economy_asset, tasks_asset, city_map_tex, city_map_bounds,
     )
 
     start = ue_position(package["start_m"])

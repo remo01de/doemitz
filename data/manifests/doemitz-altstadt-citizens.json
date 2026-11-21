@@ -12,31 +12,31 @@
   "places": [
     {
       "id": "place_goethe_pension",
-      "name": "Radlerpension Doemitz",
+      "name": "Radlerpension Dömitz",
       "building_id": "osm:way:198024955",
       "kind": "home"
     },
     {
       "id": "place_goethe_home_west",
-      "name": "Wohnhaus Goethestrasse West",
+      "name": "Wohnhaus Goethestraße West",
       "building_id": "osm:way:326008130",
       "kind": "home"
     },
     {
       "id": "place_amtsverwaltung",
-      "name": "Amtsverwaltung und Buergerbuero",
+      "name": "Amtsverwaltung und Bürgerbüro",
       "building_id": "osm:way:41020271",
       "kind": "work"
     },
     {
       "id": "place_goethe_home_east",
-      "name": "Wohnhaus Goethestrasse Ost",
+      "name": "Wohnhaus Goethestraße Ost",
       "building_id": "osm:way:325972553",
       "kind": "home"
     },
     {
       "id": "place_kaufhaus",
-      "name": "Kaufhaus Goethestrasse",
+      "name": "Kaufhaus Goethestraße",
       "building_id": "osm:way:168171467",
       "kind": "shop"
     }

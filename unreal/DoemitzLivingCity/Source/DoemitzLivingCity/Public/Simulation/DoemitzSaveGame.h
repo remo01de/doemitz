@@ -4,6 +4,7 @@
 #include "Economy/DoemitzEconomyDataAsset.h"
 #include "GameFramework/SaveGame.h"
 #include "Simulation/DoemitzSimulationSubsystem.h"
+#include "Tasks/DoemitzTaskDataAsset.h"
 #include "DoemitzSaveGame.generated.h"
 
 USTRUCT()
@@ -67,6 +68,37 @@ struct FDoemitzSavedVehicle
 
 	UPROPERTY()
 	FVector WorldLocation = FVector::ZeroVector;
+
+	// SaveSchemaVersion >= 5 parking state
+	UPROPERTY()
+	EDoemitzVehiclePhase Phase = EDoemitzVehiclePhase::Driving;
+
+	UPROPERTY()
+	FName TargetParkingLotId;
+
+	UPROPERTY()
+	FName CurrentParkingLotId;
+
+	UPROPERTY()
+	int32 ParkingSlotIndex = -1;
+
+	UPROPERTY()
+	double RemainingParkSeconds = 0.0;
+
+	UPROPERTY()
+	int32 TripCounter = 0;
+};
+
+USTRUCT()
+struct FDoemitzSavedParkingOccupancy
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	FName ParkingLotId;
+
+	UPROPERTY()
+	TArray<FName> SlotOccupants;
 };
 
 UCLASS()
@@ -75,7 +107,7 @@ class DOEMITZLIVINGCITY_API UDoemitzSaveGame : public USaveGame
 	GENERATED_BODY()
 
 public:
-	static constexpr int32 CurrentSchemaVersion = 4;
+	static constexpr int32 CurrentSchemaVersion = 5;
 
 	UPROPERTY(BlueprintReadWrite, Category = "SaveGame")
 	int32 SaveSchemaVersion = CurrentSchemaVersion;
@@ -127,4 +159,11 @@ public:
 
 	UPROPERTY()
 	TArray<FDoemitzPlaceRevenue> PlaceRevenues;
+
+	// SaveSchemaVersion >= 5
+	UPROPERTY()
+	TArray<FDoemitzTaskInstance> Tasks;
+
+	UPROPERTY()
+	TArray<FDoemitzSavedParkingOccupancy> ParkingOccupancy;
 };
