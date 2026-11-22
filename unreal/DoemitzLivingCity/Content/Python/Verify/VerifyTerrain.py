@@ -11,11 +11,11 @@ vehicle_class = unreal.load_class(None, "/Script/DoemitzLivingCity.DoemitzTraffi
 project = Path(unreal.Paths.convert_relative_path_to_full(unreal.Paths.project_dir()))
 package = json.loads((project.parents[1] / "data/processed/doemitz-altstadt/unreal-city-meshes.json").read_text(encoding="utf-8"))
 
-# Pick a real sloped drivable edge in main SCC for vehicle pitch & contact verification
+# Pick a real sloped non-bridge drivable edge in main SCC for vehicle pitch & contact verification
 sloped_edge = None
 best_dz = 0.0
 for edge in package["road-graph"]["edges"]:
-    if edge.get("dead_end") or edge.get("length_m", 0.0) < 12.0:
+    if edge.get("dead_end") or edge.get("is_bridge") or edge.get("length_m", 0.0) < 12.0:
         continue
     pts = edge["points_m"]
     dz = max(abs(b[2] - a[2]) for a, b in zip(pts, pts[1:]))

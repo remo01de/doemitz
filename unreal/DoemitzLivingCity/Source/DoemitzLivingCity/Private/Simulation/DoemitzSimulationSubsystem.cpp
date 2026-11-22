@@ -33,7 +33,7 @@ namespace
 	constexpr double VehicleAccelCmPerSecSq = 260.0;
 	constexpr double VehicleDecelCmPerSecSq = 550.0;
 
-	bool TraceStaticGroundZ(UWorld* World, double WorldX, double WorldY, double& OutGroundZ)
+	bool TraceStaticGroundZ(UWorld* World, double WorldX, double WorldY, double ReferenceZ, double& OutGroundZ)
 	{
 		if (!World)
 		{
@@ -55,10 +55,11 @@ namespace
 		{
 			Params.AddIgnoredActor(*It);
 		}
+		const double TraceTopZ = FMath::Max(5000.0, ReferenceZ + 2000.0);
 		FHitResult Hit;
 		if (World->LineTraceSingleByChannel(
 			Hit,
-			FVector(WorldX, WorldY, 5000.0),
+			FVector(WorldX, WorldY, TraceTopZ),
 			FVector(WorldX, WorldY, -5000.0),
 			ECC_Visibility,
 			Params))
@@ -3128,10 +3129,10 @@ bool UDoemitzSimulationSubsystem::LoadCityState(const FString& SlotName)
 			Record->State.bIsMoving = Saved.bIsMoving;
 			Record->State.bIsPausedForDialog = false;
 			FVector RestoredLoc = Saved.WorldLocation;
+			double GroundZ = RestoredLoc.Z;
 			if (bMigratingFromPreV6)
 			{
-				double GroundZ = RestoredLoc.Z;
-				if (TraceStaticGroundZ(LoadWorld, RestoredLoc.X, RestoredLoc.Y, GroundZ))
+				if (TraceStaticGroundZ(LoadWorld, RestoredLoc.X, RestoredLoc.Y, RestoredLoc.Z, GroundZ))
 				{
 					RestoredLoc.Z = GroundZ;
 				}
@@ -3139,6 +3140,11 @@ bool UDoemitzSimulationSubsystem::LoadCityState(const FString& SlotName)
 				{
 					RestoredLoc.Z = Place->AccessLocation.Z;
 				}
+			}
+			else if (TraceStaticGroundZ(LoadWorld, RestoredLoc.X, RestoredLoc.Y, RestoredLoc.Z, GroundZ) && GroundZ > RestoredLoc.Z + 25.0)
+			{
+				// Guard against pre-11.1 saves whose saved position lay in a bridge dip below the deck
+				RestoredLoc.Z = GroundZ;
 			}
 			Record->State.WorldLocation = RestoredLoc;
 			Record->State.WorldRotation = Saved.WorldRotation;
@@ -3325,21 +3331,26 @@ bool UDoemitzSimulationSubsystem::LoadCityState(const FString& SlotName)
 				if (APawn* Pawn = PC->GetPawn())
 				{
 					FVector RestoredPlayerLoc = SaveObj->PlayerLocation;
+					double GroundZ = RestoredPlayerLoc.Z;
+					double HalfHeight = 96.0;
+					if (const ACharacter* Char = Cast<ACharacter>(Pawn))
+					{
+						if (const UCapsuleComponent* Cap = Char->GetCapsuleComponent())
+						{
+							HalfHeight = Cap->GetScaledCapsuleHalfHeight() + 4.0;
+						}
+					}
 					if (bMigratingFromPreV6)
 					{
-						double GroundZ = RestoredPlayerLoc.Z;
-						if (TraceStaticGroundZ(World, RestoredPlayerLoc.X, RestoredPlayerLoc.Y, GroundZ))
+						if (TraceStaticGroundZ(World, RestoredPlayerLoc.X, RestoredPlayerLoc.Y, RestoredPlayerLoc.Z, GroundZ))
 						{
-							double HalfHeight = 96.0;
-							if (const ACharacter* Char = Cast<ACharacter>(Pawn))
-							{
-								if (const UCapsuleComponent* Cap = Char->GetCapsuleComponent())
-								{
-									HalfHeight = Cap->GetScaledCapsuleHalfHeight() + 4.0;
-								}
-							}
 							RestoredPlayerLoc.Z = GroundZ + HalfHeight;
 						}
+					}
+					else if (TraceStaticGroundZ(World, RestoredPlayerLoc.X, RestoredPlayerLoc.Y, RestoredPlayerLoc.Z, GroundZ) && GroundZ > RestoredPlayerLoc.Z + 25.0)
+					{
+						// Guard against pre-11.1 saves whose player position lay below a bridge deck
+						RestoredPlayerLoc.Z = GroundZ + HalfHeight;
 					}
 					Pawn->SetActorLocationAndRotation(RestoredPlayerLoc, SaveObj->PlayerRotation, false, nullptr, ETeleportType::TeleportPhysics);
 				}

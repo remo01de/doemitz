@@ -206,6 +206,7 @@ def build_terrain_tiles(
     sidewalk_polygons: list[Polygon],
     building_entries: list[tuple[Polygon, float]],
     road_ground_z_fn: Callable[[float, float], float] | None = None,
+    bridge_polygons: list[Polygon] | None = None,
     tile_size_m: int = DEFAULT_TILE_SIZE_M,
     max_error_m: float = DEFAULT_MAX_ERROR_M,
     max_triangles: int = DEFAULT_MAX_TRIANGLES,
@@ -272,6 +273,25 @@ def build_terrain_tiles(
             ceiling_z[road_sw_mask] = np.minimum(ceiling_z[road_sw_mask], raw_z[road_sw_mask] + 0.05)
         has_ceiling |= road_sw_mask
         depressed |= road_sw_mask
+
+    # 2b. Under bridge footprints, keep canal/moat floor 100% untouched, but clamp embankment crests
+    # that rise above the linear bridge deck so bare-earth DGM1 never pokes through a bridge deck.
+    if bridge_polygons and road_ground_z_fn is not None:
+        padded_bridges = [
+            poly.buffer(0.75, quad_segs=1, cap_style="flat")
+            for poly in bridge_polygons
+            if not poly.is_empty
+        ]
+        bridge_mask = _rasterize_mask(padded_bridges, e_coords, n_coords)
+        if np.any(bridge_mask):
+            ys, xs = np.nonzero(bridge_mask)
+            for r, c in zip(ys.tolist(), xs.tolist()):
+                rg = road_ground_z_fn(float(e_coords[c]), float(n_coords[r]))
+                if mesh_z[r, c] > rg - 0.14:
+                    mesh_z[r, c] = rg - 0.14
+                    ceiling_z[r, c] = min(ceiling_z[r, c], rg + 0.02)
+                    has_ceiling[r, c] = True
+                    depressed[r, c] = True
 
     # 3. Depress & cut out terrain strictly inside building footprints (inset 0.40 m so plinths meet ground seamlessly)
     building_cut_mask = np.zeros((max_gy + 1, max_gx + 1), dtype=np.bool_)

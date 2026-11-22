@@ -263,6 +263,7 @@ def build_road_graph(
                     "from_node": u,
                     "to_node": v,
                     "oneway": is_oneway,
+                    "is_bridge": str(tags.get("bridge", "no")).strip().lower() not in ("", "no", "false", "0"),
                     "width_m": round(float(width_m), 3),
                     "width_source": width_source,
                     "speed_kmh": round(float(speed_kmh), 2),

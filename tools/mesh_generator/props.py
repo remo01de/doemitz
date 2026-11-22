@@ -26,13 +26,15 @@ def _eval_z(elevation_or_fn, x, y):
     return float(elevation_or_fn(x, y)) if callable(elevation_or_fn) else float(elevation_or_fn)
 
 
-def add_street_lamps(meshes, roads, sidewalks, base_m, sidewalk_elevation_m, detailed_road_ids):
+def add_street_lamps(meshes, roads, sidewalks, base_m, sidewalk_elevation_m, detailed_road_ids, forbidden_area=None):
     """Collect deterministic HISM instance transforms for lamps, benches, planters, and bollards."""
     del meshes, base_m
     empty = {"street_lamps": [], "benches": [], "planters": [], "bollards": []}
     if not sidewalks or not detailed_road_ids:
         return [], empty
     sidewalk_safe = union_all([poly.buffer(-0.22) for poly in sidewalks])
+    if forbidden_area is not None and not forbidden_area.is_empty:
+        sidewalk_safe = sidewalk_safe.difference(forbidden_area)
     if sidewalk_safe.is_empty:
         return [], empty
 

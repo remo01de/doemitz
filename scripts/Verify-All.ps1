@@ -16,6 +16,7 @@ param(
         'VerifyPriority.py',
         'VerifyParking.py',
         'VerifyTerrain.py',
+        'VerifyBridges.py',
         'VerifySaveGame.py'
     )
 )
@@ -44,6 +45,7 @@ $expectedMarkers = @{
     'VerifyPriority.py'       = 'DOEMITZ_PRIORITY_PIE_OK:'
     'VerifyParking.py'        = 'DOEMITZ_PARKING_PIE_OK:'
     'VerifyTerrain.py'        = 'DOEMITZ_TERRAIN_PIE_OK:'
+    'VerifyBridges.py'        = 'DOEMITZ_BRIDGES_PIE_OK:'
     'VerifySaveGame.py'       = 'DOEMITZ_SAVEGAME_PIE_OK:'
 }
 

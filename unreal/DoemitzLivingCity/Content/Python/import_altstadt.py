@@ -26,7 +26,10 @@ GENERATOR_TAG = "DoemitzAltstadtImport"
 EDITOR = unreal.EditorAssetLibrary
 ACTORS = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
 LEVELS = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
-SM_SUB = unreal.get_editor_subsystem(unreal.StaticMeshEditorSubsystem)
+SM_SUB = (
+    unreal.get_editor_subsystem(unreal.StaticMeshEditorSubsystem)
+    or unreal.get_default_object(unreal.StaticMeshEditorSubsystem)
+)
 TOOLS = unreal.AssetToolsHelpers.get_asset_tools()
 
 
@@ -914,13 +917,39 @@ def import_level(package):
         if result["hit_actor"] != mesh_actors["Sidewalks"] or abs(result["impact_point"].z - point.z) > 2.5:
             raise RuntimeError(f"Sidewalk collision test hit the wrong surface: {result}")
 
+    bridges = package.get("bridges") or []
+    bridge_result = ""
+    if bridges and "Bridges" in mesh_actors:
+        for bridge in bridges:
+            if "mid_point_3d_m" in bridge:
+                mid_point = bridge["mid_point_3d_m"]
+            else:
+                a, b = bridge["abutments"][0]["position_m"], bridge["abutments"][1]["position_m"]
+                mid_point = [0.5 * (a[0] + b[0]), 0.5 * (a[1] + b[1]), 0.5 * (a[2] + b[2])]
+            bp = ue_position(mid_point)
+            hit = unreal.SystemLibrary.line_trace_single(
+                world, bp + unreal.Vector(z=300), bp - unreal.Vector(z=300),
+                unreal.TraceTypeQuery.ECC_VISIBILITY, False, [], unreal.DrawDebugTrace.NONE, False
+            )
+            if hit is None:
+                raise RuntimeError(f"Bridge collision test missed for {bridge['id']} ({bridge['name']})")
+            bres = hit.to_dict()
+            if bres["hit_actor"] != mesh_actors["Bridges"] or abs(bres["impact_point"].z - bp.z) > 5.0:
+                raise RuntimeError(
+                    f"Bridge collision test mismatch for {bridge['id']}: "
+                    f"actor={bres['hit_actor'].get_actor_label() if bres['hit_actor'] else None}, "
+                    f"hit_z={bres['impact_point'].z:.2f} vs expected_z={bp.z:.2f}"
+                )
+        bridge_result = f", {len(bridges)} bridges collision passed"
+
     # World Partition actors are separate content packages.
     if not unreal.EditorLoadingAndSavingUtils.save_dirty_packages(True, True):
         raise RuntimeError(f"Could not save {MAP}")
     sidewalk_result = ", sidewalk collision passed" if sidewalk else ""
     unreal.log(
         f"DOEMITZ_IMPORT_OK: {len(assets)} meshes, {distance_m:.4f} m reference, "
-        f"{error:.4%} error, {', '.join(ref_z_checks)}, terrain, roof and wall collision passed{sidewalk_result}"
+        f"{error:.4%} error, {', '.join(ref_z_checks)}, terrain, roof and wall collision passed"
+        f"{sidewalk_result}{bridge_result}"
     )
 
 

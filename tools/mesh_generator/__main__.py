@@ -16,11 +16,17 @@ from shapely.ops import nearest_points
 from tools.geo_import.export import geometry_parts, write_json
 from tools.geo_transform.terrain import ElevationModel
 from tools.mesh_generator.architecture import ROOF_STYLES, WALL_STYLES, add_stylized_building
+from tools.mesh_generator.bridges import build_bridges_mesh
 from tools.mesh_generator.citizens import build_citizens
 from tools.mesh_generator.city_map import render_city_map
 from tools.mesh_generator.economy import build_economy
 from tools.mesh_generator.props import add_street_lamps, add_stylized_trees
-from tools.mesh_generator.road_elevation import DEFAULT_SMOOTHING_WINDOW_M, RoadElevationNetwork, densify_polygon
+from tools.mesh_generator.road_elevation import (
+    DEFAULT_SMOOTHING_WINDOW_M,
+    RoadElevationNetwork,
+    densify_polygon,
+    is_bridge_road,
+)
 from tools.mesh_generator.road_graph import build_road_graph
 from tools.mesh_generator.tasks import build_tasks
 from tools.mesh_generator.terrain import (
@@ -176,10 +182,13 @@ def road_width(tags):
 
 def add_streets(
     meshes, roads, bounds, obstacles, base_m, sidewalk_widths,
-    default_sidewalk_widths=None, road_network=None, elevation=None, road_polygons_out=None,
+    default_sidewalk_widths=None, road_network=None, elevation=None,
+    road_polygons_out=None, non_bridge_sidewalks_out=None, building_obstacles=None,
 ):
     surfaces = {name: [] for name in ROAD_MESHES}
+    bridge_road_buffers = []
     sidewalk_envelopes = []
+    bridge_sidewalk_envelopes = []
     eligible_ids = set()
     sidewalk_road_ids = set()
     width_sources = Counter()
@@ -193,12 +202,16 @@ def add_streets(
         width, source = road_width(tags)
         width_sources[source] += 1
         axis = shape(road["geometry"])
-        name = "Roads"
-        if tags.get("surface") in STONE_SURFACES:
-            name = "Paving"
-        elif highway in PATH_CLASSES:
-            name = "Paths"
-        surfaces[name].append(axis.buffer(width / 2, quad_segs=3))
+        bridge_flag = is_bridge_road(tags)
+        if bridge_flag:
+            bridge_road_buffers.append(axis.buffer(width / 2, quad_segs=3, cap_style="flat"))
+        else:
+            name = "Roads"
+            if tags.get("surface") in STONE_SURFACES:
+                name = "Paving"
+            elif highway in PATH_CLASSES:
+                name = "Paths"
+            surfaces[name].append(axis.buffer(width / 2, quad_segs=3))
 
         road_id = road["id"]
         sidewalk_width = None
@@ -212,9 +225,11 @@ def add_streets(
             if not 0 < sidewalk_width <= 5:
                 raise ValueError(f"invalid sidewalk width for {road_id}: {sidewalk_width}")
             sidewalk_road_ids.add(road_id)
-            sidewalk_envelopes.append(
-                axis.buffer(width / 2 + sidewalk_width, quad_segs=3, cap_style="flat")
-            )
+            env = axis.buffer(width / 2 + sidewalk_width, quad_segs=3, cap_style="flat")
+            if bridge_flag:
+                bridge_sidewalk_envelopes.append(env)
+            else:
+                sidewalk_envelopes.append(env)
 
     if eligible_ids != sidewalk_widths.keys():
         raise ValueError(f"missing eligible roads for sidewalks: {sorted(sidewalk_widths.keys() - eligible_ids)}")
@@ -223,7 +238,8 @@ def add_streets(
     road_z_arg = road_network.road_surface_z if use_draped else (base_m + ROAD_ELEVATION_M)
     sidewalk_z_arg = road_network.sidewalk_surface_z if use_draped else (base_m + ROAD_ELEVATION_M + CURB_HEIGHT_M)
 
-    occupied = union_all([], grid_size=STREET_GRID_M)
+    bridge_occupied = set_precision(union_all(bridge_road_buffers, grid_size=STREET_GRID_M), STREET_GRID_M)
+    occupied = bridge_occupied
     for name, parts in surfaces.items():
         area = set_precision(union_all(parts, grid_size=STREET_GRID_M), STREET_GRID_M).intersection(bounds)
         for polygon in geometry_parts(area.difference(occupied), "Polygon"):
@@ -232,6 +248,7 @@ def add_streets(
                 road_polygons_out.append(polygon)
         occupied = occupied.union(area)
 
+    # Regular sidewalks exclude roads, buildings, and water
     envelopes = set_precision(union_all(sidewalk_envelopes, grid_size=STREET_GRID_M), STREET_GRID_M)
     excluded = occupied.union(set_precision(obstacles, STREET_GRID_M))
     sidewalk_area = envelopes.intersection(bounds).difference(excluded)
@@ -240,6 +257,8 @@ def add_streets(
         if polygon.area < 0.08:
             continue
         sidewalks.append(polygon)
+        if non_bridge_sidewalks_out is not None:
+            non_bridge_sidewalks_out.append(polygon)
         meshes["Sidewalks"].add_surface(polygon, sidewalk_z_arg)
         if use_draped:
             def _curb_bottom(x, y):
@@ -250,6 +269,26 @@ def add_streets(
             meshes["Sidewalks"].add_draped_walls(polygon, road_network.sidewalk_surface_z, _curb_bottom)
         else:
             meshes["Sidewalks"].add_walls(polygon, ROAD_ELEVATION_M + CURB_HEIGHT_M, base_m)
+
+    # Bridge sidewalks span OVER water with 12 cm curb resting on the bridge deck (excluded only by roadway/buildings/regular sidewalks)
+    if bridge_sidewalk_envelopes:
+        b_env = set_precision(union_all(bridge_sidewalk_envelopes, grid_size=STREET_GRID_M), STREET_GRID_M)
+        b_obs = occupied.union(set_precision(sidewalk_area, STREET_GRID_M))
+        if building_obstacles is not None and not building_obstacles.is_empty:
+            b_obs = b_obs.union(set_precision(building_obstacles, STREET_GRID_M))
+        bridge_sw_area = b_env.intersection(bounds).difference(b_obs)
+        for polygon in geometry_parts(orient_polygons(bridge_sw_area), "Polygon"):
+            if polygon.area < 0.08:
+                continue
+            sidewalks.append(polygon)
+            meshes["Sidewalks"].add_surface(polygon, sidewalk_z_arg)
+            if use_draped:
+                def _bridge_curb_bottom(x, y):
+                    return road_network.road_surface_z(x, y) - 0.05
+                meshes["Sidewalks"].add_draped_walls(polygon, road_network.sidewalk_surface_z, _bridge_curb_bottom)
+            else:
+                meshes["Sidewalks"].add_walls(polygon, CURB_HEIGHT_M + 0.02, base_m + ROAD_ELEVATION_M - 0.02)
+
     return width_sources, sidewalks
 
 
@@ -345,9 +384,10 @@ def build(
             )
             building_entries.append((polygon, b_min_z))
 
-    # 3. Roads & sidewalks draped along smoothed longitudinal profile, flat cross-section, 12 cm curb
+    # 3. Roads, bridges & sidewalks draped along smoothed longitudinal profile, linear bridge decks, 12 cm curb
     sidewalk_widths = sidewalk_widths or {}
     default_sidewalk_widths = default_sidewalk_widths or {}
+    building_union = union_all(buildings, grid_size=STREET_GRID_M) if buildings else union_all([], grid_size=STREET_GRID_M)
     obstacles = (
         union_all([water, *buildings], grid_size=STREET_GRID_M)
         if sidewalk_widths or default_sidewalk_widths or vehicle_config or citizens_config else water
@@ -358,12 +398,31 @@ def build(
         smoothing_window_m=smoothing_window_m,
     )
     road_polygons: list = []
+    non_bridge_sidewalks: list = []
     width_sources, sidewalks = add_streets(
         meshes, roads, bounds, obstacles, base_m, sidewalk_widths, default_sidewalk_widths,
-        road_network=road_network, elevation=elevation, road_polygons_out=road_polygons,
+        road_network=road_network, elevation=elevation,
+        road_polygons_out=road_polygons, non_bridge_sidewalks_out=non_bridge_sidewalks,
+        building_obstacles=building_union,
+    )
+
+    bridges_mesh, bridges_report, bridge_footprints = build_bridges_mesh(
+        bridges=road_network.bridges,
+        elevation=elevation,
+        road_offset_m=ROAD_ELEVATION_M,
+        curb_height_m=CURB_HEIGHT_M,
+        sidewalk_widths=sidewalk_widths,
+        default_sidewalk_widths=default_sidewalk_widths,
+        water_surfaces=water_surfaces,
+    )
+    bridge_exclusion_zone = (
+        union_all([fp.buffer(0.8) for fp in bridge_footprints], grid_size=STREET_GRID_M)
+        if bridge_footprints
+        else union_all([], grid_size=STREET_GRID_M)
     )
 
     # 4. Terrain mesh: simplified 64 m tiles for DGM1, single flat plane for flat_placeholder
+    # Under bridges, terrain is NOT depressed for the road and water is NOT cut out.
     terrain_tiles: dict[str, dict] = {}
     if elevation.is_flat:
         meshes["Terrain"].add_surface(bounds, base_m)
@@ -383,9 +442,10 @@ def build(
             bounds=bounds,
             water_surfaces=water_surfaces,
             road_polygons=road_polygons,
-            sidewalk_polygons=sidewalks,
+            sidewalk_polygons=non_bridge_sidewalks,
             building_entries=building_entries,
             road_ground_z_fn=road_network.ground_elevation_at,
+            bridge_polygons=bridge_footprints,
             tile_size_m=tile_size_m,
             max_error_m=max_error_m,
             max_triangles=max_triangles,
@@ -406,11 +466,15 @@ def build(
         for road, width in roads_by_id.values()
         if road["properties"].get("tunnel", "no") == "no"
     ]
-    excluded_for_trees = union_all([water, *buildings, *road_buffers, *sidewalks], grid_size=STREET_GRID_M)
+    excluded_for_trees = union_all(
+        [water, *buildings, *road_buffers, *sidewalks, *bridge_footprints],
+        grid_size=STREET_GRID_M,
+    )
     detailed_road_ids = {
         road["id"]
         for road in roads
         if road["properties"].get("tunnel", "no") == "no"
+        and not is_bridge_road(road["properties"])
         and (
             road["id"] in sidewalk_widths
             or road["properties"]["highway"] in default_sidewalk_widths
@@ -418,6 +482,7 @@ def build(
     }
     lamp_lights, street_prop_instances = add_street_lamps(
         meshes, roads, sidewalks, base_m, sidewalk_z_resolver, detailed_road_ids,
+        forbidden_area=bridge_exclusion_zone,
     )
     vegetation_instances = add_stylized_trees(meshes, bounds, excluded_for_trees, terrain_z_resolver)
     prop_instances = {**street_prop_instances, **vegetation_instances}
@@ -543,6 +608,8 @@ def build(
             "vertices": tile_data["vertices"],
             "triangles": tile_data["triangles"],
         }
+    if bridges_mesh is not None:
+        compiled_meshes["Bridges"] = bridges_mesh
 
     terrain_attribution = scene["terrain"].get("attribution", "")
     terrain_license = scene["terrain"].get("license", "")
@@ -552,6 +619,7 @@ def build(
         "attribution_url": scene["attribution_url"],
         "terrain_attribution": terrain_attribution,
         "terrain_license": terrain_license,
+        "bridges": bridges_report,
         "terrain": {
             "kind": terrain_kind,
             "reference_elevation_m": float(scene["terrain"].get("reference_elevation_m", 0.0)),
@@ -559,6 +627,7 @@ def build(
             "license": terrain_license,
             "delivery_year": scene["terrain"].get("delivery_year"),
             "mesh": terrain_mesh_report,
+            "bridges": bridges_report,
             "water_levels": water_levels_report,
             "roads_elevation": {
                 "smoothing_window_m": road_network.smoothing_window_m,
@@ -652,7 +721,8 @@ def main():
             f"(budget {tm['max_triangles_budget']}), max_err={tm['max_vertical_error_m']*100:.2f} cm "
             f"(budget {tm['max_error_budget_m']*100:.1f} cm), "
             f"max_road_slope={re_info['max_slope_overall_percent']:.2f}%, "
-            f"sloped_buildings={tr['buildings_elevation']['sloped_count']}/{tr['buildings_elevation']['count']}"
+            f"sloped_buildings={tr['buildings_elevation']['sloped_count']}/{tr['buildings_elevation']['count']}, "
+            f"bridges={len(tr.get('bridges', []))}"
         )
     if package.get("city_map"):
         write_json(args.scene.with_name("city-map-meta.json"), package["city_map"])

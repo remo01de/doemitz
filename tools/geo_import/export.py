@@ -16,7 +16,10 @@ from tools.validation.scene import reference_measurement, validate
 
 LAYERS = ("roads", "buildings", "water", "pois")
 AREA_TAGS = ("building", "building:levels", "height", "name", "natural", "water", "waterway")
-ROAD_TAGS = ("highway", "name", "bridge", "tunnel", "layer", "lanes", "width", "surface", "oneway", "maxspeed")
+ROAD_TAGS = (
+    "highway", "name", "bridge", "bridge:structure", "bridge:name", "material",
+    "tunnel", "layer", "lanes", "width", "surface", "oneway", "maxspeed",
+)
 POI_TAGS = ("name", "shop", "amenity", "office", "tourism", "opening_hours", "building", "addr:street", "addr:housenumber", "parking", "capacity", "access")
 
 

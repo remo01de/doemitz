@@ -54,8 +54,8 @@ Kein Performanceverlust gegenüber Sprint 10 (58,4 FPS) — im Gegenteil leicht 
 
 ## Bekannte Grenzen (bewusst außerhalb Sprint 11)
 
-- Brücken (`Torbrücke`, `Steinbrücke`, Festungsbrücke) liegen weiterhin ohne eigene Brückenhöhe auf dem DGM1-Gelände (wie in `GEO_DATA.md` beschrieben), weshalb dort lokal steilere Längsneigungen im Report auftreten.
-- Markante Bauwerke/Innenräume folgen in Sprint 12, die Erweiterung über die Altstadt hinaus in Sprint 13.
+- Brücken (`Torbrücke`, `Steinbrücke`, Festungsbrücke, Holzstege) lagen in Sprint 11 noch ohne eigene Brückenhöhe auf dem DGM1-Gelände. Dieser Punkt wurde in der Nachbesserung [Sprint 11.1 – Brücken auf eigener Höhe](SPRINT_11_1.md) vor Sprint 12 behoben.
+- Markante Bauwerke/Innenräume (inkl. Bögen, Pfeiler und historischer Brückendetails) folgen in Sprint 12, die Erweiterung über die Altstadt hinaus in Sprint 13.
 - Remote-Sicherung bleibt als offene Entscheidung beim Product Owner.
 
 ## Ausblick
