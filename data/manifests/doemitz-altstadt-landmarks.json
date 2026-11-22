@@ -1,0 +1,135 @@
+{
+  "schema_version": 1,
+  "scene_id": "doemitz-altstadt",
+  "notes": "Versionierte Auswahl markanter Bauwerke und Brückendetails über stabile OSM-IDs (keine Hartcodierung im Generator). Höhen stammen vorrangig aus LoD2; für in OSM geteilte Teilflügel ohne eigene 1:1-LoD2-Zuordnung sind die abgeleiteten Vergleichshöhen als reference_photo_estimate dokumentiert.",
+  "buildings": {
+    "osm:way:42551672": {
+      "variant": "johanneskirche",
+      "name": "Johanneskirche",
+      "wall_style": "WallsBrick",
+      "roof_style": "RoofsSlate",
+      "tower_center_local_m": [26.2, -88.4],
+      "tower_width_m": 7.0,
+      "tower_shaft_height_m": 25.82,
+      "tower_pinnacle_height_m": 29.4,
+      "nave_eave_height_m": 11.25,
+      "nave_ridge_height_m": 18.08,
+      "choir_ridge_height_m": 15.27,
+      "reference_ids": ["ref_johanneskirche_overview", "ref_johanneskirche_tower", "ref_johanneskirche_facade"]
+    },
+    "osm:way:41020272": {
+      "variant": "rathaus",
+      "name": "Rathaus",
+      "wall_style": "WallsCream",
+      "roof_style": "RoofsTerracotta",
+      "roof_shape_override": "mansard",
+      "timber_framing": true,
+      "front_face_toward_local_m": [-66.1, -195.6],
+      "real_entrance_local_m": [-66.82, -216.75],
+      "entrance_place_ids": ["poi:osm:way:41020272", "poi:osm:node:2874556070", "poi:osm:node:2874556071"],
+      "tower_corner_local_m": [-70.2, -231.5],
+      "tower_height_m": 14.8,
+      "reference_ids": ["ref_rathaus_front", "ref_rathaus_square"]
+    },
+    "osm:way:96029976": {
+      "variant": "festung_zeughaus",
+      "name": "Zeughaus (Westflügel)",
+      "wall_style": "WallsBrick",
+      "roof_style": "RoofsClay",
+      "roof_shape": "hipped",
+      "courtyard_center_local_m": [-195.0, -25.0],
+      "reference_ids": ["ref_festung_courtyard", "ref_festung_buildings_2012", "ref_festung_overview"]
+    },
+    "osm:way:1360590722": {
+      "variant": "festung_zeughaus",
+      "name": "Zeughaus (Ostflügel)",
+      "wall_style": "WallsBrick",
+      "roof_style": "RoofsClay",
+      "roof_shape": "hipped",
+      "reference_eave_height_m": 8.924,
+      "reference_ridge_height_m": 11.918,
+      "courtyard_center_local_m": [-195.0, -25.0],
+      "reference_ids": ["ref_festung_courtyard", "ref_festung_buildings_2012", "ref_festung_overview"]
+    },
+    "osm:way:1360590724": {
+      "variant": "festung_hauptwache",
+      "name": "Hauptwache (Mittelbau)",
+      "wall_style": "WallsCream",
+      "roof_style": "RoofsClay",
+      "roof_shape": "hipped",
+      "has_central_portal": true,
+      "courtyard_center_local_m": [-195.0, -25.0],
+      "reference_ids": ["ref_festung_courtyard", "ref_festung_buildings_2012", "ref_festung_overview"]
+    },
+    "osm:way:96029971": {
+      "variant": "festung_hauptwache",
+      "name": "Hauptwache (Westflügel)",
+      "wall_style": "WallsCream",
+      "roof_style": "RoofsClay",
+      "roof_shape": "hipped",
+      "reference_eave_height_m": 9.06,
+      "reference_ridge_height_m": 11.826,
+      "courtyard_center_local_m": [-195.0, -25.0],
+      "reference_ids": ["ref_festung_courtyard", "ref_festung_buildings_2012"]
+    },
+    "osm:way:1360590723": {
+      "variant": "festung_hauptwache",
+      "name": "Hauptwache (Ostflügel)",
+      "wall_style": "WallsCream",
+      "roof_style": "RoofsClay",
+      "roof_shape": "hipped",
+      "reference_eave_height_m": 9.06,
+      "reference_ridge_height_m": 11.826,
+      "courtyard_center_local_m": [-195.0, -25.0],
+      "reference_ids": ["ref_festung_courtyard", "ref_festung_buildings_2012"]
+    },
+    "osm:way:96029975": {
+      "variant": "festung_kommandantenremise",
+      "name": "Kommandantenremise",
+      "wall_style": "WallsBrick",
+      "roof_style": "RoofsClay",
+      "roof_shape": "hipped",
+      "courtyard_center_local_m": [-195.0, -25.0],
+      "reference_ids": ["ref_festung_courtyard", "ref_festung_overview"]
+    },
+    "osm:way:96029967": {
+      "variant": "festung_arrestantenhaus",
+      "name": "Arrestantenhaus",
+      "wall_style": "WallsBrick",
+      "roof_style": "RoofsClay",
+      "roof_shape": "gabled",
+      "courtyard_center_local_m": [-195.0, -25.0],
+      "reference_ids": ["ref_festung_buildings_2012", "ref_festung_entrance_portal", "ref_festung_overview"]
+    }
+  },
+  "bridges": {
+    "bridge:osm:way:29732766": {
+      "detail_style": "stone_arches_piers",
+      "arch_count": 3,
+      "pier_width_m": 1.35,
+      "arch_rise_m": 1.45,
+      "dimensions_source": "assumed_sprint12_bridge_details",
+      "reference_ids": ["ref_bridges_torbruecke_steinbruecke", "ref_torstrasse_context"]
+    },
+    "bridge:osm:way:94526517": {
+      "detail_style": "stone_vault_arch",
+      "arch_count": 1,
+      "pier_width_m": 1.6,
+      "arch_rise_m": 1.55,
+      "dimensions_source": "assumed_sprint12_bridge_details",
+      "reference_ids": ["ref_bridges_torbruecke_steinbruecke"]
+    }
+  },
+  "tunnel_portals": {
+    "osm:way:416256369": {
+      "name": "Festungswall-Tunnelportal (NW-Steg)",
+      "style": "fortress_brick_arch",
+      "clear_width_m": 2.6,
+      "clear_height_m": 3.1,
+      "portal_wall_width_m": 5.4,
+      "portal_wall_height_m": 4.4,
+      "dimensions_source": "assumed_sprint12_tunnel_portal",
+      "reference_ids": ["ref_festung_entrance_portal", "ref_festung_overview"]
+    }
+  }
+}

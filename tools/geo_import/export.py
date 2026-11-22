@@ -10,15 +10,19 @@ from shapely.geometry import LineString, MultiLineString, MultiPolygon, Point, P
 
 from tools.geo_import import osm
 from tools.geo_import.dgm import load_clipped_dgm1
+from tools.geo_import.lod2 import load_and_match_lod2_buildings
 from tools.geo_transform.local import LocalFrame
 from tools.validation.scene import reference_measurement, validate
 
 
 LAYERS = ("roads", "buildings", "water", "pois")
-AREA_TAGS = ("building", "building:levels", "height", "name", "natural", "water", "waterway")
+AREA_TAGS = (
+    "building", "building:levels", "height", "roof:shape", "roof:height",
+    "name", "natural", "water", "waterway",
+)
 ROAD_TAGS = (
     "highway", "name", "bridge", "bridge:structure", "bridge:name", "material",
-    "tunnel", "layer", "lanes", "width", "surface", "oneway", "maxspeed",
+    "tunnel", "layer", "lanes", "width", "surface", "oneway", "maxspeed", "incline",
 )
 POI_TAGS = ("name", "shop", "amenity", "office", "tourism", "opening_hours", "building", "addr:street", "addr:housenumber", "parking", "capacity", "access")
 
@@ -287,6 +291,14 @@ def build(config: dict, raw_dir: Path, output_dir: Path, terrain_mode: str = "dg
             "boundary": local_bounds_mapping,
         }
 
+    lod2_matches, lod2_meta, lod2_raw_files = load_and_match_lod2_buildings(
+        config, raw_dir, frame, local_layers["buildings"]
+    )
+    for b_feat in local_layers["buildings"]:
+        match = lod2_matches.get(b_feat["id"])
+        if match is not None:
+            b_feat["lod2"] = match
+
     scene = {
         "schema_version": 1,
         "id": config["id"],
@@ -298,6 +310,7 @@ def build(config: dict, raw_dir: Path, output_dir: Path, terrain_mode: str = "dg
             "unit": "meter",
         },
         "terrain": terrain_section,
+        "lod2": lod2_meta,
         "attribution": source["attribution"],
         "attribution_url": source["attribution_url"],
         "license": source["license"],
@@ -318,8 +331,10 @@ def build(config: dict, raw_dir: Path, output_dir: Path, terrain_mode: str = "dg
         "bounds_lonlat": config["bounds_lonlat"],
         "terrain_mode": terrain_mode,
         "terrain": {k: v for k, v in terrain_section.items() if k != "boundary"},
+        "lod2": lod2_meta,
         "dgm_raw_files": dgm_raw_files,
-        "raw_files": files + dgm_raw_files,
+        "lod2_raw_files": lod2_raw_files,
+        "raw_files": files + dgm_raw_files + lod2_raw_files,
         "counts": counts,
         "geometry_issues": issues,
         "reference": reference,

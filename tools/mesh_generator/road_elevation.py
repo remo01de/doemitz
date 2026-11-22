@@ -109,9 +109,21 @@ class BridgeChain:
     length_m: float
     abutments: tuple[BridgeAbutment, BridgeAbutment]
     max_slope_percent: float
+    incline: str = ""
+    warnings: list[str] = field(default_factory=list)
 
     def ground_elevation_at_s(self, s_m: float) -> float:
         return float(np.interp(s_m, self.s_vals, self.z_vals))
+
+
+@dataclass
+class TunnelWayInfo:
+    road_id: str
+    name: str
+    highway: str
+    width_m: float
+    coords: list[tuple[float, float]]
+    portal_z_m: tuple[float, float]
 
 
 class _RoadProfilePart:
@@ -261,19 +273,20 @@ class RoadElevationNetwork:
         self.bridges: list[BridgeChain] = []
         self.bridge_way_ids: set[str] = set()
         self.bridge_by_way_id: dict[str, BridgeChain] = {}
+        self.tunnels: list[TunnelWayInfo] = []
         self._tree = None
         self._geoms: list[LineString] = []
 
-        # 1. Partition all non-tunnel roads into non-bridge and bridge ways.
+        # 1. Partition roads into non-bridge, bridge, and tunnel ways.
+        # Tunnel ways stay excluded from draped surface roads, but their portal nodes count as valid bridge connections.
         non_bridge_raw: list[tuple[dict, float, list[tuple[float, float]]]] = []
         bridge_raw: list[tuple[dict, float, list[tuple[float, float]]]] = []
         non_bridge_vertex_uses: dict[tuple[float, float], int] = defaultdict(int)
         non_bridge_roads_at_key: dict[tuple[float, float], set[str]] = defaultdict(set)
+        tunnel_roads_at_key: dict[tuple[float, float], set[str]] = defaultdict(set)
 
         for road in roads:
             tags = road["properties"]
-            if tags.get("tunnel", "no") != "no":
-                continue
             width_m, _ = road_width_fn(tags)
             geom = shape(road["geometry"])
             lines = (
@@ -283,6 +296,26 @@ class RoadElevationNetwork:
                 if geom.geom_type == "MultiLineString"
                 else []
             )
+            if tags.get("tunnel", "no") != "no":
+                for line in lines:
+                    coords = [(float(p[0]), float(p[1])) for p in line.coords]
+                    if len(coords) < 2:
+                        continue
+                    for pt in (coords[0], coords[-1]):
+                        tunnel_roads_at_key[_coord_key(pt)].add(road["id"])
+                    z0 = elevation.flat_elevation_m if elevation.is_flat else float(elevation.sample(coords[0][0], coords[0][1]))
+                    z1 = elevation.flat_elevation_m if elevation.is_flat else float(elevation.sample(coords[-1][0], coords[-1][1]))
+                    self.tunnels.append(
+                        TunnelWayInfo(
+                            road_id=road["id"],
+                            name=tags.get("name", ""),
+                            highway=tags["highway"],
+                            width_m=float(width_m),
+                            coords=coords,
+                            portal_z_m=(round(z0, 4), round(z1, 4)),
+                        )
+                    )
+                continue
             bridge_flag = is_bridge_road(tags)
             for line in lines:
                 coords = [(float(p[0]), float(p[1])) for p in line.coords]
@@ -389,7 +422,9 @@ class RoadElevationNetwork:
             k_b = _coord_key(end_xy)
 
             def resolve_abutment(key: tuple[float, float], xy: tuple[float, float]) -> BridgeAbutment:
-                conn = sorted(non_bridge_roads_at_key.get(key, set()))
+                conn_roads = sorted(non_bridge_roads_at_key.get(key, set()))
+                conn_tunnels = sorted(tunnel_roads_at_key.get(key, set()))
+                conn = sorted(set(conn_roads) | set(conn_tunnels))
                 if elevation.is_flat:
                     z_val = elevation.flat_elevation_m
                     src = "flat_placeholder"
@@ -399,6 +434,10 @@ class RoadElevationNetwork:
                 elif key in node_z:
                     z_val = node_z[key]
                     src = "connecting_road_profile"
+                elif conn_tunnels:
+                    # A tunnel way counts as an abutment connection; use DGM elevation directly at the portal node.
+                    z_val = float(elevation.sample(xy[0], xy[1]))
+                    src = "tunnel_portal_dgm"
                 else:
                     z_val = _max_dgm_in_radius(elevation, xy[0], xy[1], ABUTMENT_FALLBACK_RADIUS_M)
                     src = "assumed_max_dgm_3m_radius"
@@ -416,6 +455,14 @@ class RoadElevationNetwork:
             node_z[k_a] = ab_a.ground_z_m
             node_z[k_b] = ab_b.ground_z_m
 
+            chain_warnings: list[str] = []
+            for idx_ab, (ab_cur, ab_other) in enumerate(((ab_a, ab_b), (ab_b, ab_a))):
+                if ab_cur.source == "assumed_max_dgm_3m_radius" and (ab_cur.ground_z_m - ab_other.ground_z_m) > 1.0:
+                    chain_warnings.append(
+                        f"abutment_{idx_ab} used 3m DGM fallback and sits "
+                        f"{ab_cur.ground_z_m - ab_other.ground_z_m:.2f} m above the opposite abutment"
+                    )
+
             total_chain_len = max(cursor_s, 1e-4)
             chain_pts, chain_cum_s = _densify_polyline(chain_coords, SAMPLE_STEP_M)
             chain_s_arr = np.asarray(chain_cum_s, dtype=np.float64)
@@ -428,6 +475,7 @@ class RoadElevationNetwork:
             b_struct = ""
             b_mat = ""
             b_surface = ""
+            b_incline = ""
             b_highway = chain_entries[0][0]["properties"]["highway"]
             b_width = max(w for _, w, _ in chain_entries)
             for road, _, _ in chain_entries:
@@ -440,6 +488,8 @@ class RoadElevationNetwork:
                     b_mat = props["material"]
                 if not b_surface and props.get("surface"):
                     b_surface = props["surface"]
+                if not b_incline and props.get("incline"):
+                    b_incline = props["incline"]
 
             chain_obj = BridgeChain(
                 id=bridge_id,
@@ -456,6 +506,8 @@ class RoadElevationNetwork:
                 length_m=round(total_chain_len, 4),
                 abutments=(ab_a, ab_b),
                 max_slope_percent=round(chain_slope_pct, 2),
+                incline=b_incline,
+                warnings=chain_warnings,
             )
             self.bridges.append(chain_obj)
             for wid in way_ids:

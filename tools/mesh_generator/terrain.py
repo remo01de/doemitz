@@ -207,6 +207,7 @@ def build_terrain_tiles(
     building_entries: list[tuple[Polygon, float]],
     road_ground_z_fn: Callable[[float, float], float] | None = None,
     bridge_polygons: list[Polygon] | None = None,
+    tunnel_corridors: list[tuple[Polygon, float]] | None = None,
     tile_size_m: int = DEFAULT_TILE_SIZE_M,
     max_error_m: float = DEFAULT_MAX_ERROR_M,
     max_triangles: int = DEFAULT_MAX_TRIANGLES,
@@ -305,6 +306,20 @@ def build_terrain_tiles(
             mesh_z[bmask] = np.minimum(mesh_z[bmask], b_min_z - 0.15)
             building_cut_mask |= bmask
             depressed |= bmask
+
+    # 3b. Cut out & depress terrain along walkable tunnel corridors (e.g. NW-Steg fortress rampart passage)
+    # so the earthen hillside never blocks the walkable vaulted brick tunnel bore.
+    for tpoly, t_floor_z in tunnel_corridors or []:
+        if tpoly.is_empty:
+            continue
+        parts = [tpoly] if tpoly.geom_type == "Polygon" else list(getattr(tpoly, "geoms", []))
+        tmask = _rasterize_mask([p for p in parts if p.geom_type == "Polygon"], e_coords, n_coords)
+        if np.any(tmask):
+            mesh_z[tmask] = np.minimum(mesh_z[tmask], t_floor_z - 0.14)
+            ceiling_z[tmask] = np.minimum(ceiling_z[tmask], t_floor_z - 0.04)
+            has_ceiling |= tmask
+            building_cut_mask |= tmask
+            depressed |= tmask
 
     # Open terrain points: strictly non-depressed
     open_mask = ~depressed

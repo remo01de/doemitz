@@ -1,0 +1,18 @@
+{
+  "dataset": "3D-Gebäudemodelle (Strukturmodell, LoD2) Mecklenburg-Vorpommern",
+  "provider": "Landesamt für innere Verwaltung Mecklenburg-Vorpommern (LAiV M-V), Amt für Geoinformation, Vermessung und Katasterwesen",
+  "portal_url": "https://www.geoportal-mv.de",
+  "atom_url": "https://www.geodaten-mv.de/dienste/gebaeude_atom?type=dataset&id=8397b554-5cb9-4274-8be8-c20490d9a6e8",
+  "metadata_csw_url": "https://www.geodaten-mv.de/soapServices/api?SERVICE=CSW&REQUEST=GetRecordById&VERSION=2.0.2&outputSchema=http://www.isotc211.org/2005/gmd&ElementSetName=full&Id=11d74a7f-d3ad-4900-b8e3-fa821cfad3b5",
+  "license": "Creative Commons Namensnennung – 4.0 International (CC BY 4.0)",
+  "license_id": "cc-by/4.0",
+  "license_url": "https://creativecommons.org/licenses/by/4.0/",
+  "attribution_required": "© GeoBasis-DE/M-V 2026",
+  "delivery_year": 2026,
+  "format": "CityGML 1.0 (XML/ZIP)",
+  "vertical_crs": "DHHN2016 (NHN / EPSG:7837)",
+  "horizontal_crs": "ETRS89 / UTM Zone 33N (EPSG:25833)",
+  "status": "imported",
+  "checked_at": "2026-11-22",
+  "notes": "Amtliche Lizenz aus den ISO-Metadaten (CSW-ID 11d74a7f-d3ad-4900-b8e3-fa821cfad3b5) vor dem Download geprüft: Creative Commons Namensnennung – 4.0 International (CC BY 4.0), Quellenvermerk '© GeoBasis-DE/M-V 2026' (Lieferstand 2026-03-30). Rohkachel lod2_33_248_5894_2_gml.zip lokal in data/raw/doemitz-altstadt/lod2/ gespeichert."
+}

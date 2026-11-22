@@ -1,0 +1,128 @@
+{
+  "schema_version": 1,
+  "scene_id": "doemitz-altstadt",
+  "notes": "Verweise auf frei lizenzierte Referenzfotos (Wikimedia Commons) für die stilisierten Wahrzeichen und Brückendetails in Sprint 12. Die Fotos werden gemäß Lizenzhinweis nicht in das Repository kopiert, sondern hier mit URL, Urheber, Lizenz und Zielbauwerk dokumentiert.",
+  "references": [
+    {
+      "id": "ref_johanneskirche_overview",
+      "landmark": "Johanneskirche",
+      "osm_ids": ["osm:way:42551672"],
+      "title": "File:Church of Doemitz.jpg",
+      "url": "https://commons.wikimedia.org/wiki/File:Church_of_Doemitz.jpg",
+      "author": "Christian Fischer",
+      "license": "CC BY-SA 3.0",
+      "license_url": "https://creativecommons.org/licenses/by-sa/3.0/",
+      "used_for": "Gesamtsilhouette, Backsteinschiff, steiles Dach, Strebepfeiler, Fensterachsen und Turmproportionen"
+    },
+    {
+      "id": "ref_johanneskirche_tower",
+      "landmark": "Johanneskirche",
+      "osm_ids": ["osm:way:42551672"],
+      "title": "File:Dömitz - Johanneskirche, Turm.jpg",
+      "url": "https://commons.wikimedia.org/wiki/File:D%C3%B6mitz_-_Johanneskirche,_Turm.jpg",
+      "author": "Oxfordian Kissuth",
+      "license": "CC BY-SA 3.0",
+      "license_url": "https://creativecommons.org/licenses/by-sa/3.0/",
+      "used_for": "Kirchturm-Gliederung, Ecktürmchen (Fialen), Schallluken, Turmuhr und Helmproportion"
+    },
+    {
+      "id": "ref_johanneskirche_facade",
+      "landmark": "Johanneskirche",
+      "osm_ids": ["osm:way:42551672"],
+      "title": "File:Johanneskirche in Dömitz IMG 8826.jpg",
+      "url": "https://commons.wikimedia.org/wiki/File:Johanneskirche_in_D%C3%B6mitz_IMG_8826.jpg",
+      "author": "Losch",
+      "license": "CC BY-SA 3.0",
+      "license_url": "https://creativecommons.org/licenses/by-sa/3.0/",
+      "used_for": "Spitzbogen-Fensterachsen, Backsteinmaterial und Chorabschluss"
+    },
+    {
+      "id": "ref_rathaus_front",
+      "landmark": "Rathaus",
+      "osm_ids": ["osm:way:41020272"],
+      "title": "File:TownHall Doemitz.jpg",
+      "url": "https://commons.wikimedia.org/wiki/File:TownHall_Doemitz.jpg",
+      "author": "Christian Fischer",
+      "license": "CC BY-SA 3.0",
+      "license_url": "https://creativecommons.org/licenses/by-sa/3.0/",
+      "used_for": "Zweigeschossige Fachwerkfassade, Kreuzstockfenster, Mansardenwalmdach, Rathausturm und Haupteingang am Rathausplatz"
+    },
+    {
+      "id": "ref_rathaus_square",
+      "landmark": "Rathaus",
+      "osm_ids": ["osm:way:41020272"],
+      "title": "File:Rathaus Dömitz.JPG",
+      "url": "https://commons.wikimedia.org/wiki/File:Rathaus_D%C3%B6mitz.JPG",
+      "author": "Ch. Pagenkopf",
+      "license": "CC BY-SA 3.0",
+      "license_url": "https://creativecommons.org/licenses/by-sa/3.0/",
+      "used_for": "Lage des Haupteingangs zum Rathausplatz und Dachform"
+    },
+    {
+      "id": "ref_festung_courtyard",
+      "landmark": "Festung Dömitz (Zeughaus, Hauptwache, Kommandantenremise)",
+      "osm_ids": ["osm:way:96029976", "osm:way:1360590722", "osm:way:96029971", "osm:way:1360590723", "osm:way:1360590724", "osm:way:96029975"],
+      "title": "File:Doemitz Festung Innenhof.jpg",
+      "url": "https://commons.wikimedia.org/wiki/File:Doemitz_Festung_Innenhof.jpg",
+      "author": "Niteshift",
+      "license": "CC BY 2.5",
+      "license_url": "https://creativecommons.org/licenses/by/2.5/",
+      "used_for": "Hofansicht der Festungsbauten, Backstein-/Putzgliederung, Walmdächer und Fensterachsen"
+    },
+    {
+      "id": "ref_festung_buildings_2012",
+      "landmark": "Festung Dömitz (Hauptwache, Zeughaus, Arrestantenhaus)",
+      "osm_ids": ["osm:way:96029971", "osm:way:1360590723", "osm:way:1360590724", "osm:way:96029976", "osm:way:1360590722", "osm:way:96029967"],
+      "title": "File:Festung Dömitz 2012b.jpg",
+      "url": "https://commons.wikimedia.org/wiki/File:Festung_D%C3%B6mitz_2012b.jpg",
+      "author": "Holger.Ellgaard",
+      "license": "CC BY-SA 3.0",
+      "license_url": "https://creativecommons.org/licenses/by-sa/3.0/",
+      "used_for": "Backstein- und Putzfassaden sowie Dachziegelfarben im Festungshof"
+    },
+    {
+      "id": "ref_festung_entrance_portal",
+      "landmark": "Festung Dömitz (Eingangstor & Walldurchgang)",
+      "osm_ids": ["osm:way:416256369", "osm:way:96029967"],
+      "title": "File:Doemitz Festung Eingang.jpg",
+      "url": "https://commons.wikimedia.org/wiki/File:Doemitz_Festung_Eingang.jpg",
+      "author": "Niteshift",
+      "license": "CC BY 2.5",
+      "license_url": "https://creativecommons.org/licenses/by/2.5/",
+      "used_for": "Backstein-Torbogen, Gewölbedurchgang im Festungswall (Tunnelportal am NW-Steg) und angrenzende Kasernenarchitektur"
+    },
+    {
+      "id": "ref_festung_overview",
+      "landmark": "Festung Dömitz (Gesamtensemble & Brücken)",
+      "osm_ids": ["osm:way:96029967", "osm:way:96029975", "osm:way:96029976", "osm:way:96029971"],
+      "title": "File:Dömitz- Festung mit Burggraben und Eingangstor.jpg",
+      "url": "https://commons.wikimedia.org/wiki/File:D%C3%B6mitz-_Festung_mit_Burggraben_und_Eingangstor.jpg",
+      "author": "Franzfoto",
+      "license": "CC BY-SA 3.0",
+      "license_url": "https://creativecommons.org/licenses/by-sa/3.0/",
+      "used_for": "Mauerwerk, Festungsgraben, Brückenpfeiler und Wallportale"
+    },
+    {
+      "id": "ref_bridges_torbruecke_steinbruecke",
+      "landmark": "Torbrücke und Steinbrücke",
+      "osm_ids": ["osm:way:29732766", "osm:way:94526517"],
+      "title": "File:Dömitz, spolek obcí Dömitz-Malliß, Zemský okres Ludwigslust-Parchim, spolková země Meklenbursko-Přední Pomořansko, Německo 01.jpg",
+      "url": "https://commons.wikimedia.org/wiki/File:D%C3%B6mitz,_spolek_obc%C3%AD_D%C3%B6mitz-Malli%C3%9F,_Zemsk%C3%BD_okres_Ludwigslust-Parchim,_spolkov%C3%A1_zem%C4%9B_Meklenbursko-P%C5%99edn%C3%AD_Pomo%C5%99ansko,_N%C4%9Bmecko_01.jpg",
+      "author": "Fry72 (Karel Frydrýšek)",
+      "license": "CC BY-SA 4.0",
+      "license_url": "https://creativecommons.org/licenses/by-sa/4.0/",
+      "used_for": "Stilisierte Bogen- und Pfeilerproportionen der Straßenbrücken (Torbrücke über Dove Elde, Gewölbebogen der Steinbrücke)"
+    },
+    {
+      "id": "ref_torstrasse_context",
+      "landmark": "Torstraße / Torbrücke",
+      "osm_ids": ["osm:way:29732766"],
+      "title": "File:Torstraße in Dömitz IMG 8824.jpg",
+      "url": "https://commons.wikimedia.org/wiki/File:Torstra%C3%9Fe_in_D%C3%B6mitz_IMG_8824.jpg",
+      "author": "Losch",
+      "license": "CC BY-SA 3.0",
+      "license_url": "https://creativecommons.org/licenses/by-sa/3.0/",
+      "used_for": "Straßenanschluss und Materialkontext an der Torstraße Richtung Torbrücke"
+    }
+  ]
+}

@@ -367,7 +367,7 @@ def _validate_schedule(citizen_id: str, schedule: list[dict], places_by_id: dict
 
 def build_citizens(
     config, roads, buildings, sidewalks, obstacles, road_elevation_m, sidewalk_elevation_m,
-    pois=None, crossings=None, entrances=None,
+    pois=None, crossings=None, entrances=None, landmark_entrances=None,
 ):
     """Validate citizen manifest, expand population from OSM POIs/buildings, and compile routes."""
     clock = config.get("clock", {})
@@ -426,7 +426,25 @@ def build_citizens(
         for e in sorted(entrances or [], key=lambda item: item["id"])
     ]
 
+    landmark_entrances = landmark_entrances or {}
+
     def resolve_entrance(place_id, building_id, geom, access_pt, access_elevation):
+        if place_id in landmark_entrances:
+            lx, ly = landmark_entrances[place_id]
+            lpt = Point(float(lx), float(ly))
+            z = (
+                _eval_z(sidewalk_elevation_m, lpt.x, lpt.y)
+                if (not walkable_access.is_empty and walkable_access.distance(lpt) <= 3.0)
+                else _eval_z(road_elevation_m, lpt.x, lpt.y)
+            )
+            entrance_sources["landmark_reference_door"] += 1
+            return {
+                "id": f"entrance:{place_id}",
+                "position_m": [round(lpt.x, 4), round(lpt.y, 4), round(z, 4)],
+                "source": "landmark_reference_door",
+                "osm_node_id": "",
+                "entrance_type": "main",
+            }
         ref_geom = buildings_by_id.get(building_id, geom)
         candidates = []
         for eid, ept, etype, prio in osm_entrances:

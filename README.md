@@ -11,6 +11,7 @@ py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 .\.venv\Scripts\python.exe -m tools.geo_import fetch
 .\.venv\Scripts\python.exe -m tools.geo_import fetch-dgm
+.\.venv\Scripts\python.exe -m tools.geo_import fetch-lod2
 .\.venv\Scripts\python.exe -m tools.geo_import build
 .\.venv\Scripts\python.exe -m unittest discover -s tests
 ```
@@ -27,7 +28,7 @@ py -3.12 -m venv .venv
 | `scene.json` | Kartengeometrie in lokalen Metern und DGM1-Geländemetadaten (`terrain.kind = "dgm1"`) |
 | `import-report.json` | Quellprüfsummen (OSM + DGM1), Featurezahlen, Geometriehinweise und Maßstabsprüfung |
 
-Kartendaten © OpenStreetMap contributors, ODbL 1.0 ([OpenStreetMap – Urheberrecht und Lizenz](https://www.openstreetmap.org/copyright)) · Höhendaten © GeoBasis-DE/M-V 2025, CC BY 4.0 ([LAiV M-V](https://www.laiv-mv.de/Geoinformation/Geobasisdaten/Gelaendemodelle/)).
+Kartendaten © OpenStreetMap contributors, ODbL 1.0 ([OpenStreetMap – Urheberrecht und Lizenz](https://www.openstreetmap.org/copyright)) · Höhen- & 3D-Gebäudedaten © GeoBasis-DE/M-V 2025/2026, CC BY 4.0 ([LAiV M-V](https://www.laiv-mv.de/Geoinformation/Geobasisdaten/Gelaendemodelle/)).
 
 ## Projektstand
 
@@ -48,3 +49,4 @@ Das Unreal-Projekt öffnet die Altstadt-Karte als Startlevel. Im Editor startet 
 - [Sprint 10 – Stadtkarte, erste Aufgaben, Vorfahrt und Parken](docs/SPRINT_10.md)
 - [Sprint 11 – Reales Gelände aus DGM1](docs/SPRINT_11.md)
 - [Sprint 11.1 – Brücken auf eigener Höhe](docs/SPRINT_11_1.md)
+- [Sprint 12 – Reale Gebäudehöhen und markante Bauwerke](docs/SPRINT_12.md)

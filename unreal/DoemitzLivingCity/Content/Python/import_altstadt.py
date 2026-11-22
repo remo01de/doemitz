@@ -846,8 +846,10 @@ def import_level(package):
                        unreal.Rotator(yaw=yaw + 180))
     text_component = text_actor.get_component_by_class(unreal.TextRenderComponent)
     terrain_attr = package.get("terrain_attribution") or ""
+    lod2_attr = (package.get("lod2") or {}).get("attribution") or ""
     if terrain_attr:
-        attr_lines = f"{package['attribution']} (ODbL 1.0)\nHöhendaten: {terrain_attr} (CC BY 4.0)"
+        geo_attr = f"{terrain_attr} / {lod2_attr}" if (lod2_attr and lod2_attr != terrain_attr) else terrain_attr
+        attr_lines = f"{package['attribution']} (ODbL 1.0)\nHöhen-/Gebäudedaten: {geo_attr} (CC BY 4.0)"
     else:
         attr_lines = f"{package['attribution']}\nopenstreetmap.org/copyright"
     text_component.set_editor_property("text", unreal.Text(attr_lines))

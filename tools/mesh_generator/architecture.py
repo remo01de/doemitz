@@ -1,7 +1,8 @@
 """Generate stylized European/North-German old-town building geometry from OSM footprints."""
 
-from math import floor, hypot
+from math import atan2, cos, degrees, floor, hypot, radians, sin
 
+from shapely import orient_polygons
 from shapely.geometry import Polygon
 
 
@@ -13,6 +14,7 @@ WALL_STYLES = (
     "WallsSand",
     "WallsBrick",
 )
+GABLE_STYLES = tuple(style.replace("Walls", "Gable", 1) for style in WALL_STYLES)
 ROOF_STYLES = ("RoofsTerracotta", "RoofsClay", "RoofsSlate")
 SHUTTER_STYLES = ("ShuttersGreen", "ShuttersRed", "ShuttersBlue", "TimberTrim")
 
@@ -53,67 +55,207 @@ def _add_box_on_wall(mesh, ox, oy, tx, ty, nx, ny, u0, u1, z0, z1, d0, d1):
         _add_quad(mesh, b0, b1, f1, f0)  # bottom
 
 
-def _add_pitched_roof(roof_mesh, gable_mesh, polygon, base_z, ridge_h, overhang=0.25):
-    """Add a pitched hip/gable roof for simple footprints, or a clean flat cap for complex/courtyard ones."""
-    if polygon.interiors or len(polygon.exterior.coords) > 10:
-        # Courtyard or complex footprint: keep reliable triangulated roof with slight parapet rim
+def _angle_diff_180(a_deg: float, b_deg: float) -> float:
+    diff = abs((a_deg - b_deg) % 180.0)
+    return min(diff, 180.0 - diff)
+
+
+def _add_roof_with_shape(
+    roof_mesh,
+    gable_mesh,
+    polygon,
+    base_z: float,
+    ridge_rise: float,
+    roof_shape: str = "gabled",
+    ridge_direction_deg: float | None = None,
+    slope_direction_deg: float | None = None,
+    overhang: float = 0.25,
+    is_minor: bool = False,
+):
+    """Build roof geometry matching LoD2 roof shape (flat, gabled, hipped, half-hipped, mansard, skillion, pyramidal)."""
+    shape_norm = (roof_shape or "gabled").strip().lower()
+
+    # 1. Flat roof (LoD2 roofType 1000) or negligible ridge rise
+    if shape_norm == "flat" or ridge_rise < 0.25:
+        roof_mesh.add_surface(polygon, base_z)
+        if not is_minor and not polygon.interiors:
+            # Subtle 0.25 m parapet rim around flat roofs
+            ring = list(polygon.exterior.coords)
+            for start, end in zip(ring, ring[1:]):
+                dx = end[0] - start[0]
+                dy = end[1] - start[1]
+                length = hypot(dx, dy)
+                if length < 0.5:
+                    continue
+                tx, ty = dx / length, dy / length
+                nx, ny = ty, -tx
+                _add_box_on_wall(
+                    gable_mesh, start[0], start[1], tx, ty, nx, ny,
+                    0.0, length, base_z, base_z + 0.28, 0.0, 0.06,
+                )
+        return
+
+    # 2. Complex / courtyard footprints: reliable flat cap or simple hip
+    if polygon.interiors or len(polygon.exterior.coords) > 12:
         roof_mesh.add_surface(polygon, base_z)
         return
 
-    # Check if the footprint is well-approximated by its minimum rotated rectangle for a classic gable roof.
-    mrr = polygon.minimum_rotated_rectangle
-    if isinstance(mrr, Polygon) and mrr.area > 0 and (polygon.area / mrr.area) >= 0.86:
+    # 3. Pyramidal / conical / dome roofs
+    if shape_norm in ("pyramidal", "conical", "dome"):
+        center = polygon.representative_point()
+        apex = (center.x, center.y, base_z + ridge_rise)
+        ring = list(polygon.exterior.coords)
+        for start, end in zip(ring, ring[1:]):
+            if start != end:
+                _add_triangle(roof_mesh, (start[0], start[1], base_z), (end[0], end[1], base_z), apex)
+        roof_mesh.add_surface(polygon, base_z)
+        return
+
+    # 4. Rectangular-approximated footprints: gabled, hipped, half-hipped, mansard, skillion
+    mrr = orient_polygons(polygon.minimum_rotated_rectangle)
+    if isinstance(mrr, Polygon) and mrr.area > 0 and (polygon.area / mrr.area) >= 0.84:
         coords = list(mrr.exterior.coords)[:4]
-        # Ensure counter-clockwise orientation
         e0 = hypot(coords[1][0] - coords[0][0], coords[1][1] - coords[0][1])
         e1 = hypot(coords[2][0] - coords[1][0], coords[2][1] - coords[1][1])
-        # Ridge runs parallel to the longer edge
-        if e0 >= e1:
-            p0, p1, p2, p3 = coords[0], coords[1], coords[2], coords[3]
-            long_len, short_len = e0, e1
-        else:
-            p0, p1, p2, p3 = coords[1], coords[2], coords[3], coords[0]
-            long_len, short_len = e1, e0
-
-        if short_len < 1.5 or long_len < 1.5:
+        if min(e0, e1) < 1.5:
             roof_mesh.add_surface(polygon, base_z)
             return
 
-        # Unit vectors along length (p0->p1) and width (p0->p3)
-        lx, ly = (p1[0] - p0[0]) / long_len, (p1[1] - p0[1]) / long_len
-        wx, wy = (p3[0] - p0[0]) / short_len, (p3[1] - p0[1]) / short_len
+        ang0 = degrees(atan2(coords[1][1] - coords[0][1], coords[1][0] - coords[0][0])) % 180.0
+        ang1 = degrees(atan2(coords[2][1] - coords[1][1], coords[2][0] - coords[1][0])) % 180.0
 
-        # Expand eave corners slightly for overhang
+        # Align ridge with LoD2 ridge_direction_deg when available, else parallel to longer edge
+        if ridge_direction_deg is not None:
+            use_edge0 = _angle_diff_180(ang0, ridge_direction_deg) <= _angle_diff_180(ang1, ridge_direction_deg)
+        else:
+            use_edge0 = e0 >= e1
+
+        if use_edge0:
+            p0, p1, p2, p3 = coords[0], coords[1], coords[2], coords[3]
+            ridge_len, span_len = e0, e1
+        else:
+            p0, p1, p2, p3 = coords[1], coords[2], coords[3], coords[0]
+            ridge_len, span_len = e1, e0
+
+        lx, ly = (p1[0] - p0[0]) / ridge_len, (p1[1] - p0[1]) / ridge_len
+        wx, wy = (p3[0] - p0[0]) / span_len, (p3[1] - p0[1]) / span_len
+        # Guarantee right-handed CCW basis (l x w = +Z) regardless of input polygon orientation
+        if lx * wy - ly * wx < 0.0:
+            p0, p1, p2, p3 = p1, p0, p3, p2
+            lx, ly = -lx, -ly
+            wx, wy = (p3[0] - p0[0]) / span_len, (p3[1] - p0[1]) / span_len
+
         c0 = (p0[0] - lx * overhang - wx * overhang, p0[1] - ly * overhang - wy * overhang, base_z - 0.10)
         c1 = (p1[0] + lx * overhang - wx * overhang, p1[1] + ly * overhang - wy * overhang, base_z - 0.10)
         c2 = (p2[0] + lx * overhang + wx * overhang, p2[1] + ly * overhang + wy * overhang, base_z - 0.10)
         c3 = (p3[0] - lx * overhang + wx * overhang, p3[1] - ly * overhang + wy * overhang, base_z - 0.10)
 
-        # Ridge endpoints (slightly inset for subtle hip or flush for gable)
-        r0 = ((p0[0] + p3[0]) * 0.5 - lx * overhang, (p0[1] + p3[1]) * 0.5 - ly * overhang, base_z + ridge_h)
-        r1 = ((p1[0] + p2[0]) * 0.5 + lx * overhang, (p1[1] + p2[1]) * 0.5 + ly * overhang, base_z + ridge_h)
-
-        # Two roof slopes (CCW when viewed from outside -> correct Unreal winding)
-        _add_quad(roof_mesh, c0, c1, r1, r0)
-        _add_quad(roof_mesh, c2, c3, r0, r1)
-
-        # Gable triangles (flush with walls, no overhang)
         g0 = (p0[0], p0[1], base_z)
         g1 = (p1[0], p1[1], base_z)
         g2 = (p2[0], p2[1], base_z)
         g3 = (p3[0], p3[1], base_z)
-        gr0 = ((p0[0] + p3[0]) * 0.5, (p0[1] + p3[1]) * 0.5, base_z + ridge_h)
-        gr1 = ((p1[0] + p2[0]) * 0.5, (p1[1] + p2[1]) * 0.5, base_z + ridge_h)
+
+        if shape_norm == "skillion":
+            # Determine which side is low vs high using LoD2 slope_direction_deg
+            flip = False
+            if slope_direction_deg is not None:
+                sx, sy = cos(radians(slope_direction_deg)), sin(radians(slope_direction_deg))
+                # (wx, wy) points from (p0,p1) to (p3,p2); if downhill aligns with +w, (p0,p1) is high
+                flip = (wx * sx + wy * sy) > 0.0
+            if not flip:
+                # Low at (p0, p1), high at (p3, p2)
+                h2 = (c2[0], c2[1], base_z + ridge_rise)
+                h3 = (c3[0], c3[1], base_z + ridge_rise)
+                _add_quad(roof_mesh, c0, c1, h2, h3)
+                gh2 = (p2[0], p2[1], base_z + ridge_rise)
+                gh3 = (p3[0], p3[1], base_z + ridge_rise)
+                _add_quad(gable_mesh, g2, g3, gh3, gh2)
+                _add_triangle(gable_mesh, g1, g2, gh2)
+                _add_triangle(gable_mesh, g3, g0, gh3)
+            else:
+                # High at (p0, p1), low at (p3, p2)
+                h0 = (c0[0], c0[1], base_z + ridge_rise)
+                h1 = (c1[0], c1[1], base_z + ridge_rise)
+                _add_quad(roof_mesh, h0, h1, c2, c3)
+                gh0 = (p0[0], p0[1], base_z + ridge_rise)
+                gh1 = (p1[0], p1[1], base_z + ridge_rise)
+                _add_quad(gable_mesh, g0, g1, gh1, gh0)
+                _add_triangle(gable_mesh, g1, g2, gh1)
+                _add_triangle(gable_mesh, g3, g0, gh0)
+            roof_mesh.add_surface(polygon, base_z)
+            return
+
+        if shape_norm == "hipped":
+            hip_inset = min(ridge_len * 0.35, span_len * 0.42)
+            r0 = ((p0[0] + p3[0]) * 0.5 + lx * hip_inset, (p0[1] + p3[1]) * 0.5 + ly * hip_inset, base_z + ridge_rise)
+            r1 = ((p1[0] + p2[0]) * 0.5 - lx * hip_inset, (p1[1] + p2[1]) * 0.5 - ly * hip_inset, base_z + ridge_rise)
+            _add_quad(roof_mesh, c0, c1, r1, r0)
+            _add_quad(roof_mesh, c2, c3, r0, r1)
+            _add_triangle(roof_mesh, c3, c0, r0)
+            _add_triangle(roof_mesh, c1, c2, r1)
+            roof_mesh.add_surface(polygon, base_z)
+            return
+
+        if shape_norm == "half-hipped":
+            # Gable up to 52% of ridge rise, then hipped bevel
+            hip_inset = min(ridge_len * 0.20, span_len * 0.25)
+            break_z = base_z + ridge_rise * 0.52
+            r0 = ((p0[0] + p3[0]) * 0.5 + lx * hip_inset, (p0[1] + p3[1]) * 0.5 + ly * hip_inset, base_z + ridge_rise)
+            r1 = ((p1[0] + p2[0]) * 0.5 - lx * hip_inset, (p1[1] + p2[1]) * 0.5 - ly * hip_inset, base_z + ridge_rise)
+            # Mid-gable corners at break_z
+            m_a0 = (p0[0] + wx * span_len * 0.26, p0[1] + wy * span_len * 0.26, break_z)
+            m_a1 = (p3[0] - wx * span_len * 0.26, p3[1] - wy * span_len * 0.26, break_z)
+            m_b0 = (p1[0] + wx * span_len * 0.26, p1[1] + wy * span_len * 0.26, break_z)
+            m_b1 = (p2[0] - wx * span_len * 0.26, p2[1] - wy * span_len * 0.26, break_z)
+            _add_quad(roof_mesh, c0, c1, r1, r0)
+            _add_quad(roof_mesh, c2, c3, r0, r1)
+            _add_triangle(roof_mesh, m_a1, m_a0, r0)
+            _add_triangle(roof_mesh, m_b0, m_b1, r1)
+            _add_quad(gable_mesh, g3, g0, m_a0, m_a1)
+            _add_quad(gable_mesh, g1, g2, m_b1, m_b0)
+            roof_mesh.add_surface(polygon, base_z)
+            return
+
+        if shape_norm == "mansard":
+            # Two-pitch mansard hipped roof (steep lower curb + gentler upper hip)
+            mid_z = base_z + ridge_rise * 0.62
+            in_l = min(ridge_len * 0.14, span_len * 0.16)
+            in_w = span_len * 0.18
+            m0 = (p0[0] + lx * in_l + wx * in_w, p0[1] + ly * in_l + wy * in_w, mid_z)
+            m1 = (p1[0] - lx * in_l + wx * in_w, p1[1] - ly * in_l + wy * in_w, mid_z)
+            m2 = (p2[0] - lx * in_l - wx * in_w, p2[1] - ly * in_l - wy * in_w, mid_z)
+            m3 = (p3[0] + lx * in_l - wx * in_w, p3[1] + ly * in_l - wy * in_w, mid_z)
+            r_in = min(ridge_len * 0.30, span_len * 0.36)
+            r0 = ((p0[0] + p3[0]) * 0.5 + lx * r_in, (p0[1] + p3[1]) * 0.5 + ly * r_in, base_z + ridge_rise)
+            r1 = ((p1[0] + p2[0]) * 0.5 - lx * r_in, (p1[1] + p2[1]) * 0.5 - ly * r_in, base_z + ridge_rise)
+            # Lower steep skirt (4 quads)
+            _add_quad(roof_mesh, c0, c1, m1, m0)
+            _add_quad(roof_mesh, c1, c2, m2, m1)
+            _add_quad(roof_mesh, c2, c3, m3, m2)
+            _add_quad(roof_mesh, c3, c0, m0, m3)
+            # Upper hipped crown
+            _add_quad(roof_mesh, m0, m1, r1, r0)
+            _add_quad(roof_mesh, m2, m3, r0, r1)
+            _add_triangle(roof_mesh, m3, m0, r0)
+            _add_triangle(roof_mesh, m1, m2, r1)
+            roof_mesh.add_surface(polygon, base_z)
+            return
+
+        # Default: classic gabled roof (LoD2 roofType 3100)
+        r0 = ((p0[0] + p3[0]) * 0.5 - lx * overhang, (p0[1] + p3[1]) * 0.5 - ly * overhang, base_z + ridge_rise)
+        r1 = ((p1[0] + p2[0]) * 0.5 + lx * overhang, (p1[1] + p2[1]) * 0.5 + ly * overhang, base_z + ridge_rise)
+        _add_quad(roof_mesh, c0, c1, r1, r0)
+        _add_quad(roof_mesh, c2, c3, r0, r1)
+        gr0 = ((p0[0] + p3[0]) * 0.5, (p0[1] + p3[1]) * 0.5, base_z + ridge_rise)
+        gr1 = ((p1[0] + p2[0]) * 0.5, (p1[1] + p2[1]) * 0.5, base_z + ridge_rise)
         _add_triangle(gable_mesh, g3, g0, gr0)
         _add_triangle(gable_mesh, g1, g2, gr1)
-
-        # Also add flat ceiling cap inside eave so vertical roof collision rays always hit
         roof_mesh.add_surface(polygon, base_z)
         return
 
     # Fallback: hip/pyramid roof to representative point for irregular simple polygons
     center = polygon.representative_point()
-    apex = (center.x, center.y, base_z + ridge_h * 0.85)
+    apex = (center.x, center.y, base_z + ridge_rise * 0.85)
     ring = list(polygon.exterior.coords)
     for start, end in zip(ring, ring[1:]):
         if start != end:
@@ -121,17 +263,35 @@ def _add_pitched_roof(roof_mesh, gable_mesh, polygon, base_z, ridge_h, overhang=
     roof_mesh.add_surface(polygon, base_z)
 
 
-def add_stylized_building(meshes, polygon, height_m, base_m, osm_id, tags, max_ground_m=None):
-    """Build a stylized old-town building with stone plinth, windows, shutters, timber trim, and pitched roof."""
-    is_minor = tags.get("building") in {"garage", "garages", "shed", "roof", "hut"} or height_m <= 3.2
+def add_stylized_building(
+    meshes,
+    polygon,
+    height_m,
+    base_m,
+    osm_id,
+    tags,
+    max_ground_m=None,
+    ridge_height_m=None,
+    roof_shape=None,
+    ridge_direction_deg=None,
+    slope_direction_deg=None,
+    style_override=None,
+):
+    """Build a stylized old-town building with stone plinth, windows, shutters, timber trim, and LoD2-informed roof."""
+    is_minor = tags.get("building") in {"garage", "garages", "shed", "roof", "hut"} or height_m <= 3.3
     is_civic = tags.get("building") in {"church", "civic", "commercial"} or "name" in tags
 
-    wall_name = WALL_STYLES[osm_id % len(WALL_STYLES)]
-    roof_name = "RoofsSlate" if (is_civic and osm_id % 2 == 0) else ROOF_STYLES[osm_id % len(ROOF_STYLES)]
-    shutter_name = SHUTTER_STYLES[(osm_id // 3) % len(SHUTTER_STYLES)]
-    has_timber_framing = (not is_minor) and (osm_id % 3 != 0)
+    override = style_override or {}
+    wall_name = override.get("wall_style") or WALL_STYLES[osm_id % len(WALL_STYLES)]
+    roof_name = override.get("roof_style") or (
+        "RoofsSlate" if (is_civic and osm_id % 2 == 0) else ROOF_STYLES[osm_id % len(ROOF_STYLES)]
+    )
+    shutter_name = override.get("shutter_style") or SHUTTER_STYLES[(osm_id // 3) % len(SHUTTER_STYLES)]
+    has_timber_framing = override.get("timber_framing", (not is_minor) and (osm_id % 3 != 0))
 
     wall_mesh = meshes[wall_name]
+    gable_name = wall_name.replace("Walls", "Gable", 1)
+    gable_mesh = meshes.get(gable_name, wall_mesh)
     roof_mesh = meshes[roof_name]
     stone_mesh = meshes["StoneTrim"]
     timber_mesh = meshes["TimberTrim"]
@@ -146,9 +306,23 @@ def add_stylized_building(meshes, polygon, height_m, base_m, osm_id, tags, max_g
     # Main wall volume (collidable); foundation starts at lowest terrain under footprint, eave counts from base_m.
     wall_mesh.add_walls(polygon, height_m, base_m)
 
-    # Pitched roof (collidable)
-    ridge_h = 0.75 if is_minor else min(3.4, max(1.8, height_m * 0.36))
-    _add_pitched_roof(roof_mesh, wall_mesh, polygon, base_m + height_m, ridge_h)
+    # Roof geometry (collidable): use LoD2 ridge_height & roof_shape when provided
+    resolved_shape = roof_shape or ("flat" if is_minor and height_m <= 2.9 else "gabled")
+    if ridge_height_m is not None:
+        ridge_rise = max(0.0, float(ridge_height_m) - float(height_m))
+    else:
+        ridge_rise = 0.0 if resolved_shape == "flat" else (0.75 if is_minor else min(3.4, max(1.8, height_m * 0.36)))
+    _add_roof_with_shape(
+        roof_mesh,
+        gable_mesh,
+        polygon,
+        base_m + height_m,
+        ridge_rise,
+        roof_shape=resolved_shape,
+        ridge_direction_deg=ridge_direction_deg,
+        slope_direction_deg=slope_direction_deg,
+        is_minor=is_minor,
+    )
 
     if is_minor:
         if slope_span_m > 0.10:

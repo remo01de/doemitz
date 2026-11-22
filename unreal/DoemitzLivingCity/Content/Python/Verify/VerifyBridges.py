@@ -16,6 +16,11 @@ bridges_by_id = {b["id"]: b for b in package.get("bridges", [])}
 torbruecke = bridges_by_id["bridge:osm:way:29732766"]
 steinbruecke = bridges_by_id["bridge:osm:way:94526517"]
 flauten_steg = bridges_by_id["bridge:osm:way:29732751"]
+nw_steg = bridges_by_id["bridge:osm:way:120432334"]
+nw_tunnel = next(
+    p for p in package.get("tunnel_portals", [])
+    if p["road_id"] == "osm:way:416256369"
+)
 
 stein_edge = next(
     e for e in package["road-graph"]["edges"]
@@ -40,8 +45,12 @@ deadline = monotonic() + 110
 phase = "init"
 tor_a = ue_pos(torbruecke["abutments"][0]["position_m"])
 tor_b = ue_pos(torbruecke["abutments"][1]["position_m"])
+nw_a = ue_pos(nw_steg["abutments"][0]["position_m"])
+nw_portal = ue_pos(nw_tunnel["entry_point_3d_m"])
+nw_exit = ue_pos(nw_tunnel["exit_point_3d_m"])
 walk_steps = 0
 max_player_dev_cm = 0.0
+nw_tunnel_max_dev_cm = 0.0
 capsule_half_h = 90.0
 stein_max_dip_cm = 0.0
 steg_max_dev_cm = 0.0
@@ -78,7 +87,7 @@ def get_cstate(sub, cid):
 
 
 def tick(_delta_seconds):
-    global phase, walk_steps, max_player_dev_cm, capsule_half_h
+    global phase, walk_steps, max_player_dev_cm, nw_tunnel_max_dev_cm, capsule_half_h
     global stein_max_dip_cm, steg_max_dev_cm, save_bridge_dev_cm
     try:
         if monotonic() > deadline:
@@ -215,9 +224,53 @@ def tick(_delta_seconds):
                 walk_steps += 1
                 return
 
+            # 5. Place player on NW-Steg (6 m before eastern tunnel portal) and walk straight into the tunnel
+            dx_b, dy_b = nw_portal.x - nw_a.x, nw_portal.y - nw_a.y
+            norm_b = hypot(dx_b, dy_b)
+            nw_start_x = nw_portal.x - (dx_b / norm_b) * 600.0
+            nw_start_y = nw_portal.y - (dy_b / norm_b) * 600.0
+            nw_start_z = linear_bridge_z_cm(nw_steg, nw_start_x, nw_start_y)
+            pawn.set_actor_location(unreal.Vector(nw_start_x, nw_start_y, nw_start_z + capsule_half_h + 2.0), False, True)
+            walk_steps = 0
+            nw_tunnel_max_dev_cm = 0.0
+            phase = "walk_nw_steg_tunnel"
+            return
+
+        if phase == "walk_nw_steg_tunnel":
+            pos = pawn.get_actor_location()
+            dx_t, dy_t = nw_exit.x - nw_portal.x, nw_exit.y - nw_portal.y
+            norm_t = max(hypot(dx_t, dy_t), 1.0)
+            target_x = nw_portal.x + (dx_t / norm_t) * 700.0
+            target_y = nw_portal.y + (dy_t / norm_t) * 700.0
+
+            if walk_steps >= 3 and pawn.get_editor_property("character_movement").is_moving_on_ground():
+                # Project onto tunnel if past portal, else onto NW-Steg bridge
+                proj_t = ((pos.x - nw_portal.x) * dx_t + (pos.y - nw_portal.y) * dy_t) / (norm_t * norm_t)
+                if proj_t >= 0.0:
+                    t_clamped = min(1.0, proj_t)
+                    exp_z = nw_portal.z + t_clamped * (nw_exit.z - nw_portal.z)
+                else:
+                    exp_z = linear_bridge_z_cm(nw_steg, pos.x, pos.y)
+                feet_z = pos.z - capsule_half_h
+                dev = abs(feet_z - exp_z)
+                nw_tunnel_max_dev_cm = max(nw_tunnel_max_dev_cm, dev)
+                if dev > 5.0:
+                    raise RuntimeError(
+                        f"Player on NW-Steg->Tunnel jumped {dev:.2f} cm (>5 cm): "
+                        f"feet_z={feet_z:.1f} vs expected={exp_z:.1f} at ({pos.x:.0f},{pos.y:.0f})"
+                    )
+
+            delta = unreal.Vector(target_x - pos.x, target_y - pos.y, 0.0)
+            dist_2d = delta.length()
+            if dist_2d > 80.0:
+                pawn.add_movement_input(delta / dist_2d, 1.0, False)
+                walk_steps += 1
+                return
+
             phase = "done"
             finish(
                 f"DOEMITZ_BRIDGES_PIE_OK: Torbrücke walked (max_dev={max_player_dev_cm:.2f}cm<=5cm), "
+                f"NW-Steg->Tunnel walked (max_dev={nw_tunnel_max_dev_cm:.2f}cm<=5cm), "
                 f"Steinbrücke vehicle (max_dip={stein_max_dip_cm:.2f}cm), "
                 f"Fläutendörper Steg citizen (max_dev={steg_max_dev_cm:.2f}cm), "
                 f"bridge SaveGame reload (dev={save_bridge_dev_cm:.2f}cm) verified",

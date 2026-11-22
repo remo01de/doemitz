@@ -15,11 +15,12 @@ from shapely.ops import nearest_points
 
 from tools.geo_import.export import geometry_parts, write_json
 from tools.geo_transform.terrain import ElevationModel
-from tools.mesh_generator.architecture import ROOF_STYLES, WALL_STYLES, add_stylized_building
+from tools.mesh_generator.architecture import GABLE_STYLES, ROOF_STYLES, WALL_STYLES, add_stylized_building
 from tools.mesh_generator.bridges import build_bridges_mesh
 from tools.mesh_generator.citizens import build_citizens
 from tools.mesh_generator.city_map import render_city_map
 from tools.mesh_generator.economy import build_economy
+from tools.mesh_generator.landmarks import add_landmark_building
 from tools.mesh_generator.props import add_street_lamps, add_stylized_trees
 from tools.mesh_generator.road_elevation import (
     DEFAULT_SMOOTHING_WINDOW_M,
@@ -44,6 +45,8 @@ STREET_LAYOUT = ROOT / "data/manifests/doemitz-altstadt-streets.json"
 CITIZENS_LAYOUT = ROOT / "data/manifests/doemitz-altstadt-citizens.json"
 ECONOMY_LAYOUT = ROOT / "data/manifests/doemitz-altstadt-economy.json"
 TASKS_LAYOUT = ROOT / "data/manifests/doemitz-altstadt-tasks.json"
+LANDMARKS_LAYOUT = ROOT / "data/manifests/doemitz-altstadt-landmarks.json"
+REFERENCES_MANIFEST = ROOT / "data/manifests/doemitz-altstadt-references.json"
 PALETTE = {
     "Terrain": (0.22, 0.42, 0.14),
     "Water": (0.06, 0.34, 0.42),
@@ -57,6 +60,12 @@ PALETTE = {
     "WallsSage": (0.48, 0.58, 0.42),
     "WallsSand": (0.76, 0.68, 0.52),
     "WallsBrick": (0.58, 0.24, 0.16),
+    "GableCream": (0.86, 0.78, 0.62),
+    "GableOchre": (0.82, 0.56, 0.22),
+    "GableTerracotta": (0.74, 0.31, 0.21),
+    "GableSage": (0.48, 0.58, 0.42),
+    "GableSand": (0.76, 0.68, 0.52),
+    "GableBrick": (0.58, 0.24, 0.16),
     "RoofsTerracotta": (0.62, 0.20, 0.12),
     "RoofsClay": (0.48, 0.22, 0.14),
     "RoofsSlate": (0.20, 0.23, 0.28),
@@ -161,16 +170,42 @@ def positive_length(value, maximum):
     return None
 
 
-def building_height(tags):
+def building_height(tags, lod2=None, landmark_cfg=None):
+    if lod2 is not None:
+        eave_h = float(lod2["eave_height_m"])
+        ridge_h = float(lod2["ridge_height_m"])
+        return (
+            eave_h,
+            ridge_h,
+            lod2.get("roof_shape", "gabled"),
+            lod2.get("ridge_direction_deg"),
+            lod2.get("slope_direction_deg"),
+            "lod2",
+        )
     height = positive_length(tags.get("height", ""), 150)
     if height is not None:
-        return height, "osm_height"
+        return height, None, tags.get("roof:shape") or "gabled", None, None, "osm_height"
     levels = positive_length(tags.get("building:levels", ""), 30)
     if levels is not None:
-        return 3.0 * levels, "estimated_from_levels"
+        return 3.0 * levels, None, tags.get("roof:shape") or "gabled", None, None, "osm_levels"
+    if landmark_cfg and landmark_cfg.get("reference_eave_height_m") is not None:
+        eave_h = float(landmark_cfg["reference_eave_height_m"])
+        ridge_h = (
+            float(landmark_cfg["reference_ridge_height_m"])
+            if landmark_cfg.get("reference_ridge_height_m") is not None
+            else None
+        )
+        return (
+            eave_h,
+            ridge_h,
+            landmark_cfg.get("roof_shape", "hipped"),
+            landmark_cfg.get("ridge_direction_deg"),
+            None,
+            "reference_photo_estimate",
+        )
     if tags.get("building") in {"garage", "garages", "shed", "roof", "hut"}:
-        return 2.8, "estimated_default"
-    return 6.5, "estimated_default"
+        return 2.8, 2.8, "flat", None, None, "assumed_default"
+    return 6.5, None, "gabled", None, None, "assumed_default"
 
 
 def road_width(tags):
@@ -296,6 +331,7 @@ def build(
     scene, report, sidewalk_widths=None, vehicle_config=None,
     citizens_config=None, default_sidewalk_widths=None, traffic_network_config=None,
     economy_config=None, tasks_config=None, map_output_png=None, scene_dir=None,
+    landmarks_config=None, references_manifest=None,
 ):
     if scene["schema_version"] != 1 or scene["coordinates"]["local_axes"] != ["east", "north"]:
         raise ValueError("expected scene schema 1 with local [east, north] coordinates")
@@ -350,16 +386,26 @@ def build(
         })
     water = union_all(water_geoms)
 
-    # 2. Buildings: foundation at lowest terrain under footprint, visible stone plinth on slopes
+    # 2. Buildings: foundation at lowest terrain under footprint, LoD2 heights/roofs & landmark overrides
+    landmarks_config = landmarks_config or {}
+    landmark_buildings = landmarks_config.get("buildings") or {}
+    landmark_bridges = landmarks_config.get("bridges") or {}
+    landmark_tunnel_portals = landmarks_config.get("tunnel_portals") or {}
+
     height_sources = Counter()
     buildings = []
     building_entries: list[tuple] = []
+    buildings_report: list[dict] = []
     sloped_buildings = 0
     max_building_slope_m = 0.0
     building_min_z_by_geom_idx: list[float] = []
     for feature in scene["layers"]["buildings"]:
         osm_id = int(feature["id"].rsplit(":", 1)[1])
-        height, source = building_height(feature["properties"])
+        lod2_info = feature.get("lod2")
+        lm_cfg = landmark_buildings.get(feature["id"])
+        eave_h, ridge_h, roof_shape, ridge_dir, slope_dir, source = building_height(
+            feature["properties"], lod2=lod2_info, landmark_cfg=lm_cfg,
+        )
         height_sources[source] += 1
         geometry = orient_polygons(shape(feature["geometry"]))
         buildings.append(geometry)
@@ -376,13 +422,51 @@ def build(
                 sloped_buildings += 1
             if slope_diff > max_building_slope_m:
                 max_building_slope_m = slope_diff
+            # Guard against uphill terrain exceeding low eave height on sloped footprints
+            min_clear_eave = slope_diff + 1.8
+            if eave_h < min_clear_eave:
+                delta_raise = min_clear_eave - eave_h
+                eave_h = round(min_clear_eave, 3)
+                if ridge_h is not None:
+                    ridge_h = round(max(eave_h, ridge_h + delta_raise), 3)
         building_min_z_by_geom_idx.append(b_min_z)
+        resolved_ridge = (
+            ridge_h
+            if ridge_h is not None
+            else (eave_h if roof_shape == "flat" else round(eave_h + min(3.4, max(1.8, eave_h * 0.36)), 3))
+        )
+        final_peak_h = resolved_ridge
         for polygon in polys:
-            add_stylized_building(
-                meshes, polygon, height, round(b_min_z, 4), osm_id, feature["properties"],
-                max_ground_m=round(b_max_z, 4),
-            )
+            if lm_cfg is not None:
+                peak_h = add_landmark_building(
+                    meshes, polygon, eave_h, resolved_ridge, roof_shape, ridge_dir,
+                    round(b_min_z, 4), round(b_max_z, 4), lm_cfg,
+                )
+                final_peak_h = max(final_peak_h, peak_h)
+            else:
+                add_stylized_building(
+                    meshes, polygon, eave_h, round(b_min_z, 4), osm_id, feature["properties"],
+                    max_ground_m=round(b_max_z, 4),
+                    ridge_height_m=ridge_h,
+                    roof_shape=roof_shape,
+                    ridge_direction_deg=ridge_dir,
+                    slope_direction_deg=slope_dir,
+                )
             building_entries.append((polygon, b_min_z))
+        buildings_report.append({
+            "id": feature["id"],
+            "name": feature["properties"].get("name", "") or (lm_cfg.get("name", "") if lm_cfg else ""),
+            "height_source": source,
+            "lod2_id": lod2_info["lod2_id"] if lod2_info else None,
+            "lod2_overlap_ratio": lod2_info["overlap_ratio"] if lod2_info else None,
+            "eave_height_m": round(float(eave_h), 3),
+            "ridge_height_m": round(float(final_peak_h), 3),
+            "roof_shape": lm_cfg.get("roof_shape_override", roof_shape) if lm_cfg else roof_shape,
+            "ridge_direction_deg": ridge_dir,
+            "base_z_m": round(float(b_min_z), 4),
+            "top_z_m": round(float(b_min_z + final_peak_h), 4),
+            "landmark_variant": lm_cfg["variant"] if lm_cfg else None,
+        })
 
     # 3. Roads, bridges & sidewalks draped along smoothed longitudinal profile, linear bridge decks, 12 cm curb
     sidewalk_widths = sidewalk_widths or {}
@@ -406,7 +490,7 @@ def build(
         building_obstacles=building_union,
     )
 
-    bridges_mesh, bridges_report, bridge_footprints = build_bridges_mesh(
+    bridges_mesh, bridges_report, bridge_footprints, tunnel_corridors, tunnel_portals_report = build_bridges_mesh(
         bridges=road_network.bridges,
         elevation=elevation,
         road_offset_m=ROAD_ELEVATION_M,
@@ -414,10 +498,17 @@ def build(
         sidewalk_widths=sidewalk_widths,
         default_sidewalk_widths=default_sidewalk_widths,
         water_surfaces=water_surfaces,
+        bridge_details_config=landmark_bridges,
+        tunnels=road_network.tunnels,
+        tunnel_portals_config=landmark_tunnel_portals,
     )
     bridge_exclusion_zone = (
-        union_all([fp.buffer(0.8) for fp in bridge_footprints], grid_size=STREET_GRID_M)
-        if bridge_footprints
+        union_all(
+            [fp.buffer(0.8) for fp in bridge_footprints]
+            + [tp.buffer(1.0) for tp, _ in tunnel_corridors],
+            grid_size=STREET_GRID_M,
+        )
+        if (bridge_footprints or tunnel_corridors)
         else union_all([], grid_size=STREET_GRID_M)
     )
 
@@ -446,6 +537,7 @@ def build(
             building_entries=building_entries,
             road_ground_z_fn=road_network.ground_elevation_at,
             bridge_polygons=bridge_footprints,
+            tunnel_corridors=tunnel_corridors,
             tile_size_m=tile_size_m,
             max_error_m=max_error_m,
             max_triangles=max_triangles,
@@ -526,6 +618,29 @@ def build(
             vehicle_config, roads_by_id,
             bounds, obstacles, road_z_resolver,
         )
+    # Build landmark real-door entrance overrides (e.g. Rathaus real front door facing Rathausplatz)
+    landmark_entrances: dict[str, tuple[float, float]] = {}
+    for b_id, lm_cfg in landmark_buildings.items():
+        ent_xy = lm_cfg.get("real_entrance_local_m")
+        if not ent_xy:
+            continue
+        target_xy = lm_cfg.get("front_face_toward_local_m")
+        ex, ey = float(ent_xy[0]), float(ent_xy[1])
+        if target_xy:
+            dx, dy = float(target_xy[0]) - ex, float(target_xy[1]) - ey
+            dn = max((dx * dx + dy * dy) ** 0.5, 1.0)
+            # Stand 0.85 m in front of the real door facing the square
+            fx_n, fy_n = dx / dn, dy / dn
+            tx_n, ty_n = -fy_n, fx_n
+            ex_out, ey_out = ex + fx_n * 0.85, ey + fy_n * 0.85
+        else:
+            tx_n, ty_n = 1.0, 0.0
+            ex_out, ey_out = ex, ey
+        place_ids = lm_cfg.get("entrance_place_ids") or []
+        for idx_p, pid in enumerate(place_ids):
+            lat_off = 0.0 if idx_p == 0 else ((-1.2 if idx_p % 2 == 1 else 1.2) * ((idx_p + 1) // 2))
+            landmark_entrances[pid] = (ex_out + tx_n * lat_off, ey_out + ty_n * lat_off)
+
     citizens = None
     if citizens_config:
         citizens = build_citizens(
@@ -534,6 +649,7 @@ def build(
             pois=scene["layers"].get("pois"),
             crossings=road_graph.get("crossings"),
             entrances=scene.get("entrances"),
+            landmark_entrances=landmark_entrances,
         )
     economy = None
     if economy_config and citizens:
@@ -590,9 +706,11 @@ def build(
     compiled_meshes = {
         name: {
             "color": PALETTE[name],
+            **({"material": name.replace("Gable", "Walls", 1)} if name in GABLE_STYLES else {}),
             "collision": (
                 name in {"Terrain", "Sidewalks", "Roads", "Paving", "Paths"}
                 or name in WALLS
+                or name in GABLE_STYLES
                 or name in ROOFS
             ),
             "vertices": mesh.vertices,
@@ -611,6 +729,14 @@ def build(
     if bridges_mesh is not None:
         compiled_meshes["Bridges"] = bridges_mesh
 
+    building_mesh_names = set(WALLS) | set(GABLE_STYLES) | set(ROOFS) | {
+        "StoneTrim", "TimberTrim", "WindowGlass", "ShuttersGreen", "ShuttersRed",
+        "ShuttersBlue", "Doors", "FlowerBoxes",
+    }
+    building_triangle_count = sum(
+        len(compiled_meshes[m]["triangles"]) for m in building_mesh_names if m in compiled_meshes
+    )
+
     terrain_attribution = scene["terrain"].get("attribution", "")
     terrain_license = scene["terrain"].get("license", "")
     return {
@@ -619,7 +745,23 @@ def build(
         "attribution_url": scene["attribution_url"],
         "terrain_attribution": terrain_attribution,
         "terrain_license": terrain_license,
+        "lod2": scene.get("lod2"),
+        "landmarks": {
+            "building_count": sum(1 for b in buildings_report if b["landmark_variant"]),
+            "buildings": {b["id"]: b["landmark_variant"] for b in buildings_report if b["landmark_variant"]},
+            "bridge_details": {b["id"]: b["detail_style"] for b in bridges_report if b.get("detail_style")},
+            "tunnel_portals": tunnel_portals_report,
+            "references_count": len((references_manifest or {}).get("references", [])),
+        },
+        "buildings": {
+            "count": len(buildings_report),
+            "lod2_matched": height_sources.get("lod2", 0),
+            "triangle_count": building_triangle_count,
+            "height_sources": dict(height_sources),
+            "items": buildings_report,
+        },
         "bridges": bridges_report,
+        "tunnel_portals": tunnel_portals_report,
         "terrain": {
             "kind": terrain_kind,
             "reference_elevation_m": float(scene["terrain"].get("reference_elevation_m", 0.0)),
@@ -703,11 +845,22 @@ def main():
         tasks_layout = json.loads(TASKS_LAYOUT.read_text(encoding="utf-8"))
         if scene["id"] == tasks_layout["scene_id"]:
             tasks_config = tasks_layout
+    landmarks_config = None
+    if LANDMARKS_LAYOUT.exists():
+        lm_layout = json.loads(LANDMARKS_LAYOUT.read_text(encoding="utf-8"))
+        if scene["id"] == lm_layout.get("scene_id"):
+            landmarks_config = lm_layout
+    references_manifest = None
+    if REFERENCES_MANIFEST.exists():
+        ref_layout = json.loads(REFERENCES_MANIFEST.read_text(encoding="utf-8"))
+        if scene["id"] == ref_layout.get("scene_id"):
+            references_manifest = ref_layout
     map_png_path = args.scene.with_name("city-map.png")
     package = build(
         scene, report, layout.get("sidewalk_widths_m"), layout.get("vehicle"),
         citizens_config, layout.get("default_sidewalk_widths_m"), layout.get("traffic_network"),
         economy_config, tasks_config, map_output_png=map_png_path, scene_dir=args.scene.parent,
+        landmarks_config=landmarks_config, references_manifest=references_manifest,
     )
     package["source_scene_sha256"] = sha256(scene_bytes).hexdigest()
     destination = args.scene.with_name("unreal-city-meshes.json")

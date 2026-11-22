@@ -2,6 +2,8 @@
 
 #include "Algo/BinarySearch.h"
 #include "Components/CapsuleComponent.h"
+#include "Components/StaticMeshComponent.h"
+#include "Engine/StaticMesh.h"
 #include "Engine/Texture2D.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -33,6 +35,26 @@ namespace
 	constexpr double VehicleAccelCmPerSecSq = 260.0;
 	constexpr double VehicleDecelCmPerSecSq = 550.0;
 
+	bool IsBuildingStructureHit(const FHitResult& Hit)
+	{
+		const UStaticMeshComponent* SMC = Cast<UStaticMeshComponent>(Hit.GetComponent());
+		const UStaticMesh* Mesh = SMC ? SMC->GetStaticMesh() : nullptr;
+		if (!Mesh)
+		{
+			return false;
+		}
+		const FString MeshName = Mesh->GetName();
+		return MeshName.StartsWith(TEXT("SM_Roofs"))
+			|| MeshName.StartsWith(TEXT("SM_Walls"))
+			|| MeshName.StartsWith(TEXT("SM_Gable"))
+			|| MeshName.StartsWith(TEXT("SM_StoneTrim"))
+			|| MeshName.StartsWith(TEXT("SM_TimberTrim"))
+			|| MeshName.StartsWith(TEXT("SM_Doors"))
+			|| MeshName.StartsWith(TEXT("SM_Window"))
+			|| MeshName.StartsWith(TEXT("SM_Shutters"))
+			|| MeshName.StartsWith(TEXT("SM_Flower"));
+	}
+
 	bool TraceStaticGroundZ(UWorld* World, double WorldX, double WorldY, double ReferenceZ, double& OutGroundZ)
 	{
 		if (!World)
@@ -55,15 +77,33 @@ namespace
 		{
 			Params.AddIgnoredActor(*It);
 		}
-		const double TraceTopZ = FMath::Max(5000.0, ReferenceZ + 2000.0);
-		FHitResult Hit;
-		if (World->LineTraceSingleByChannel(
-			Hit,
-			FVector(WorldX, WorldY, TraceTopZ),
-			FVector(WorldX, WorldY, -5000.0),
-			ECC_Visibility,
-			Params))
+		double TraceStartZ = FMath::Max(5000.0, ReferenceZ + 2000.0);
+		for (int32 Iter = 0; Iter < 12 && TraceStartZ > -5000.0; ++Iter)
 		{
+			FHitResult Hit;
+			if (!World->LineTraceSingleByChannel(
+				Hit,
+				FVector(WorldX, WorldY, TraceStartZ),
+				FVector(WorldX, WorldY, -5000.0),
+				ECC_Visibility,
+				Params))
+			{
+				return false;
+			}
+			if (IsBuildingStructureHit(Hit))
+			{
+				if (const UPrimitiveComponent* Comp = Hit.GetComponent())
+				{
+					Params.AddIgnoredComponent(Comp);
+				}
+				TraceStartZ = Hit.ImpactPoint.Z - 5.0;
+				continue;
+			}
+			if (Hit.ImpactNormal.Z < 0.5f)
+			{
+				TraceStartZ = Hit.ImpactPoint.Z - 5.0;
+				continue;
+			}
 			OutGroundZ = Hit.ImpactPoint.Z;
 			return true;
 		}

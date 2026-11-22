@@ -9,6 +9,7 @@ from shapely.errors import GEOSException
 
 from tools.geo_import.dgm import fetch_dgm_tiles
 from tools.geo_import.export import build
+from tools.geo_import.lod2 import fetch_lod2_tiles
 from tools.geo_import.osm import fetch_snapshot
 
 
@@ -17,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("fetch", "fetch-dgm", "build"))
+    parser.add_argument("command", choices=("fetch", "fetch-dgm", "fetch-lod2", "build"))
     parser.add_argument("--config", type=Path, default=ROOT / "data/manifests/doemitz-altstadt.json")
     parser.add_argument("--raw-dir", type=Path, help="path to a raw snapshot")
     parser.add_argument("--output-dir", type=Path, help="path for generated data")
@@ -39,6 +40,10 @@ def main() -> None:
             meta = fetch_dgm_tiles(config, raw_dir)
             names = ", ".join(t["name"] for t in meta["tiles"])
             print(f"DGM1 ({meta['attribution']}): {len(meta['tiles'])} tile(s) [{names}] -> {raw_dir / 'dgm1'}")
+        elif args.command == "fetch-lod2":
+            meta = fetch_lod2_tiles(config, raw_dir)
+            names = ", ".join(t["name"] for t in meta["tiles"])
+            print(f"LoD2 ({meta['attribution']}): {len(meta['tiles'])} tile(s) [{names}] -> {raw_dir / 'lod2'}")
         else:
             build(config, raw_dir, output_dir, terrain_mode=args.terrain)
     except (ET.ParseError, GEOSException, KeyError, OSError, ValueError) as error:

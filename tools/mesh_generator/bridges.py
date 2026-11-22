@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from math import ceil, hypot
+from math import ceil, cos, hypot, pi, sin
 
 from shapely.geometry import LineString, Point, Polygon
 
 from tools.geo_transform.terrain import ElevationModel
-from tools.mesh_generator.road_elevation import BridgeChain, _densify_polyline
+from tools.mesh_generator.road_elevation import BridgeChain, TunnelWayInfo, _densify_polyline
 
 
 BRIDGE_DECK_THICKNESS_M = 0.50
@@ -28,6 +28,12 @@ COLOR_WOOD_SIDE = (0.31, 0.20, 0.11)
 COLOR_WOOD_PARAPET = (0.36, 0.23, 0.13)
 COLOR_ROAD_ASPHALT = (0.24, 0.24, 0.25)
 COLOR_ROAD_PAVING = (0.38, 0.32, 0.27)
+COLOR_PIER_STONE = (0.44, 0.41, 0.38)
+COLOR_ARCH_STONE = (0.50, 0.46, 0.42)
+COLOR_TUNNEL_BRICK = (0.48, 0.22, 0.16)
+COLOR_TUNNEL_KEYSTONE = (0.62, 0.59, 0.54)
+COLOR_TUNNEL_FLOOR = (0.34, 0.31, 0.27)
+COLOR_RAMPART_TURF = (0.26, 0.36, 0.19)
 
 
 def resolve_bridge_material(chain: BridgeChain) -> tuple[str, str]:
@@ -88,6 +94,298 @@ def _station_normals(pts: list[tuple[float, float]]) -> list[tuple[float, float]
     return normals
 
 
+def _add_prism_along_axis(
+    builder: _ColoredMeshBuilder,
+    origin: tuple[float, float],
+    fwd: tuple[float, float],
+    right: tuple[float, float],
+    s0: float,
+    s1: float,
+    lat0: float,
+    lat1: float,
+    z0: float,
+    z1: float,
+    color: tuple[float, float, float],
+    add_top: bool = True,
+    add_bottom: bool = False,
+) -> None:
+    ox, oy = origin
+    fx, fy = fwd
+    rx, ry = right
+
+    def pt(s: float, lat: float, z: float) -> tuple[float, float, float]:
+        return (ox + fx * s + rx * lat, oy + fy * s + ry * lat, z)
+
+    b0 = pt(s0, lat0, z0)
+    b1 = pt(s0, lat1, z0)
+    b2 = pt(s1, lat1, z0)
+    b3 = pt(s1, lat0, z0)
+    t0 = pt(s0, lat0, z1)
+    t1 = pt(s0, lat1, z1)
+    t2 = pt(s1, lat1, z1)
+    t3 = pt(s1, lat0, z1)
+
+    builder.add_quad(b0, b1, t1, t0, color)
+    builder.add_quad(b1, b2, t2, t1, color)
+    builder.add_quad(b2, b3, t3, t2, color)
+    builder.add_quad(b3, b0, t0, t3, color)
+    if add_top:
+        builder.add_quad(t0, t1, t2, t3, color)
+    if add_bottom:
+        builder.add_quad(b1, b0, b3, b2, color)
+
+
+def _add_stone_bridge_arches_and_piers(
+    builder: _ColoredMeshBuilder,
+    chain: BridgeChain,
+    total_half_w: float,
+    road_offset_m: float,
+    elevation: ElevationModel,
+    water_level_m: float | None,
+    detail_cfg: dict,
+) -> None:
+    """Add masonry arches and river/abutment piers beneath Torbrücke or Steinbrücke while keeping clear water headroom."""
+    p_start = chain.coords[0]
+    p_end = chain.coords[-1]
+    dx = p_end[0] - p_start[0]
+    dy = p_end[1] - p_start[1]
+    span_len = max(hypot(dx, dy), 1.0)
+    fx, fy = dx / span_len, dy / span_len
+    rx, ry = fy, -fx
+
+    arch_count = max(1, int(detail_cfg.get("arch_count", 1)))
+    pier_w = float(detail_cfg.get("pier_width_m", 1.35))
+    arch_rise = float(detail_cfg.get("arch_rise_m", 1.45))
+
+    base_floor = (water_level_m - 1.2) if water_level_m is not None else (min(chain.z_vals) - 5.5)
+    pier_half_w = total_half_w - 0.15
+
+    pier_stations = [0.85, span_len - 0.85]
+    if arch_count > 1:
+        for k in range(1, arch_count):
+            pier_stations.append((k / arch_count) * span_len)
+    pier_stations.sort()
+
+    for ps in pier_stations:
+        z_top = chain.ground_elevation_at_s(ps) + road_offset_m - BRIDGE_DECK_THICKNESS_M + 0.05
+        half_p = pier_w * 0.5
+        _add_prism_along_axis(
+            builder, p_start, (fx, fy), (rx, ry),
+            ps - half_p, ps + half_p,
+            -pier_half_w, pier_half_w,
+            base_floor, z_top,
+            COLOR_PIER_STONE, add_top=True,
+        )
+        _add_prism_along_axis(
+            builder, p_start, (fx, fy), (rx, ry),
+            ps - half_p - 0.18, ps + half_p + 0.18,
+            -pier_half_w - 0.25, pier_half_w + 0.25,
+            z_top - 0.45, z_top,
+            COLOR_ARCH_STONE, add_top=True,
+        )
+
+    n_seg = 8
+    for s_left_pier, s_right_pier in zip(pier_stations, pier_stations[1:]):
+        a0 = s_left_pier + pier_w * 0.42
+        a1 = s_right_pier - pier_w * 0.42
+        bay_span = a1 - a0
+        if bay_span < 2.0:
+            continue
+        deck_bot_mid = chain.ground_elevation_at_s(0.5 * (a0 + a1)) + road_offset_m - BRIDGE_DECK_THICKNESS_M
+        max_rise = max(0.45, min(arch_rise, (deck_bot_mid - (water_level_m + 1.8)) if water_level_m is not None else arch_rise))
+
+        def arch_z(frac: float, s_pos: float) -> float:
+            deck_bot = chain.ground_elevation_at_s(s_pos) + road_offset_m - BRIDGE_DECK_THICKNESS_M
+            drop = max_rise * ((2.0 * frac - 1.0) ** 2)
+            return deck_bot - drop
+
+        def pt(s: float, lat: float, z: float) -> tuple[float, float, float]:
+            return (p_start[0] + fx * s + rx * lat, p_start[1] + fy * s + ry * lat, z)
+
+        arch_half_w = total_half_w - 0.08
+        for k in range(n_seg):
+            f0 = k / n_seg
+            f1 = (k + 1) / n_seg
+            s0 = a0 + bay_span * f0
+            s1 = a0 + bay_span * f1
+            zb0 = chain.ground_elevation_at_s(s0) + road_offset_m - BRIDGE_DECK_THICKNESS_M + 0.02
+            zb1 = chain.ground_elevation_at_s(s1) + road_offset_m - BRIDGE_DECK_THICKNESS_M + 0.02
+            za0 = arch_z(f0, s0)
+            za1 = arch_z(f1, s1)
+
+            builder.add_quad(
+                pt(s0, arch_half_w, za0), pt(s1, arch_half_w, za1),
+                pt(s1, arch_half_w, zb1), pt(s0, arch_half_w, zb0),
+                COLOR_ARCH_STONE,
+            )
+            builder.add_quad(
+                pt(s1, -arch_half_w, za1), pt(s0, -arch_half_w, za0),
+                pt(s0, -arch_half_w, zb0), pt(s1, -arch_half_w, zb1),
+                COLOR_ARCH_STONE,
+            )
+            builder.add_quad(
+                pt(s0, arch_half_w, za0), pt(s0, -arch_half_w, za0),
+                pt(s1, -arch_half_w, za1), pt(s1, arch_half_w, za1),
+                COLOR_PIER_STONE,
+            )
+
+
+def _add_fortress_tunnel_portal_and_passage(
+    builder: _ColoredMeshBuilder,
+    tunnel: TunnelWayInfo,
+    road_offset_m: float,
+    portal_cfg: dict,
+) -> tuple[Polygon, float, dict]:
+    """
+    Build a visible red-brick fortress tunnel portal (Torbogen) and solid walkable vaulted passage
+    along tunnel.coords so the player can walk from the NW-Steg straight into the tunnel with 0 cm step.
+    """
+    p0 = tunnel.coords[0]
+    p1 = tunnel.coords[-1]
+    dx = p1[0] - p0[0]
+    dy = p1[1] - p0[1]
+    length = max(hypot(dx, dy), 1.0)
+    fx, fy = dx / length, dy / length
+    rx, ry = fy, -fx
+
+    clear_w = float(portal_cfg.get("clear_width_m", 2.6))
+    clear_h = float(portal_cfg.get("clear_height_m", 3.1))
+    portal_w = float(portal_cfg.get("portal_wall_width_m", 5.4))
+    portal_h = float(portal_cfg.get("portal_wall_height_m", 4.4))
+    half_cw = clear_w * 0.5
+    half_pw = portal_w * 0.5
+    wall_thick = 0.65
+
+    z0 = tunnel.portal_z_m[0] + road_offset_m
+    z1 = tunnel.portal_z_m[1] + road_offset_m
+
+    def z_at(s: float) -> float:
+        return z0 + (s / length) * (z1 - z0)
+
+    def pt(s: float, lat: float, z: float) -> tuple[float, float, float]:
+        return (p0[0] + fx * s + rx * lat, p0[1] + fy * s + ry * lat, z)
+
+    n_steps = max(4, int(ceil(length / 2.0)))
+    for i in range(n_steps):
+        sa = (i / n_steps) * length
+        sb = ((i + 1) / n_steps) * length
+        za = z_at(sa)
+        zb = z_at(sb)
+        # Walkable solid tunnel floor slab (CCW upward)
+        builder.add_quad(
+            pt(sa, -half_cw - 0.1, za), pt(sa, half_cw + 0.1, za),
+            pt(sb, half_cw + 0.1, zb), pt(sb, -half_cw - 0.1, zb),
+            COLOR_TUNNEL_FLOOR,
+        )
+
+    spring_h = clear_h * 0.62
+    arch_r = clear_h - spring_h
+    n_arch = 6
+    for i in range(n_steps):
+        sa = (i / n_steps) * length
+        sb = ((i + 1) / n_steps) * length
+        za = z_at(sa)
+        zb = z_at(sb)
+
+        builder.add_quad(
+            pt(sa, -half_cw, za), pt(sb, -half_cw, zb),
+            pt(sb, -half_cw, zb + spring_h), pt(sa, -half_cw, za + spring_h),
+            COLOR_TUNNEL_BRICK,
+        )
+        builder.add_quad(
+            pt(sb, half_cw, zb), pt(sa, half_cw, za),
+            pt(sa, half_cw, za + spring_h), pt(sb, half_cw, zb + spring_h),
+            COLOR_TUNNEL_BRICK,
+        )
+        builder.add_quad(
+            pt(sb, -half_cw - wall_thick, zb - 0.5), pt(sa, -half_cw - wall_thick, za - 0.5),
+            pt(sa, -half_cw - wall_thick, za + clear_h + 0.8), pt(sb, -half_cw - wall_thick, zb + clear_h + 0.8),
+            COLOR_TUNNEL_BRICK,
+        )
+        builder.add_quad(
+            pt(sa, half_cw + wall_thick, za - 0.5), pt(sb, half_cw + wall_thick, zb - 0.5),
+            pt(sb, half_cw + wall_thick, zb + clear_h + 0.8), pt(sa, half_cw + wall_thick, za + clear_h + 0.8),
+            COLOR_TUNNEL_BRICK,
+        )
+
+        for k in range(n_arch):
+            th0 = pi * (1.0 - k / n_arch)
+            th1 = pi * (1.0 - (k + 1) / n_arch)
+            lat0 = half_cw * cos(th0)
+            lat1 = half_cw * cos(th1)
+            hz0 = spring_h + arch_r * sin(th0)
+            hz1 = spring_h + arch_r * sin(th1)
+            builder.add_quad(
+                pt(sa, lat0, za + hz0), pt(sb, lat0, zb + hz0),
+                pt(sb, lat1, zb + hz1), pt(sa, lat1, za + hz1),
+                COLOR_TUNNEL_BRICK,
+            )
+
+        cap_z_a = za + clear_h + 0.85
+        cap_z_b = zb + clear_h + 0.85
+        cap_hw = half_cw + wall_thick + 0.55
+        builder.add_quad(
+            pt(sa, -cap_hw, cap_z_a), pt(sa, cap_hw, cap_z_a),
+            pt(sb, cap_hw, cap_z_b), pt(sb, -cap_hw, cap_z_b),
+            COLOR_RAMPART_TURF,
+        )
+
+    for end_s, is_entry in ((0.0, True), (length, False)):
+        ze = z_at(end_s)
+        p_depth = 0.75
+        s_a = end_s - p_depth if is_entry else end_s
+        s_b = end_s if is_entry else end_s + p_depth
+        _add_prism_along_axis(
+            builder, p0, (fx, fy), (rx, ry),
+            s_a, s_b, -half_pw, -half_cw, ze - 3.6, ze + portal_h,
+            COLOR_TUNNEL_BRICK, add_top=True,
+        )
+        _add_prism_along_axis(
+            builder, p0, (fx, fy), (rx, ry),
+            s_a, s_b, half_cw, half_pw, ze - 3.6, ze + portal_h,
+            COLOR_TUNNEL_BRICK, add_top=True,
+        )
+        _add_prism_along_axis(
+            builder, p0, (fx, fy), (rx, ry),
+            s_a, s_b, -half_cw, half_cw, ze + clear_h - 0.15, ze + portal_h,
+            COLOR_TUNNEL_BRICK, add_top=True,
+        )
+        _add_prism_along_axis(
+            builder, p0, (fx, fy), (rx, ry),
+            s_a - 0.08, s_b + 0.08, -half_pw - 0.12, half_pw + 0.12,
+            ze + portal_h, ze + portal_h + 0.28,
+            COLOR_TUNNEL_KEYSTONE, add_top=True,
+        )
+        _add_prism_along_axis(
+            builder, p0, (fx, fy), (rx, ry),
+            s_a - 0.08, s_b + 0.08, -0.32, 0.32,
+            ze + clear_h - 0.25, ze + clear_h + 0.45,
+            COLOR_TUNNEL_KEYSTONE, add_top=True,
+        )
+        for side_lat in (-half_cw - 0.35, half_cw):
+            _add_prism_along_axis(
+                builder, p0, (fx, fy), (rx, ry),
+                s_a - 0.06, s_b + 0.06, side_lat, side_lat + 0.35,
+                ze + spring_h - 0.18, ze + spring_h + 0.14,
+                COLOR_TUNNEL_KEYSTONE, add_top=True,
+            )
+
+    corridor_poly = LineString([p0, p1]).buffer(half_cw + 0.85, quad_segs=1, cap_style="flat")
+    floor_ref_z = min(tunnel.portal_z_m[0], tunnel.portal_z_m[1])
+    report = {
+        "road_id": tunnel.road_id,
+        "name": portal_cfg.get("name", tunnel.name or "Tunnelportal"),
+        "style": portal_cfg.get("style", "fortress_brick_arch"),
+        "length_m": round(length, 2),
+        "clear_width_m": clear_w,
+        "clear_height_m": clear_h,
+        "dimensions_source": portal_cfg.get("dimensions_source", "assumed_sprint12_tunnel_portal"),
+        "entry_point_3d_m": [round(p0[0], 4), round(p0[1], 4), round(z0, 4)],
+        "exit_point_3d_m": [round(p1[0], 4), round(p1[1], 4), round(z1, 4)],
+    }
+    return corridor_poly, floor_ref_z, report
+
+
 def build_bridges_mesh(
     bridges: list[BridgeChain],
     elevation: ElevationModel,
@@ -96,14 +394,21 @@ def build_bridges_mesh(
     sidewalk_widths: dict[str, float],
     default_sidewalk_widths: dict[str, float],
     water_surfaces: list[tuple[Polygon, float]],
-) -> tuple[dict | None, list[dict], list[Polygon]]:
+    bridge_details_config: dict[str, dict] | None = None,
+    tunnels: list[TunnelWayInfo] | None = None,
+    tunnel_portals_config: dict[str, dict] | None = None,
+) -> tuple[dict | None, list[dict], list[Polygon], list[tuple[Polygon, float]], list[dict]]:
     """
     Build SM_Bridges vertex-colored mesh (with collision), bridge clearance report,
-    and bridge footprint polygons (for excluding props/trees/terrain depression under bridges).
+    bridge footprint polygons, walkable tunnel corridors, and tunnel portal reports.
     """
     builder = _ColoredMeshBuilder()
     report_entries: list[dict] = []
     footprints: list[Polygon] = []
+    tunnel_corridors: list[tuple[Polygon, float]] = []
+    tunnel_portals_report: list[dict] = []
+    bridge_details_config = bridge_details_config or {}
+    tunnel_portals_config = tunnel_portals_config or {}
 
     for chain in bridges:
         material_kind, material_source = resolve_bridge_material(chain)
@@ -271,6 +576,15 @@ def build_bridges_mesh(
             # Clear opening height under the bridge midspan (over channel/moat floor)
             clearance_over_terrain_m = round(max(midspan_clear_terr), 3)
 
+        # Optional Sprint 12 historic bridge details (stone arches & piers) from versioned landmark config
+        detail_cfg = bridge_details_config.get(chain.id)
+        detail_style = None
+        if detail_cfg is not None:
+            detail_style = detail_cfg.get("detail_style")
+            _add_stone_bridge_arches_and_piers(
+                builder, chain, total_half_w, road_offset_m, elevation, water_level_m, detail_cfg,
+            )
+
         ab_a, ab_b = chain.abutments
         mid_s = 0.5 * chain.length_m
         mid_pt = line.interpolate(mid_s)
@@ -281,6 +595,7 @@ def build_bridges_mesh(
             "name": chain.name,
             "highway": chain.highway,
             "bridge_structure": chain.bridge_structure,
+            "detail_style": detail_style,
             "material": material_kind,
             "material_source": material_source,
             "length_m": round(chain.length_m, 2),
@@ -291,6 +606,8 @@ def build_bridges_mesh(
             "parapet_height_m": BRIDGE_PARAPET_HEIGHT_M,
             "dimensions_source": "assumed_sprint11_1_bridge_defaults",
             "max_slope_percent": chain.max_slope_percent,
+            "incline": chain.incline,
+            "warnings": list(chain.warnings),
             "min_deck_bottom_m": round(min_deck_bot, 4),
             "max_deck_top_m": round(max_deck_top, 4),
             "mid_point_3d_m": [round(mid_pt.x, 4), round(mid_pt.y, 4), round(mid_z, 4)],
@@ -310,8 +627,19 @@ def build_bridges_mesh(
             ],
         })
 
+    # 6. Configured historic tunnel portals & walkable passages (e.g. NW-Steg fortress rampart portal)
+    for tunnel in tunnels or []:
+        p_cfg = tunnel_portals_config.get(tunnel.road_id)
+        if p_cfg is None:
+            continue
+        corridor_poly, floor_z, p_rep = _add_fortress_tunnel_portal_and_passage(
+            builder, tunnel, road_offset_m, p_cfg,
+        )
+        tunnel_corridors.append((corridor_poly, floor_z))
+        tunnel_portals_report.append(p_rep)
+
     if not builder.triangles:
-        return None, report_entries, footprints
+        return None, report_entries, footprints, tunnel_corridors, tunnel_portals_report
 
     mesh_dict = {
         "color": None,
@@ -320,4 +648,4 @@ def build_bridges_mesh(
         "triangles": builder.triangles,
         "vertex_colors": builder.vertex_colors,
     }
-    return mesh_dict, report_entries, footprints
+    return mesh_dict, report_entries, footprints, tunnel_corridors, tunnel_portals_report
