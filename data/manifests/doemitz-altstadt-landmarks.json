@@ -126,6 +126,28 @@
       "reference_ids": ["ref_bridges_torbruecke_steinbruecke"]
     }
   },
+  "fortress_walls": {
+    "osm:way:42318561": {
+      "id": "fortress_wall:osm:way:42318561",
+      "name": "Escarpe der Festung Dömitz (Backstein-Futtermauer am Festungsgraben)",
+      "foot_below_water_m": 0.6,
+      "crest_search_inside_m": [1.0, 3.0],
+      "crest_smoothing_m": 10.0,
+      "min_height_m": 2.5,
+      "coping_depth_m": 0.9,
+      "coping_height_m": 0.25,
+      "cordon_below_top_m": 0.9,
+      "cordon_height_m": 0.22,
+      "cordon_protrusion_m": 0.12,
+      "embrasure_spacing_m": 7.0,
+      "embrasure_max_edge_m": 25.0,
+      "embrasure_height_above_foot_m": 2.4,
+      "gap_extra_width_m": 1.0,
+      "fill_band_m": 4.0,
+      "dimensions_source": "assumed_sprint13_fortress_wall: Mauerlinie aus OSM-Umriss, Fuß 0,6 m unter Grabenwasserspiegel, Krone aus DGM1-Höhe 1–3 m hinter der Mauerlinie (10 m geglättet), Gesims und Scharten nach Referenzfotos",
+      "reference_ids": ["ref_festung_mauer", "ref_festung_bastion_held"]
+    }
+  },
   "tunnel_portals": {
     "osm:way:416256369": {
       "name": "Festungswall-Tunnelportal (NW-Steg)",

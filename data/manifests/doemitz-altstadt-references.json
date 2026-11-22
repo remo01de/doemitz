@@ -123,6 +123,8 @@
       "license": "CC BY-SA 3.0",
       "license_url": "https://creativecommons.org/licenses/by-sa/3.0/",
       "used_for": "Straßenanschluss und Materialkontext an der Torstraße Richtung Torbrücke"
-    }
+    },
+    {"id": "ref_festung_mauer", "landmark": "Festung Dömitz (Escarpe am Festungsgraben)", "osm_ids": ["osm:way:42318561"], "title": "File:Doemitz Festungsmauer.jpg", "url": "https://commons.wikimedia.org/wiki/File:Doemitz_Festungsmauer.jpg", "author": "Doris Antony, Berlin", "license": "CC BY-SA 3.0 / GFDL", "license_url": "https://creativecommons.org/licenses/by-sa/3.0/", "used_for": "Senkrechte Backstein-Futtermauer vom Graben bis zur Wallkrone, Gesims unter der Krone, Abdeckung, Poterne und Ecktürmchen"},
+    {"id": "ref_festung_bastion_held", "landmark": "Festung Dömitz (Bastion Held)", "osm_ids": ["osm:way:42318561"], "title": "File:Festung Dömitz Bastion Held.JPG", "url": "https://commons.wikimedia.org/wiki/File:Festung_D%C3%B6mitz_Bastion_Held.JPG", "author": "Anaconda74", "license": "CC0 1.0", "license_url": "https://creativecommons.org/publicdomain/zero/1.0/", "used_for": "Bastionsflanke mit Scharten, Mauerhöhe im Verhältnis zum Graben, begrünte Wallkrone"}
   ]
 }

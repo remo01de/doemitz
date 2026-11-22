@@ -56,6 +56,27 @@ class Sprint13Test(unittest.TestCase):
         bridges = {b["id"]: b for b in self.pkg["bridges"]}
         self.assertLessEqual(bridges["bridge:osm:way:120431984"]["max_slope_percent"], 6.0)
 
+    def test_fortress_escarp_wall_along_the_outline_with_gate_and_steg_openings(self):
+        walls = {w["outline_id"]: w for w in self.pkg["fortress_walls"]}
+        self.assertIn("osm:way:42318561", walls, "the fortress needs its brick escarp")
+        wall = walls["osm:way:42318561"]
+        gap_total = sum(g["width_m"] for g in wall["gaps"])
+        self.assertAlmostEqual(wall["built_length_m"], wall["outline_length_m"] - gap_total, delta=0.5)
+        labels = " ".join(g["label"] for g in wall["gaps"])
+        self.assertIn("osm:way:416256368", labels)  # gate approach from the drawbridge
+        self.assertIn("osm:way:416256369", labels)  # NW-Steg tunnel portal
+        self.assertGreaterEqual(wall["height_m"][0], 2.5 - 1e-6)
+        water = {w["id"]: w["water_level_m"] for w in self.pkg["terrain"]["water_levels"]}
+        self.assertLess(wall["foot_z_m"][1], water["osm:relation:2215646"], "wall foot must reach below the moat water")
+        self.assertEqual(len(wall["cheek_walls"]), 1)
+        meshes = self.pkg["meshes"]
+        for name in ("FortressWalls", "FortressCoping"):
+            self.assertTrue(meshes[name]["collision"], name)
+        self.assertEqual(meshes["FortressWalls"]["material"], "WallsBrick")
+        refs = {r["id"] for r in _load("doemitz-altstadt-references.json")["references"]}
+        for rid in wall["reference_ids"]:
+            self.assertIn(rid, refs)
+
     # --- LoD2 eave height ---------------------------------------------------------------------------
     def test_wallstrasse_6_eave_from_main_roof(self):
         item = self.items["osm:way:198050053"]

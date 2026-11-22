@@ -77,7 +77,9 @@ class Sprint11TerrainTest(unittest.TestCase):
         tm = self.package["terrain"]["mesh"]
         self.assertEqual(tm["kind"], "dgm1")
         self.assertGreater(tm["tile_count"], 1)
-        self.assertLessEqual(tm["triangle_count"], 150000)
+        # Budget from the versioned manifest (Sprint 13: 155.000, wall-line clipping along the fortress escarp)
+        self.assertLessEqual(tm["triangle_count"], tm["max_triangles_budget"])
+        self.assertLessEqual(tm["max_triangles_budget"], 155000)
         self.assertLessEqual(tm["max_vertical_error_m"], 0.05)
 
         # Three known open-ground points across Dömitz Altstadt:

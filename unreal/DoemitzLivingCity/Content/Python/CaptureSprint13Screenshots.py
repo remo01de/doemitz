@@ -45,6 +45,9 @@ ALL_SHOTS = [
     ("09_festungstor_hof.png", ue_pos(-164.5, -42.0, 5.4), ue_pos(-158.8, -57.0, 5.0)),
     ("10_wallstrasse_6.png", ue_pos(196.0, -251.0, 7.5), ue_pos(173.2, -240.0, 8.0)),
     ("11_rathausturm.png", ue_pos(-96.0, -212.0, 6.5), ue_pos(-70.0, -231.0, 13.0)),
+    # Escarp seen from across the moat (south-west of Bastion Held) and from the drawbridge
+    ("21_festungsmauer_bastion_held.png", ue_pos(-262.0, -150.0, 6.0), ue_pos(-240.0, -118.0, 3.0)),
+    ("22_festungsmauer_graben.png", ue_pos(-120.0, -110.0, 5.5), ue_pos(-150.0, -80.0, 3.5)),
 ]
 # Interior views (day and night), computed from the generated package: camera just inside the door
 _project = Path(unreal.Paths.convert_relative_path_to_full(unreal.Paths.project_dir()))

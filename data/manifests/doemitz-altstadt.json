@@ -10,7 +10,7 @@
     "reference_elevation_source": "manifest_versioned_origin_dgm1",
     "terrain_tile_size_m": 64.0,
     "terrain_max_error_m": 0.05,
-    "terrain_max_triangles": 150000,
+    "terrain_max_triangles": 155000,
     "road_smoothing_window_m": 12.0,
     "water_bank_depression_m": 0.05
   },

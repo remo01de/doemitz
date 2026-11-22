@@ -6,8 +6,10 @@ from math import ceil
 from typing import Callable
 
 import numpy as np
+import shapely
 from shapely import constrained_delaunay_triangles, contains_xy, delaunay_triangles, get_coordinates, orient_polygons
-from shapely.geometry import MultiPoint, Polygon
+from shapely.geometry import MultiPoint, Point, Polygon
+from shapely.prepared import prep
 
 from tools.geo_transform.terrain import ElevationModel
 
@@ -15,6 +17,56 @@ from tools.geo_transform.terrain import ElevationModel
 DEFAULT_TILE_SIZE_M = 64
 DEFAULT_MAX_ERROR_M = 0.05
 DEFAULT_MAX_TRIANGLES = 150000
+
+
+def _clip_triangle_at_wall(tri_xyz, clips):
+    """
+    Split a terrain triangle that crosses a fortress wall line into its inside and outside parts. New vertices
+    on the wall line take the wall crest (inside) or the wall foot level (outside), so the wall face hides a
+    clean step instead of a slanted triangle. At wall openings the original plane is kept on both sides.
+    """
+    xs = [p[0] for p in tri_xyz]
+    ys = [p[1] for p in tri_xyz]
+    for prof, ring_prep, rb in clips:
+        if max(xs) < rb[0] or min(xs) > rb[2] or max(ys) < rb[1] or min(ys) > rb[3]:
+            continue
+        tri = Polygon([(p[0], p[1]) for p in tri_xyz])
+        if abs(tri.area) < 1e-9 or not ring_prep.intersects(tri):
+            continue
+        (x0, y0, z0), (x1, y1, z1), (x2, y2, z2) = tri_xyz
+        det = (y1 - y2) * (x0 - x2) + (x2 - x1) * (y0 - y2)
+
+        def plane(x, y):
+            if abs(det) < 1e-12:
+                return z0
+            w0 = ((y1 - y2) * (x - x2) + (x2 - x1) * (y - y2)) / det
+            w1 = ((y2 - y0) * (x - x2) + (x0 - x2) * (y - y2)) / det
+            return w0 * z0 + w1 * z1 + (1.0 - w0 - w1) * z2
+
+        originals = {(round(p[0], 6), round(p[1], 6)): p[2] for p in tri_xyz}
+        out = []
+        for part, inside in ((tri.intersection(prof.outline), True), (tri.difference(prof.outline), False)):
+            polys = [part] if part.geom_type == "Polygon" else [g for g in getattr(part, "geoms", []) if g.geom_type == "Polygon"]
+            for poly in polys:
+                if poly.is_empty or poly.area < 1e-6:
+                    continue
+                for sub in orient_polygons(constrained_delaunay_triangles(poly)).geoms:
+                    pts = []
+                    for x, y in list(sub.exterior.coords)[:3]:
+                        key = (round(x, 6), round(y, 6))
+                        if key in originals:
+                            z = originals[key]
+                        elif prof.in_gap(x, y):
+                            z = plane(x, y)
+                        elif inside:
+                            z = max(plane(x, y), prof.top_at(x, y) - 0.03)
+                        else:
+                            s = prof.ring.project(Point(x, y))
+                            z = min(plane(x, y), float(np.interp(s, prof.s_vals, prof.foot_z)) + 0.3)
+                        pts.append((round(x, 4), round(y, 4), round(z, 4)))
+                    out.append(pts)
+        return out
+    return None
 
 
 def _clip_triangle_outside(tri_xyz, cuts):
@@ -247,6 +299,7 @@ def build_terrain_tiles(
     bridge_polygons: list[Polygon] | None = None,
     tunnel_corridors: list[tuple[Polygon, float]] | None = None,
     interior_floors: list[tuple[Polygon, float]] | None = None,
+    fortress_profiles: list | None = None,
     tile_size_m: int = DEFAULT_TILE_SIZE_M,
     max_error_m: float = DEFAULT_MAX_ERROR_M,
     max_triangles: int = DEFAULT_MAX_TRIANGLES,
@@ -285,7 +338,48 @@ def build_terrain_tiles(
     ee, nn = np.meshgrid(e_coords, n_coords)
 
     raw_z = elevation.sample_array(ee, nn)
+    # 0. Sprint 13: fill the rampart behind a fortress escarp up to the wall crest (DGM1 models the brick
+    # revetment as a slope). Inside the outline, within fill_band_m of the wall: full fill up to 2 m, then a
+    # linear blend back to the DGM. Applied to raw_z, so the 5 cm TIN tolerance refers to the filled surface.
+    for prof in fortress_profiles or []:
+        band = float(prof.fill_band_m)
+        inside = _rasterize_mask([prof.outline], e_coords, n_coords)
+        core = prof.outline.buffer(-band, join_style="mitre")
+        if not core.is_empty:
+            inside &= ~_rasterize_mask([core] if core.geom_type == "Polygon" else list(core.geoms), e_coords, n_coords)
+        ys, xs = np.nonzero(inside)
+        if len(ys) == 0:
+            continue
+        px = e_coords[xs]
+        py = n_coords[ys]
+        pts = shapely.points(px, py)
+        dist = shapely.distance(prof.ring, pts)
+        s_proj = shapely.line_locate_point(prof.ring, pts)
+        target = np.interp(s_proj, prof.s_vals, prof.top_z) - 0.03
+        w = np.clip((band - dist) / max(band - 2.0, 1e-6), 0.0, 1.0)
+        cur = raw_z[ys, xs]
+        filled = np.maximum(cur, cur * (1.0 - w) + target * w)
+        raw_z[ys, xs] = filled
+        # Outside the wall: the DGM revetment slope reaches up to 3 m into the moat; the wall rises from the
+        # moat floor, so lower that band to the wall foot level (+0.3 m) except at openings (gate, steg).
+        out_band = prof.outline.buffer(3.0, join_style="mitre").difference(prof.outline)
+        omask = _rasterize_mask([out_band] if out_band.geom_type == "Polygon" else list(out_band.geoms), e_coords, n_coords)
+        oys, oxs = np.nonzero(omask)
+        if len(oys):
+            opts = shapely.points(e_coords[oxs], n_coords[oys])
+            os_proj = shapely.line_locate_point(prof.ring, opts)
+            ofoot = np.interp(os_proj, prof.s_vals, prof.foot_z) + 0.3
+            length = prof.ring.length
+            gap_hit = np.zeros(len(oys), dtype=bool)
+            for g0, g1 in prof.gaps or []:
+                for off in (0.0, length, -length):
+                    gap_hit |= (os_proj >= g0 + off - 2.0) & (os_proj <= g1 + off + 2.0)
+            low = ~gap_hit
+            raw_z[oys[low], oxs[low]] = np.minimum(raw_z[oys[low], oxs[low]], ofoot[low])
     mesh_z = raw_z.copy()
+    fortress_clip = [
+        (prof, prep(prof.ring), prof.ring.bounds) for prof in (fortress_profiles or [])
+    ]
     depressed = np.zeros((max_gy + 1, max_gx + 1), dtype=np.bool_)
     has_ceiling = np.zeros((max_gy + 1, max_gx + 1), dtype=np.bool_)
     ceiling_z = np.full((max_gy + 1, max_gx + 1), np.inf, dtype=np.float64)
@@ -469,6 +563,19 @@ def build_terrain_tiles(
                 area2 = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax)
                 if abs(area2) < 1e-6:
                     continue
+                if fortress_clip:
+                    tri_f = [
+                        (ax, ay, float(mesh_z[gy0, gx0])),
+                        (bx, by, float(mesh_z[gy1, gx1])),
+                        (cx, cy, float(mesh_z[gy2, gx2])),
+                    ]
+                    clipped_f = _clip_triangle_at_wall(tri_f, fortress_clip)
+                    if clipped_f is not None:
+                        for sub in clipped_f:
+                            base = len(vertices)
+                            vertices.extend(sub)
+                            triangles.append((base, base + 1, base + 2))
+                        continue
                 if interior_cuts:
                     tri_xyz = [
                         (ax, ay, float(mesh_z[gy0, gx0])),

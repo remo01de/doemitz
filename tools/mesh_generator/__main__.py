@@ -10,7 +10,7 @@ from pathlib import Path
 import re
 
 from shapely import constrained_delaunay_triangles, orient_polygons, set_precision, union_all
-from shapely.geometry import LineString, shape
+from shapely.geometry import LineString, Point, shape
 from shapely.ops import nearest_points
 
 from tools.geo_import.export import geometry_parts, write_json
@@ -20,6 +20,9 @@ from tools.mesh_generator.bridges import build_bridges_mesh
 from tools.mesh_generator.citizens import build_citizens
 from tools.mesh_generator.city_map import render_city_map
 from tools.mesh_generator.economy import build_economy
+from tools.mesh_generator.fortress import (
+    FORTRESS_COLLISION_MESHES, FORTRESS_MATERIALS, FORTRESS_PALETTE, build_fortress_wall,
+)
 from tools.mesh_generator.interiors import INTERIOR_COLLISION_MESHES, INTERIOR_PALETTE, InteriorShell, build_interior
 from tools.mesh_generator.landmarks import add_landmark_building
 from tools.mesh_generator.props import add_street_lamps, add_stylized_trees
@@ -86,6 +89,7 @@ PALETTE = {
     "FoliageMid": (0.15, 0.42, 0.14),
     "FoliageDark": (0.10, 0.30, 0.11),
     **INTERIOR_PALETTE,
+    **FORTRESS_PALETTE,
 }
 WALLS = WALL_STYLES
 ROOFS = ROOF_STYLES
@@ -538,6 +542,58 @@ def build(
         else union_all([], grid_size=STREET_GRID_M)
     )
 
+    # 3b. Fortress escarp (Sprint 13): brick wall on the configured outline with gaps where roads/tunnels cross
+    fortress_reports: list[dict] = []
+    fortress_profiles: list = []
+    fortress_bands: list = []
+    pois_by_id = {f["id"]: f for f in scene["layers"].get("pois", [])}
+    for outline_id, fcfg in sorted((landmarks_config.get("fortress_walls") or {}).items()):
+        feature = pois_by_id.get(f"poi:{outline_id}")
+        if feature is None or elevation.is_flat:
+            continue
+        outline = orient_polygons(shape(feature["geometry"]))
+        ring = LineString(list(outline.exterior.coords))
+        tunnels_by_id = {t.road_id: t for t in road_network.tunnels if t.built}
+        crossing_points: dict[tuple[float, float], dict] = {}
+        for road in roads:
+            geom = shape(road["geometry"])
+            if not geom.intersects(ring):
+                continue
+            inter = geom.intersection(ring)
+            for pt in getattr(inter, "geoms", [inter]):
+                if pt.geom_type != "Point":
+                    continue
+                key = (round(pt.x, 1), round(pt.y, 1))
+                entry = crossing_points.setdefault(key, {"point": pt, "width": 0.0, "roads": [], "approach": None})
+                tags = road["properties"]
+                width = road_width(tags)[0] + float(fcfg.get("gap_extra_width_m", 1.0))
+                if road["id"] in tunnels_by_id:
+                    pcfg = landmark_tunnel_portals.get(road["id"], {})
+                    width = max(width, float(pcfg.get("portal_wall_width_m", width)))
+                entry["width"] = max(entry["width"], width)
+                entry["roads"].append(road["id"])
+                # Surface approach from the wall gap to a walk-in tunnel portal gets brick cheek walls
+                if tags.get("tunnel", "no") == "no" and not is_bridge_road(tags):
+                    inside = geom.intersection(outline)
+                    for tunnel in tunnels_by_id.values():
+                        ends = [Point(tunnel.coords[0]), Point(tunnel.coords[-1])]
+                        if not inside.is_empty and any(inside.distance(e) < 0.05 for e in ends):
+                            line = inside if inside.geom_type == "LineString" else max(inside.geoms, key=lambda g: g.length)
+                            entry["approach"] = (line, road_width(tags)[0] * 0.5)
+        crossings = [
+            (e["point"], e["width"], ",".join(sorted(e["roads"])), e["approach"])
+            for _, e in sorted(crossing_points.items())
+        ]
+        rep_f, profile = build_fortress_wall(
+            meshes, outline, {**fcfg, "outline_id": outline_id}, elevation, water_surfaces, crossings,
+            road_z_fn=road_network.road_surface_z,
+        )
+        fortress_reports.append(rep_f)
+        fortress_profiles.append(profile)
+        fortress_bands.append(ring.buffer(3.0))
+    if fortress_bands:
+        bridge_exclusion_zone = union_all([bridge_exclusion_zone, *fortress_bands], grid_size=STREET_GRID_M)
+
     # 4. Terrain mesh: simplified 64 m tiles for DGM1, single flat plane for flat_placeholder
     # Under bridges, terrain is NOT depressed for the road and water is NOT cut out.
     terrain_tiles: dict[str, dict] = {}
@@ -563,7 +619,8 @@ def build(
             building_entries=building_entries,
             road_ground_z_fn=road_network.ground_elevation_at,
             bridge_polygons=bridge_footprints,
-            tunnel_corridors=tunnel_corridors,
+            tunnel_corridors=tunnel_corridors + [c for prof in fortress_profiles for c in (prof.corridors or [])],
+            fortress_profiles=fortress_profiles,
             interior_floors=[
                 (shape(scene_building_geoms[e["building_id"]]), float(e["floor_z_m"])) for e in interiors_out
             ],
@@ -588,7 +645,7 @@ def build(
         if road["properties"].get("tunnel", "no") == "no"
     ]
     excluded_for_trees = union_all(
-        [water, *buildings, *road_buffers, *sidewalks, *bridge_footprints],
+        [water, *buildings, *road_buffers, *sidewalks, *bridge_footprints, *fortress_bands],
         grid_size=STREET_GRID_M,
     )
     detailed_road_ids = {
@@ -741,12 +798,14 @@ def build(
         name: {
             "color": PALETTE[name],
             **({"material": name.replace("Gable", "Walls", 1)} if name in GABLE_STYLES else {}),
+            **({"material": FORTRESS_MATERIALS[name]} if name in FORTRESS_MATERIALS else {}),
             "collision": (
                 name in {"Terrain", "Sidewalks", "Roads", "Paving", "Paths"}
                 or name in WALLS
                 or name in GABLE_STYLES
                 or name in ROOFS
                 or name in INTERIOR_COLLISION_MESHES
+                or name in FORTRESS_COLLISION_MESHES
             ),
             "vertices": mesh.vertices,
             "triangles": mesh.triangles,
@@ -797,6 +856,7 @@ def build(
         },
         "bridges": bridges_report,
         "tunnel_portals": tunnel_portals_report,
+        "fortress_walls": fortress_reports,
         "interiors": interiors_out,
         "interiors_summary": {
             "count": len(interiors_out),
