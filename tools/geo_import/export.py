@@ -15,7 +15,9 @@ from tools.geo_transform.local import LocalFrame
 from tools.validation.scene import reference_measurement, validate
 
 
-LAYERS = ("roads", "buildings", "water", "pois")
+LAYERS = ("roads", "buildings", "water", "pois", "walls")
+WALL_BARRIERS = ("wall", "city_wall", "retaining_wall")
+WALL_TAGS = ("barrier", "height", "material", "name", "wall", "historic")
 AREA_TAGS = (
     "building", "building:levels", "height", "roof:shape", "roof:height",
     "name", "natural", "water", "waterway",
@@ -52,14 +54,14 @@ def clipped_geometry(geometry, bounds, is_area: bool):
 
 def add_feature(layer, element_type, osm_id, attributes, geometry, bounds, layers, issues):
     feature_id = f"osm:{element_type}:{osm_id}"
-    is_area = layer != "roads"
+    is_area = layer not in ("roads", "walls")
     geometry, repaired = clipped_geometry(geometry, bounds, is_area)
     if repaired:
         action = "repaired invalid source geometry" if geometry is not None else "no usable geometry after repair"
         issues.append({"id": feature_id, "reason": action})
     if geometry is None:
         return False
-    keys = AREA_TAGS if is_area else ROAD_TAGS
+    keys = AREA_TAGS if is_area else (WALL_TAGS if layer == "walls" else ROAD_TAGS)
     layers[layer].append(
         {
             "type": "Feature",
@@ -165,6 +167,11 @@ def extract(config: dict, raw_dir: Path):
                     issues.append({"id": f"osm:way:{way_id}", "reason": "degenerate road way"})
                     continue
                 add_feature("roads", "way", way_id, attributes, LineString(coordinates), bounds, layers, issues)
+        elif not layer and attributes.get("barrier") in WALL_BARRIERS and attributes.get("area") != "yes":
+            # Sprint 13: free-standing walls (fortress gorge walls, garden walls) with their OSM height
+            coordinates = dataset.way_coordinates(way)
+            if len(set(coordinates)) >= 2:
+                add_feature("walls", "way", way_id, attributes, LineString(coordinates), bounds, layers, issues)
         elif not layer and osm.is_poi(attributes) and way_id not in relation_outers["pois"]:
             coordinates = dataset.way_coordinates(way)
             if len(coordinates) >= 4 and coordinates[0] == coordinates[-1]:
@@ -239,6 +246,16 @@ def build(config: dict, raw_dir: Path, output_dir: Path, terrain_mode: str = "dg
                 [node_id_by_local.get((round(pt[0], 4), round(pt[1], 4))) for pt in line]
                 for line in geom["coordinates"]
             ]
+    # Gate nodes (barrier=gate) on a wall become openings in that wall
+    for feature in local_layers["walls"]:
+        way = dataset.ways.get(int(feature["id"].rsplit(":", 1)[1]))
+        gates = []
+        for nid in (osm.node_ids(way) if way is not None else []):
+            ntags = dataset.node_tags.get(nid, {})
+            if ntags.get("barrier") in ("gate", "entrance") and nid in dataset.nodes:
+                east, north = frame.xy(*dataset.nodes[nid])
+                gates.append({"id": f"osm:node:{nid}", "position_m": [round(east, 4), round(north, 4)], "barrier": ntags["barrier"]})
+        feature["gates"] = gates
     validate(local_layers)
     crossings = []
     entrances = []

@@ -15,6 +15,7 @@ Sprint 12 war als `37423b9` auf `main` committet. Die Sichtprüfung der Sprint-1
 | --- | --- |
 | Festungstor | Ursache: Die Zufahrt in die Festung ist in OSM der Tunnelweg `osm:way:120431987` (`tunnel=yes`, `layer=-1`, 26,5 m, mit Knick). Der Generator ließ Tunnel aus und baute nur den in Sprint 12 konfigurierten NW-Steg-Gang. Zudem lag DGM1 über dem Torweg auf der Wallkrone (20,1 bis 22,3 m NHN), die 8 m lange Zufahrt `osm:way:416256368` stieg daher von 16,1 auf 22,3 m an. Jetzt gilt allgemein: Für jeden in `tunnel_portals` konfigurierten Tunnel liegt der Boden an jedem Ende auf der niedrigsten DGM-Höhe der direkt anschließenden Straße innerhalb von 15 m (`tunnel_approach_min_dgm`). Die Zufahrt wird linear darauf abgesenkt, und die Brückenwiderlager übernehmen diese Höhe (`tunnel_floor`). Das Gewölbe folgt der OSM-Linie samt Knick, eine Rasenkappe schließt die Wallkrone auf DGM-Höhe, und die Portalwand reicht bis an die Wallkrone. Ergebnis: Torweg 16,32 → 16,00 m NHN (1,21 %), Zufahrt 0,55 %, Grabenbrücken 1,78 %. Lichte Weite 3,6 × 3,9 m, als `assumed_sprint13_gate_passage` gekennzeichnet. Die fünf Kasemattengänge (`osm:way:1312288189` bis `…194`) stehen mit Grund unter `tunnels_not_built` im Report. |
 | Festungsmauer (Nachtrag) | Rückmeldung des Product Owners: Die Festung stand ohne Festungsmauer da. DGM1 bildet die Backstein-Futtermauer am Graben als grünen Steilhang ab. Neues Modul `tools/mesh_generator/fortress.py`, konfiguriert unter `fortress_walls` in [`doemitz-altstadt-landmarks.json`](../data/manifests/doemitz-altstadt-landmarks.json). Die Mauerlinie ist der OSM-Umriss `osm:way:42318561` (`historic=castle`), der genau auf dem Innenrand des Festungsgrabens liegt. Die Mauer beginnt 0,6 m unter dem Grabenwasserspiegel und reicht bis zur DGM-Höhe 1–3 m hinter der Linie (über 10 m geglättet, mindestens 2,5 m hoch), also 2,5–11,9 m Höhe auf 785,7 m Länge. Dazu kommen Backsteinabdeckung, ein Gesims 0,9 m unter der Krone und Scharten in den kurzen Flanken nach den Fotos `ref_festung_mauer` und `ref_festung_bastion_held`. Öffnungen gibt es nur dort, wo Wege die Linie kreuzen: am Tor (4,5 m, mit Backsteinwangen bis zum Torportal) und am NW-Steg (5,4 m, Tunnelportal). Das Gelände wird hinter der Mauer bis zur Krone aufgefüllt (4-m-Band) und davor auf Grabenhöhe gesenkt. Die Geländedreiecke werden exakt an der Mauerlinie geteilt, sonst ragten schräge Rasenkeile vor die Mauer. Das Geländebudget steigt dafür versioniert von 150.000 auf 155.000 Dreiecke (`terrain_max_triangles`, Ergebnis 152.073). Die Fotos unter `Images/Festung/` haben teils unbekannte Lizenzen; sie dienten nur als Vorlage und sind nicht im Repository. Im Referenzmanifest stehen die beiden Commons-Fotos mit Urheber und Lizenz. |
+| Mauern, Torbau und Sandsteintor (Nachtrag 2) | Der OSM-Export liefert jetzt eine Ebene `walls` (`barrier=wall`/`city_wall`/`retaining_wall` mit Höhe und den `barrier=gate`-Knoten auf der Mauer), gebaut von `tools/mesh_generator/walls.py`. Mauern mit mindestens 1,5 m Geländesprung gelten als Stützmauern: nur die tiefe Seite zeigt Backstein, das Gelände wird oben bis zur Krone aufgefüllt, unten bis zum Fuß gesenkt und an der Mauerlinie geteilt. Öffnungen entstehen an kreuzenden Wegen; ein Tor-Knoten in einer frei stehenden Mauer wird zum Torbogen. Gebaut sind 10 Mauern. Die **Kehlmauer der Bastion Drache** (`osm:way:416256358`, 5 m laut OSM) hat Zinnen, Scharten, zwei Rundtürme mit Kegeldach und einen Torbogen am Knoten `osm:node:4173552055`, nach dem Foto `ref_festung_drache_kehlmauer`. Die **innere Tormauer** (`osm:way:416256360`, 6 m) trägt den Knoten `osm:node:4170573071` „Sandsteintor" (1565); das Torwegportal dort ist jetzt aus Sandstein mit Pilastern, Gebälk und Stufengiebel (`end_styles: sandstone_aedicula`). Der kleine **Torvorhof** zwischen Escarpe und Tormauer bleibt eben auf Torhöhe, die Hilfs-Torwangen entfallen. An der Zugbrücke steht ein **Torbau** mit Durchgang (3,8 m), Pfeilern, Steinband und Satteldach nach dem Foto `ref_festung_zugbruecke`; die Escarpe hat einen grauen Steinsockel bis 1,8 m über dem Grabenwasser. |
 | Wallstraße 6 | Ursache: Der LoD2-Import nahm bei Sattel-, Walm- und Flachdächern die tiefste Kante aller Dachflächen als Traufe. Wallstraße 6 (`osm:way:198050053`, `DEMVAL76000gbxna`) hat neben dem 162 m² großen Hauptdach ein 7,7 m² großes Flachdach 0,1 m über dem Boden. Die Traufe ist jetzt für alle Dachformen der flächengewichtete Median der Dachflächen-Unterkanten, wie es bisher nur für die Formen 5000 und 9999 galt. Wallstraße 6: 2,0 m → 8,56 m Traufe bei 12,86 m First. Insgesamt hatten 54 Gebäude eine um mehr als 0,5 m zu niedrige Traufe. |
 | 0 · Sichtfehler | **Schwarze Flecken:** Der Vergleich von vier Renderer-Varianten zeigte, dass die Ursache Distance Field AO ist, nicht die virtuellen Schattenkarten. Die generierten Wände, Dächer und Giebel sind offene, einseitige Hüllen über viele Gebäude, ihre Mesh Distance Fields haben kein gültiges Inneres. Alle generierten Stadt- und Geländemeshes erzeugen deshalb keine Distance Fields mehr (`distance_field_resolution_scale = 0`, `affect_distance_field_lighting = False`). Die Screenshots entstehen jetzt mit eingeschalteter DFAO und sind fleckenfrei. Die schwarze Kirchenschiffdachfläche hatte dieselbe Ursache. **Rathausturm:** Der Turm ist in OSM und LoD2 ein eigenes Gebäude (`osm:way:97118216`, LoD2-Traufe 15,27 m, First 21,25 m). Er war als kleines Giebelhaus gebaut, und die Rathaus-Variante setzte zusätzlich einen Mini-Turm. Neue Variante `rathausturm` nach dem Referenzfoto `ref_rathaus_front`: Backsteinschaft bis zur LoD2-Traufe, vier Wimperge, schlanker Schieferhelm bis zum LoD2-First, Wetterstange. Der Mini-Turm ist entfernt. **Tunnelportal NW-Steg:** Ein Fundament unter der Schwelle ersetzt die beiden „Beine" im Graben. Das schräge Element in der Öffnung war das gerade Gewölbe, das den Knick der OSM-Linie nicht mitging; das Gewölbe folgt jetzt der Linie. **Torbrücke:** Material ist laut Konfiguration und Bild Naturstein; die Angabe „Ziegelbögen" im Sprint-12-Bericht war falsch. **Steinbrücke:** Neue Kamera im Graben östlich der Brücke. |
 | 1 · Türöffnungen | Kaufhaus, Fritz-Reuter-Apotheke und Rathaus haben eine echte Türöffnung in Außen- und Innenwand, mit Laibung, Schwelle, Steinrahmen und unterbrochenem Sockel. Türbreite 1,2 m (Rathaus 1,6 m), Höhe 2,3 m (Rathaus 2,6 m), als Annahme gekennzeichnet. Die Rathaustür sitzt an der realen Tür, die anderen am auf die Fassade projizierten Gehweg-Zugang. Der Eingang des Orts liegt 0,6 m vor der Tür (`interior_door`). Wo der Boden höher liegt als der Gehweg, entstehen Stufen (Rathaus 0,28 m). Die Tür ist ein eigener Actor (`ADoemitzInteriorDoor`). Sie schwingt bei Annäherung nach innen auf, wenn der Ort geöffnet ist, und lässt einen Spieler von innen immer hinaus. Geschlossen blockiert sie, offen hat sie keine Kollision. |
@@ -34,9 +35,10 @@ Sprint 12 war als `37423b9` auf `main` committet. Die Sichtprüfung der Sprint-1
 
 Alle Prüfungen liefen im Worktree auf dem Endstand, mit einer eigenen `.venv`.
 
-1. **Offline-Build und Python-Tests:** `python -m unittest discover -s tests` besteht mit **58 von 58** Tests. Neu sind 14 Tests in `tests/test_sprint13.py`:
+1. **Offline-Build und Python-Tests:** `python -m unittest discover -s tests` besteht mit **59 von 59** Tests. Neu sind 15 Tests in `tests/test_sprint13.py`:
    - Festungstor gebaut, Boden auf Zufahrtshöhe, Neigung ≤ 6 %.
    - Festungsmauer entlang des Umrisses, Öffnungen nur an Tor und NW-Steg, Fuß unter Wasser, Kollision, Referenzen vorhanden.
+   - OSM-Mauern: Kehlmauer Drache frei stehend mit Türmen, Zinnen und Torbogen, innere Tormauer als Stützmauer mit Öffnung am Torweg, Sandsteintor-Stil.
    - Zufahrt und Grabenbrücken eben.
    - Traufe von Wallstraße 6 kommt aus dem Hauptdach.
    - Kein LoD2-Gebäude hat eine 2-m-Traufe unter hohem Dach.
@@ -56,8 +58,8 @@ Alle Prüfungen liefen im Worktree auf dem Endstand, mit einer eigenen `.venv`.
    - `test_sprint11_1`: Das Straßennetz wird mit denselben Tunneln nachgebaut wie im Paket.
 
    Kennzahlen des Pakets:
-   - 184 Meshes mit 340.275 Dreiecken.
-   - Gelände 152.073 Dreiecke (Budget 155.000), maximale Abweichung 4,95 cm.
+   - 184 Meshes mit 344.468 Dreiecken.
+   - Gelände 152.674 Dreiecke (Budget 155.000). maximale Abweichung 4.95 cm.
    - Gebäude 152.624 Dreiecke, vorher 139.520. Der Zuwachs kommt von höheren Wänden bei den 54 korrigierten Trauf-Gebäuden, dem Rathausturm und den Öffnungen.
    - Innenräume 4.274 Dreiecke.
 2. **Editor-Build** (`DoemitzLivingCityEditor Win64 Development`): `Result: Succeeded`.
@@ -68,7 +70,7 @@ Alle Prüfungen liefen im Worktree auf dem Endstand, mit einer eigenen `.venv`.
    - `VerifyInteraction.py`: Das Menü öffnet sich jetzt am Tresen. An der Straßentür wird ein geschlossener Ort weiter abgewiesen.
    - `VerifySaveGame.py`: v7 speichern und laden, Migration v4/v5/v6 → v7, ein entfernter Innenraum führt zum Eingang.
    - `VerifyBridges.py`: NW-Steg → Tunnel `max_dev = 2,27 cm` (≤ 5 cm).
-5. **Win64-Build** (`scripts/Build-Windows.ps1`, Archiv `unreal/DoemitzLivingCity/Saved/Builds/Win64Sprint13` im Hauptverzeichnis, Stand mit Festungsmauer): `BUILD SUCCESSFUL`. Ohne Parameter gestartet: läuft nach 15 s stabil, 1.000 MB Arbeitsspeicher, dann beendet.
+5. **Win64-Build** (`scripts/Build-Windows.ps1`, Archiv `unreal/DoemitzLivingCity/Saved/Builds/Win64Sprint13` im Hauptverzeichnis, Stand mit Festungsmauer): `BUILD SUCCESSFUL`. Ohne Parameter gestartet: läuft nach 15 s stabil, 935 MB Arbeitsspeicher, dann beendet.
 6. **Benchmark `DoemitzLow`** (i5-1135G7 / Iris Xe, 1920×1080, 8 Fahrzeuge):
 
 | Lauf | FPS (Mittel) | Frametime Mittel / p95 / p99 | Frames |
@@ -78,8 +80,10 @@ Alle Prüfungen liefen im Worktree auf dem Endstand, mit einer eigenen `.venv`.
 | Kaufhaus innen, 22:00, 12 Lampen (60 s) | 64,58 | 15,48 / 17,29 / 18,47 ms | 3.875 |
 | Strecke mit Festungsmauer, Lauf 1 (90 s) | 66,86 | 14,96 / 17,20 / 18,23 ms | 6.018 |
 | Strecke mit Festungsmauer, Lauf 2 (90 s) | 64,02 | 15,62 / 20,24 / 30,37 ms | 5.762 |
+| Strecke mit Mauern, Torbau und Sandsteintor, Lauf 1 (90 s) | 72,57 | 13,78 / 15,38 / 16,15 ms | 6.531 |
+| Strecke mit Mauern, Torbau und Sandsteintor, Lauf 2 (90 s) | 72,50 | 13,79 / 15,67 / 16,64 ms | 6.526 |
 
-Ziel ≥ 15 FPS erfüllt. Die ersten drei Läufe entstanden vor der Festungsmauer, die letzten beiden mit ihr. Die Strecke liegt im Mittel 10–16 % über Sprint 12 (58,2 FPS). Die Ursache habe ich nicht isoliert. Naheliegend ist, dass die Stadtmeshes keine Distance Fields mehr erzeugen; belegt ist das nicht.
+Ziel ≥ 15 FPS erfüllt. Die ersten drei Läufe entstanden vor der Festungsmauer, die folgenden mit ihr. Die Strecke liegt 10–25 % über Sprint 12 (58,2 FPS); die Streuung zwischen den Sitzungen ist größer als der Einfluss der Mauern. Die Ursache habe ich nicht isoliert. Naheliegend ist, dass die Stadtmeshes keine Distance Fields mehr erzeugen; belegt ist das nicht.
 
 ## Sichtprüfung
 
@@ -93,7 +97,7 @@ Alle Bilder entstehen mit `CaptureSprint13Screenshots.py` (1280×720, Editor-Spi
 | [04_torbruecke.png](../unreal/DoemitzLivingCity/Saved/Screenshots/Sprint13/04_torbruecke.png) | Torbrücke aus hellem Naturstein mit drei Bögen und zwei Flusspfeilern. |
 | [05_steinbruecke.png](../unreal/DoemitzLivingCity/Saved/Screenshots/Sprint13/05_steinbruecke.png) | Blick aus dem Graben: Gewölbebogen der Steinbrücke mit Durchblick. |
 | [06_nw_steg_tunnelportal.png](../unreal/DoemitzLivingCity/Saved/Screenshots/Sprint13/06_nw_steg_tunnelportal.png) | NW-Steg führt durch eine Öffnung der Festungsmauer in das Backsteinportal, das auf einem durchgehenden Fundament steht; links und rechts Mauer mit Gesims und Scharten. |
-| [07_festungstor_aussen.png](../unreal/DoemitzLivingCity/Saved/Screenshots/Sprint13/07_festungstor_aussen.png) | Von der Zugbrücke: Festungsmauer beiderseits der Toröffnung, Zufahrt zwischen Backsteinwangen, Portalwand, offener Torweg mit Gewölbe. |
+| [07_festungstor_aussen.png](../unreal/DoemitzLivingCity/Saved/Screenshots/Sprint13/07_festungstor_aussen.png) | Von der Zugbrücke: Torbau mit Giebel in der Festungsmauer, dahinter der Torvorhof und das Sandsteintor mit dem Torweg. |
 | [08_festungstor_durchfahrt.png](../unreal/DoemitzLivingCity/Saved/Screenshots/Sprint13/08_festungstor_durchfahrt.png) | Im Torweg: Tonnengewölbe, Boden, am Ende der Festungshof mit Gebäude. An den Portalecken zum Hof ragen kleine Geländekeile ins Bild. |
 | [09_festungstor_hof.png](../unreal/DoemitzLivingCity/Saved/Screenshots/Sprint13/09_festungstor_hof.png) | Vom Hof: Portal mit Durchblick nach draußen, Straße „Auf der Festung" führt hinein. |
 | [10_wallstrasse_6.png](../unreal/DoemitzLivingCity/Saved/Screenshots/Sprint13/10_wallstrasse_6.png) | Wallstraße 6 dreigeschossig mit Satteldach in normalen Proportionen. |
@@ -106,10 +110,12 @@ Alle Bilder entstehen mit `CaptureSprint13Screenshots.py` (1280×720, Editor-Spi
 | [20_tuer_kaufhaus.png](../unreal/DoemitzLivingCity/Saved/Screenshots/Sprint13/20_tuer_kaufhaus.png) | Kaufhaustür mit Rahmen, unterbrochener Sockel, offenes Fenster mit Blick in die Halle. |
 | [21_festungsmauer_bastion_held.png](../unreal/DoemitzLivingCity/Saved/Screenshots/Sprint13/21_festungsmauer_bastion_held.png) | Bastion Held von jenseits des Grabens: Backsteinmauer steigt senkrecht aus dem Wasser, Gesims und Abdeckung, begrünter Wall dahinter. |
 | [22_festungsmauer_graben.png](../unreal/DoemitzLivingCity/Saved/Screenshots/Sprint13/22_festungsmauer_graben.png) | Mauerecke einer Bastion im Graben, Scharte in der Flanke, Mauer folgt der Wallhöhe. |
+| [23_kehlmauer_drache.png](../unreal/DoemitzLivingCity/Saved/Screenshots/Sprint13/23_kehlmauer_drache.png) | Kehlmauer der Bastion Drache vom Hof: Zinnen, Scharten, Torbogen, zwei Rundtürme mit Kegeldach. |
+| [24_sandsteintor.png](../unreal/DoemitzLivingCity/Saved/Screenshots/Sprint13/24_sandsteintor.png) | Sandsteintor aus dem Torvorhof: Sandsteinrahmen, Pilaster, Gebälk und Stufengiebel, dahinter das Tonnengewölbe; links und rechts noch kleine Rasenhügel am Hofrand. |
 
 ## Offen
 
 - Remote-Sicherung erledigt: Das Repository liegt seit Sprint 13 auf GitHub (`remo01de/doemitz`, öffentlich).
-- An der Festungsmauer fehlen noch Ecktürmchen, Poternen und das gemauerte Torhaus; die Mauerkrone folgt dem DGM und ist an Stellen mit niedrigem Wall nur 2,5 m hoch.
+- An der Festungsmauer fehlen noch Poternen und Zierformen des Sandsteintors; die Escarpenkrone folgt dem DGM und ist an Stellen mit niedrigem Wall nur 2,5 m hoch. Am Rand des Torvorhofs stehen kleine Rasenhügel.
 - Kasemattengänge in den Bastionen sind nicht begehbar (Report `tunnels_not_built`).
 - Bei den übrigen Gebäuden können vereinfachte Geländedreiecke am Hang weiterhin innerhalb des Grundrisses ansteigen. Das ist unsichtbar, solange die Gebäude geschlossen sind.

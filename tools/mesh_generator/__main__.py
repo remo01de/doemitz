@@ -20,6 +20,7 @@ from tools.mesh_generator.bridges import build_bridges_mesh
 from tools.mesh_generator.citizens import build_citizens
 from tools.mesh_generator.city_map import render_city_map
 from tools.mesh_generator.economy import build_economy
+from tools.mesh_generator.walls import build_osm_walls
 from tools.mesh_generator.fortress import (
     FORTRESS_COLLISION_MESHES, FORTRESS_MATERIALS, FORTRESS_PALETTE, build_fortress_wall,
 )
@@ -591,6 +592,44 @@ def build(
         fortress_reports.append(rep_f)
         fortress_profiles.append(profile)
         fortress_bands.append(ring.buffer(3.0))
+    # 3c. Free-standing and retaining walls from OSM barrier=wall (walls on the escarp outline are skipped)
+    wall_reports: list[dict] = []
+    wall_steps: list = []
+    if not elevation.is_flat and scene["layers"].get("walls"):
+        outline_rings = [p.ring for p in fortress_profiles]
+        skip_wall_ids = set()
+        for wf in scene["layers"]["walls"]:
+            wl = shape(wf["geometry"])
+            if any(wl.buffer(0.01).within(r.buffer(1.0)) for r in outline_rings):
+                skip_wall_ids.add(wf["id"])
+        wall_reports, wall_steps, wall_bands = build_osm_walls(
+            meshes, scene["layers"]["walls"], landmarks_config.get("walls") or {}, elevation, roads, road_width,
+            road_network.road_surface_z, {t.road_id: t for t in road_network.tunnels if t.built},
+            landmark_tunnel_portals, skip_ids=skip_wall_ids,
+        )
+        fortress_bands.extend(wall_bands)
+        # Gate forecourt: a retaining wall whose ends both sit on the escarp outline cuts off a small court on
+        # its low side; that court stays level at the wall foot (no rampart fill, no slanted terrain).
+        from shapely.ops import split as _split
+        for prof in fortress_profiles:
+            zones = []
+            for step in wall_steps:
+                ends = [Point(step.line.coords[0]), Point(step.line.coords[-1])]
+                if not all(prof.ring.distance(e) < 0.5 for e in ends):
+                    continue
+                pieces = _split(prof.outline, step.line)
+                for piece in getattr(pieces, "geoms", []):
+                    rp = piece.representative_point()
+                    if piece.area < 400.0 and step.side(rp.x, rp.y) < 0:
+                        # court level = wall foot at its opening (the gate), not at its ends on the moat slope
+                        if step.gaps:
+                            g0, g1 = step.gaps[0]
+                            s_mid = 0.5 * (g0 + g1)
+                            zc = float(sorted(step.base_z[abs(step.s_vals - s_mid) <= 4.0])[0]) if any(abs(step.s_vals - s_mid) <= 4.0) else float(sorted(step.base_z)[len(step.base_z) // 2])
+                        else:
+                            zc = float(sorted(step.base_z)[len(step.base_z) // 2])
+                        zones.append((piece, zc + 0.2))
+            prof.flat_zones = zones
     if fortress_bands:
         bridge_exclusion_zone = union_all([bridge_exclusion_zone, *fortress_bands], grid_size=STREET_GRID_M)
 
@@ -621,6 +660,7 @@ def build(
             bridge_polygons=bridge_footprints,
             tunnel_corridors=tunnel_corridors + [c for prof in fortress_profiles for c in (prof.corridors or [])],
             fortress_profiles=fortress_profiles,
+            wall_steps=wall_steps,
             interior_floors=[
                 (shape(scene_building_geoms[e["building_id"]]), float(e["floor_z_m"])) for e in interiors_out
             ],
@@ -857,6 +897,7 @@ def build(
         "bridges": bridges_report,
         "tunnel_portals": tunnel_portals_report,
         "fortress_walls": fortress_reports,
+        "osm_walls": wall_reports,
         "interiors": interiors_out,
         "interiors_summary": {
             "count": len(interiors_out),

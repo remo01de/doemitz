@@ -48,6 +48,9 @@ ALL_SHOTS = [
     # Escarp seen from across the moat (south-west of Bastion Held) and from the drawbridge
     ("21_festungsmauer_bastion_held.png", ue_pos(-262.0, -150.0, 6.0), ue_pos(-240.0, -118.0, 3.0)),
     ("22_festungsmauer_graben.png", ue_pos(-120.0, -110.0, 5.5), ue_pos(-150.0, -80.0, 3.5)),
+    # Gorge wall of Bastion Drache from the courtyard, Sandsteintor from the gate forecourt
+    ("23_kehlmauer_drache.png", ue_pos(-250.0, -27.0, 9.0), ue_pos(-273.0, -25.0, 9.5)),
+    ("24_sandsteintor.png", ue_pos(-167.6, -83.7, 4.9), ue_pos(-162.0, -79.4, 6.0)),
 ]
 # Interior views (day and night), computed from the generated package: camera just inside the door
 _project = Path(unreal.Paths.convert_relative_path_to_full(unreal.Paths.project_dir()))

@@ -35,6 +35,8 @@ COLOR_TUNNEL_BRICK = (0.48, 0.22, 0.16)
 COLOR_TUNNEL_KEYSTONE = (0.62, 0.59, 0.54)
 COLOR_TUNNEL_FLOOR = (0.34, 0.31, 0.27)
 COLOR_RAMPART_TURF = (0.26, 0.36, 0.19)
+COLOR_SANDSTONE = (0.76, 0.68, 0.53)
+COLOR_SANDSTONE_SHADE = (0.62, 0.55, 0.43)
 
 
 def resolve_bridge_material(chain: BridgeChain) -> tuple[str, str]:
@@ -350,6 +352,28 @@ def _add_fortress_tunnel_portal_and_passage(
         for side_lat in (-half_cw - 0.35, half_cw):
             _add_prism_along_axis(builder, origin, fwd, right, s_a - 0.06, s_b + 0.06, side_lat, side_lat + 0.35,
                                   ze + spring_h - 0.18, ze + spring_h + 0.14, COLOR_TUNNEL_KEYSTONE, add_top=True)
+        end_style = (portal_cfg.get("end_styles") or {}).get("entry" if is_entry else "exit")
+        if end_style == "sandstone_aedicula":
+            # Renaissance sandstone gate (e.g. Sandsteintor 1565): framed opening, pilasters, entablature, pediment
+            f0, f1 = s_a - 0.32, s_a
+            _add_prism_along_axis(builder, origin, fwd, right, f0 + 0.1, f1, -half_cw - 0.35, -half_cw,
+                                  ze - 0.05, ze + clear_h + 0.1, COLOR_SANDSTONE, add_top=True)
+            _add_prism_along_axis(builder, origin, fwd, right, f0 + 0.1, f1, half_cw, half_cw + 0.35,
+                                  ze - 0.05, ze + clear_h + 0.1, COLOR_SANDSTONE, add_top=True)
+            _add_prism_along_axis(builder, origin, fwd, right, f0 + 0.1, f1, -half_cw - 0.35, half_cw + 0.35,
+                                  ze + clear_h - 0.2, ze + clear_h + 0.25, COLOR_SANDSTONE, add_top=True)
+            for side in (-1.0, 1.0):
+                lat0 = side * (half_cw + 0.55)
+                lat1 = side * (half_cw + 1.05)
+                _add_prism_along_axis(builder, origin, fwd, right, f0, f1, min(lat0, lat1), max(lat0, lat1),
+                                      ze - 0.05, ze + clear_h + 0.7, COLOR_SANDSTONE_SHADE, add_top=True)
+            ent_hw = half_cw + 1.25
+            _add_prism_along_axis(builder, origin, fwd, right, f0 - 0.08, f1, -ent_hw, ent_hw,
+                                  ze + clear_h + 0.7, ze + clear_h + 1.15, COLOR_SANDSTONE, add_top=True)
+            for k, (hw, dz) in enumerate(((ent_hw - 0.2, 0.35), (ent_hw * 0.62, 0.35), (ent_hw * 0.3, 0.35))):
+                zp = ze + clear_h + 1.15 + 0.35 * k
+                _add_prism_along_axis(builder, origin, fwd, right, f0, f1, -hw, hw, zp, zp + dz,
+                                      COLOR_SANDSTONE if k % 2 == 0 else COLOR_SANDSTONE_SHADE, add_top=True)
 
     corridor_poly = LineString(coords).buffer(corridor_half_w, quad_segs=1, cap_style="flat", join_style="mitre")
     floor_ref_z = min(tunnel.portal_z_m[0], tunnel.portal_z_m[1])

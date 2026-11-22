@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from math import ceil
+from math import ceil, hypot
 from typing import Callable
 
 import numpy as np
 import shapely
 from shapely import constrained_delaunay_triangles, contains_xy, delaunay_triangles, get_coordinates, orient_polygons
-from shapely.geometry import MultiPoint, Point, Polygon
+import shapely.ops
+from shapely.geometry import LineString, MultiPoint, Point, Polygon
 from shapely.prepared import prep
 
 from tools.geo_transform.terrain import ElevationModel
@@ -17,6 +18,62 @@ from tools.geo_transform.terrain import ElevationModel
 DEFAULT_TILE_SIZE_M = 64
 DEFAULT_MAX_ERROR_M = 0.05
 DEFAULT_MAX_TRIANGLES = 150000
+
+
+def _clip_triangle_at_step(tri_xyz, clips):
+    """Split a terrain triangle crossed by a retaining wall line; new vertices take crest (high) or foot (low)."""
+    xs = [p[0] for p in tri_xyz]
+    ys = [p[1] for p in tri_xyz]
+    for step, line_prep, lb in clips:
+        if max(xs) < lb[0] or min(xs) > lb[2] or max(ys) < lb[1] or min(ys) > lb[3]:
+            continue
+        tri = Polygon([(p[0], p[1]) for p in tri_xyz])
+        if abs(tri.area) < 1e-9 or not line_prep.intersects(tri):
+            continue
+        # extend the line a little so it cuts through triangles at its ends
+        coords = list(step.line.coords)
+        (x0, y0), (x1, y1) = coords[0], coords[1]
+        (xa, ya), (xb, yb) = coords[-2], coords[-1]
+        d0 = hypot(x1 - x0, y1 - y0) or 1.0
+        d1 = hypot(xb - xa, yb - ya) or 1.0
+        ext = LineString([(x0 - (x1 - x0) / d0 * 0.5, y0 - (y1 - y0) / d0 * 0.5)] + coords +
+                         [(xb + (xb - xa) / d1 * 0.5, yb + (yb - ya) / d1 * 0.5)])
+        parts = shapely.ops.split(tri, ext)
+        if len(parts.geoms) < 2:
+            return None
+        (px0, py0, pz0), (px1, py1, pz1), (px2, py2, pz2) = tri_xyz
+        det = (py1 - py2) * (px0 - px2) + (px2 - px1) * (py0 - py2)
+
+        def plane(x, y):
+            if abs(det) < 1e-12:
+                return pz0
+            w0 = ((py1 - py2) * (x - px2) + (px2 - px1) * (y - py2)) / det
+            w1 = ((py2 - py0) * (x - px2) + (px0 - px2) * (y - py2)) / det
+            return w0 * pz0 + w1 * pz1 + (1.0 - w0 - w1) * pz2
+
+        originals = {(round(p[0], 6), round(p[1], 6)): p[2] for p in tri_xyz}
+        out = []
+        for part in parts.geoms:
+            if part.area < 1e-6:
+                continue
+            rp = part.representative_point()
+            high = step.side(rp.x, rp.y) > 0
+            for sub in orient_polygons(constrained_delaunay_triangles(part)).geoms:
+                pts = []
+                for x, y in list(sub.exterior.coords)[:3]:
+                    key = (round(x, 6), round(y, 6))
+                    if key in originals:
+                        z = originals[key]
+                    elif step.in_gap(x, y) or step.line.distance(Point(x, y)) > 0.05:
+                        z = plane(x, y)
+                    elif high:
+                        z = max(plane(x, y), step.at(step.top_z, x, y) - 0.03)
+                    else:
+                        z = min(plane(x, y), step.at(step.base_z, x, y) + 0.05)
+                    pts.append((round(x, 4), round(y, 4), round(z, 4)))
+                out.append(pts)
+        return out
+    return None
 
 
 def _clip_triangle_at_wall(tri_xyz, clips):
@@ -58,6 +115,8 @@ def _clip_triangle_at_wall(tri_xyz, clips):
                             z = originals[key]
                         elif prof.in_gap(x, y):
                             z = plane(x, y)
+                        elif inside and prof.flat_z(x, y) is not None:
+                            z = prof.flat_z(x, y)
                         elif inside:
                             z = max(plane(x, y), prof.top_at(x, y) - 0.03)
                         else:
@@ -300,6 +359,7 @@ def build_terrain_tiles(
     tunnel_corridors: list[tuple[Polygon, float]] | None = None,
     interior_floors: list[tuple[Polygon, float]] | None = None,
     fortress_profiles: list | None = None,
+    wall_steps: list | None = None,
     tile_size_m: int = DEFAULT_TILE_SIZE_M,
     max_error_m: float = DEFAULT_MAX_ERROR_M,
     max_triangles: int = DEFAULT_MAX_TRIANGLES,
@@ -360,6 +420,10 @@ def build_terrain_tiles(
         cur = raw_z[ys, xs]
         filled = np.maximum(cur, cur * (1.0 - w) + target * w)
         raw_z[ys, xs] = filled
+        # level courts inside the outline (gate forecourt between escarp and gate wall)
+        for zone_poly, zone_z in prof.flat_zones or []:
+            zmask_f = _rasterize_mask([zone_poly.buffer(0.6, join_style="mitre")], e_coords, n_coords)
+            raw_z[zmask_f] = zone_z
         # Outside the wall: the DGM revetment slope reaches up to 3 m into the moat; the wall rises from the
         # moat floor, so lower that band to the wall foot level (+0.3 m) except at openings (gate, steg).
         out_band = prof.outline.buffer(3.0, join_style="mitre").difference(prof.outline)
@@ -376,7 +440,32 @@ def build_terrain_tiles(
                     gap_hit |= (os_proj >= g0 + off - 2.0) & (os_proj <= g1 + off + 2.0)
             low = ~gap_hit
             raw_z[oys[low], oxs[low]] = np.minimum(raw_z[oys[low], oxs[low]], ofoot[low])
+    # 0b. Retaining walls from OSM (walls.py): fill the high side up to the crest, lower the low side to the foot
+    for step in wall_steps or []:
+        zone = step.line.buffer(max(step.fill_band_m, step.low_band_m), cap_style="flat")
+        zmask = _rasterize_mask([zone], e_coords, n_coords)
+        zys, zxs = np.nonzero(zmask)
+        if len(zys) == 0:
+            continue
+        zp = shapely.points(e_coords[zxs], n_coords[zys])
+        dist = shapely.distance(step.line, zp)
+        s_proj = shapely.line_locate_point(step.line, zp)
+        top_v = np.interp(s_proj, step.s_vals, step.top_z) - 0.03
+        base_v = np.interp(s_proj, step.s_vals, step.base_z) + 0.05
+        sides = np.array([step.side(float(x), float(y)) for x, y in zip(e_coords[zxs], n_coords[zys])])
+        in_gap = np.zeros(len(zys), dtype=bool)
+        for g0, g1 in step.gaps:
+            in_gap |= (s_proj >= g0 - 1.0) & (s_proj <= g1 + 1.0)
+        cur = raw_z[zys, zxs]
+        w_hi = np.clip((step.fill_band_m - dist) / max(step.fill_band_m - 1.5, 1e-6), 0.0, 1.0)
+        hi = (sides > 0) & ~in_gap
+        lo = (sides < 0) & ~in_gap & (dist <= step.low_band_m)
+        new = cur.copy()
+        new[hi] = np.maximum(cur[hi], cur[hi] * (1.0 - w_hi[hi]) + top_v[hi] * w_hi[hi])
+        new[lo] = np.minimum(cur[lo], base_v[lo])
+        raw_z[zys, zxs] = new
     mesh_z = raw_z.copy()
+    step_clip = [(step, prep(step.line), step.line.bounds) for step in (wall_steps or [])]
     fortress_clip = [
         (prof, prep(prof.ring), prof.ring.bounds) for prof in (fortress_profiles or [])
     ]
@@ -563,6 +652,19 @@ def build_terrain_tiles(
                 area2 = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax)
                 if abs(area2) < 1e-6:
                     continue
+                if step_clip:
+                    tri_s = [
+                        (ax, ay, float(mesh_z[gy0, gx0])),
+                        (bx, by, float(mesh_z[gy1, gx1])),
+                        (cx, cy, float(mesh_z[gy2, gx2])),
+                    ]
+                    clipped_s = _clip_triangle_at_step(tri_s, step_clip)
+                    if clipped_s is not None:
+                        for sub in clipped_s:
+                            base = len(vertices)
+                            vertices.extend(sub)
+                            triangles.append((base, base + 1, base + 2))
+                        continue
                 if fortress_clip:
                     tri_f = [
                         (ax, ay, float(mesh_z[gy0, gx0])),

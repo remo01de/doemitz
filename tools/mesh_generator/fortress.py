@@ -16,7 +16,7 @@ import numpy as np
 from shapely import orient_polygons
 from shapely.geometry import LineString, Point, Polygon
 
-from tools.mesh_generator.architecture import _add_box_on_wall, _add_quad
+from tools.mesh_generator.architecture import _add_box_on_wall, _add_quad, _add_triangle
 
 
 FORTRESS_PALETTE = {
@@ -40,6 +40,13 @@ class FortressWallProfile:
     foot_z: np.ndarray = None
     gaps: list = None  # (s0, s1) ranges along the ring without wall
     corridors: list = None  # (polygon, floor z) walled approach cuts
+    flat_zones: list = None  # (polygon, z) courts inside the outline kept level (gate forecourt)
+
+    def flat_z(self, x: float, y: float):
+        for poly, z in self.flat_zones or []:
+            if poly.covers(Point(x, y)):
+                return z
+        return None
 
     def top_at(self, x: float, y: float) -> float:
         s = self.ring.project(Point(x, y))
@@ -65,6 +72,77 @@ def _cyclic_moving_average(values: np.ndarray, s_vals: np.ndarray, length: float
     return out
 
 
+def _quad_facing(mesh, quad, want_up=None, want_dir=None):
+    """Add a quad, flipping its winding so the normal points up/down (want_up) or along want_dir (x, y)."""
+    (x0, y0, z0), (x1, y1, z1), _, (x3, y3, z3) = quad
+    ux, uy, uz = x1 - x0, y1 - y0, z1 - z0
+    vx, vy, vz = x3 - x0, y3 - y0, z3 - z0
+    nx, ny, nz = uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx
+    flip = False
+    if want_up is not None:
+        flip = (nz < 0) == want_up
+    elif want_dir is not None:
+        flip = (nx * want_dir[0] + ny * want_dir[1]) < 0
+    _add_quad(mesh, *(quad if not flip else [quad[1], quad[0], quad[3], quad[2]]))
+
+
+def _add_gatehouse(walls, coping, roof, ring, length, pt, width, s_closed, top_closed, foot_closed,
+                   depth, cfg, road_z_fn, elevation):
+    """Brick gate front over a wall opening: lintel slab, side piers, stone archivolt and a small gable roof."""
+    s_c = ring.project(pt)
+    g0, g1 = s_c - width * 0.5, s_c + width * 0.5
+    p0, p1 = ring.interpolate(g0 % length), ring.interpolate(g1 % length)
+    tx, ty = p1.x - p0.x, p1.y - p0.y
+    tl = hypot(tx, ty) or 1.0
+    tx, ty = tx / tl, ty / tl
+    nx, ny = ty, -tx  # outward
+    road_z = road_z_fn(pt.x, pt.y) if road_z_fn else float(elevation.sample(pt.x, pt.y))
+    z_open = road_z + float(cfg.get("opening_height_m", 3.8))
+    crest = max(float(np.interp(g0, s_closed, top_closed)), float(np.interp(g1, s_closed, top_closed)))
+    z_top = max(crest + float(cfg.get("above_crest_m", 0.8)), z_open + 1.2)
+    gable_h = float(cfg.get("gable_height_m", 1.6))
+    pier = 0.6
+    front = 0.3
+
+    def P(u, off, z):
+        return (p0.x + tx * u + nx * off, p0.y + ty * u + ny * off, z)
+
+    span = tl
+    u0, u1 = -pier, span + pier
+    out = (nx, ny)
+    inn = (-nx, -ny)
+    # lintel slab over the opening (front, back, soffit)
+    _quad_facing(walls, [P(0, front, z_open), P(span, front, z_open), P(span, front, z_top), P(0, front, z_top)], want_dir=out)
+    _quad_facing(walls, [P(0, -depth, z_open), P(span, -depth, z_open), P(span, -depth, z_top), P(0, -depth, z_top)], want_dir=inn)
+    _quad_facing(walls, [P(0, front, z_open), P(span, front, z_open), P(span, -depth, z_open), P(0, -depth, z_open)], want_up=False)
+    # side piers from below the road to the top, projecting by `front`
+    z_low = road_z - 0.6
+    for a, b in ((u0, 0.0), (span, u1)):
+        _quad_facing(walls, [P(a, front, z_low), P(b, front, z_low), P(b, front, z_top), P(a, front, z_top)], want_dir=out)
+        _quad_facing(walls, [P(a, -depth, z_low), P(b, -depth, z_low), P(b, -depth, z_top), P(a, -depth, z_top)], want_dir=inn)
+        for u, d in ((a, (-tx, -ty)), (b, (tx, ty))):
+            _quad_facing(walls, [P(u, front, z_low), P(u, -depth, z_low), P(u, -depth, z_top), P(u, front, z_top)], want_dir=d)
+    # stone archivolt band and impost blocks
+    _quad_facing(coping, [P(-0.2, front + 0.06, z_open - 0.05), P(span + 0.2, front + 0.06, z_open - 0.05),
+                          P(span + 0.2, front + 0.06, z_open + 0.4), P(-0.2, front + 0.06, z_open + 0.4)], want_dir=out)
+    # gable (front and back triangles) and roof slopes
+    mid = span * 0.5
+    apex = z_top + gable_h
+    for off, d in ((front, out), (-depth, inn)):
+        a, b, c = P(u0, off, z_top), P(u1, off, z_top), P(mid, off, apex)
+        ux, uy, uz = b[0] - a[0], b[1] - a[1], b[2] - a[2]
+        vx, vy, vz = c[0] - a[0], c[1] - a[1], c[2] - a[2]
+        n_x, n_y = uy * vz - uz * vy, uz * vx - ux * vz
+        if n_x * d[0] + n_y * d[1] >= 0:
+            _add_triangle(walls, a, b, c)
+        else:
+            _add_triangle(walls, b, a, c)
+    for ue in (u0 - 0.25, u1 + 0.25):
+        _quad_facing(roof, [P(ue, front + 0.3, z_top - 0.12), P(mid, front + 0.3, apex + 0.12),
+                            P(mid, -depth - 0.3, apex + 0.12), P(ue, -depth - 0.3, z_top - 0.12)], want_up=True)
+    return {"opening_height_m": round(z_open - road_z, 2), "top_z_m": round(apex, 3)}
+
+
 def build_fortress_wall(meshes, outline: Polygon, cfg: dict, elevation, water_polygons, crossings, road_z_fn=None):
     """
     Add the escarp to meshes and return (report, profile). crossings: list of (Point, gap_width_m, label, approach)
@@ -87,6 +165,9 @@ def build_fortress_wall(meshes, outline: Polygon, cfg: dict, elevation, water_po
     emb_spacing = float(cfg.get("embrasure_spacing_m", 7.0))
     emb_max_edge = float(cfg.get("embrasure_max_edge_m", 25.0))
     emb_above_foot = float(cfg.get("embrasure_height_above_foot_m", 2.4))
+    plinth_h = float(cfg.get("stone_plinth_height_m", 0.0))
+    cheek_walls = bool(cfg.get("approach_cheek_walls", True))
+    gatehouse = cfg.get("gatehouse") or {}
 
     # Stations along the ring (every edge densified, corners kept)
     st_xy, st_s, st_edge = [], [], []
@@ -179,6 +260,13 @@ def build_fortress_wall(meshes, outline: Polygon, cfg: dict, elevation, water_po
 
             # outer brick face
             _add_quad(walls, (*pa, za_f), (*pb, zb_f), (*pb, zb_t), (*pa, za_t))
+            # grey stone plinth course from the foot to above the moat water (reference photo Zugbrücke)
+            if plinth_h > 0.0:
+                qa, qb = off(pa, 0.04), off(pb, 0.04)
+                za_p = min(za_t - 1.0, za_f + foot_below_water + plinth_h)
+                zb_p = min(zb_t - 1.0, zb_f + foot_below_water + plinth_h)
+                _add_quad(coping, (*qa, za_f), (*qb, zb_f), (*qb, zb_p), (*qa, za_p))
+                _add_quad(coping, (*qa, za_p), (*qb, zb_p), (*pb, zb_p), (*pa, za_p))
             # coping: front lip, top, back face (hides the terrain fill edge)
             fa, fb = off(pa, 0.06), off(pb, 0.06)
             ia, ib = off(pa, -coping_d), off(pb, -coping_d)
@@ -237,9 +325,16 @@ def build_fortress_wall(meshes, outline: Polygon, cfg: dict, elevation, water_po
 
     # Gate cheek walls along approach roads from the gap to the tunnel portal
     cheek_report = []
+    gatehouse_report = []
     corridors = []  # (polygon, floor z) where the terrain is cut out along walled approaches
     for pt, width, label, approach in crossings:
         if approach is None:
+            continue
+        if gatehouse:
+            gh = _add_gatehouse(walls, coping, meshes.get("RoofsClay", coping), ring, length, pt, width, s_closed,
+                                top_closed, foot_closed, coping_d, gatehouse, road_z_fn, elevation)
+            gatehouse_report.append({"crossing": label, **gh})
+        if not cheek_walls:
             continue
         line, half_w = approach
         pts = list(line.coords)
@@ -292,6 +387,7 @@ def build_fortress_wall(meshes, outline: Polygon, cfg: dict, elevation, water_po
         "built_length_m": round(built, 2),
         "gaps": [{"label": lbl, "width_m": round(w, 2), "s_m": round(0.5 * (g0 + g1), 2)} for g0, g1, lbl, w in gaps],
         "cheek_walls": cheek_report,
+        "gatehouses": gatehouse_report,
         "foot_z_m": [round(float(foot.min()), 3), round(float(foot.max()), 3)],
         "top_z_m": [round(float(top.min()), 3), round(float(top.max()), 3)],
         "height_m": [round(float(heights.min()), 3), round(float(heights.max()), 3)],

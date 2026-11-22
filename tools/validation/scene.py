@@ -16,6 +16,7 @@ def validate(layers: dict) -> None:
     }
     optional = {
         "pois": {"Point", "Polygon", "MultiPolygon"},
+        "walls": {"LineString", "MultiLineString"},
     }
     ids = set()
     for layer, allowed in expected.items():

@@ -68,7 +68,9 @@ class Sprint13Test(unittest.TestCase):
         self.assertGreaterEqual(wall["height_m"][0], 2.5 - 1e-6)
         water = {w["id"]: w["water_level_m"] for w in self.pkg["terrain"]["water_levels"]}
         self.assertLess(wall["foot_z_m"][1], water["osm:relation:2215646"], "wall foot must reach below the moat water")
-        self.assertEqual(len(wall["cheek_walls"]), 1)
+        # Sprint 13 (Nachtrag): the gate forecourt is closed by the real OSM gate wall, so no cheek walls
+        self.assertEqual(len(wall["cheek_walls"]), 0)
+        self.assertEqual(len(wall["gatehouses"]), 1)
         meshes = self.pkg["meshes"]
         for name in ("FortressWalls", "FortressCoping"):
             self.assertTrue(meshes[name]["collision"], name)
@@ -76,6 +78,26 @@ class Sprint13Test(unittest.TestCase):
         refs = {r["id"] for r in _load("doemitz-altstadt-references.json")["references"]}
         for rid in wall["reference_ids"]:
             self.assertIn(rid, refs)
+
+    def test_osm_walls_drache_gorge_wall_gate_wall_and_sandsteintor(self):
+        walls = {w["id"]: w for w in self.pkg["osm_walls"]}
+        drache = walls["osm:way:416256358"]
+        self.assertEqual(drache["kind"], "free_standing")
+        self.assertEqual(drache["osm_height_m"], 5.0)
+        self.assertEqual(len(drache["turrets"]), 2)
+        self.assertTrue(drache["details"].get("crenellations"))
+        self.assertTrue(any(o["kind"] == "gate" and "osm:node:4173552055" in o["label"] for o in drache["openings"]))
+        self.assertLessEqual(drache["height_m"][1], 8.0, "level crest must not follow the moat slope at the ends")
+        gate_wall = walls["osm:way:416256360"]
+        self.assertEqual(gate_wall["kind"], "retaining")
+        self.assertTrue(any("osm:way:120431987" in o["label"] for o in gate_wall["openings"]))
+        gate = next(p for p in self.pkg["tunnel_portals"] if p["road_id"] == "osm:way:120431987")
+        lm = _load("doemitz-altstadt-landmarks.json")
+        self.assertEqual(lm["tunnel_portals"]["osm:way:120431987"]["end_styles"]["exit"], "sandstone_aedicula")
+        self.assertLessEqual(gate["floor_slope_percent"], 6.0)
+        refs = {r["id"] for r in _load("doemitz-altstadt-references.json")["references"]}
+        self.assertIn("ref_festung_drache_kehlmauer", refs)
+        self.assertIn("ref_festung_zugbruecke", refs)
 
     # --- LoD2 eave height ---------------------------------------------------------------------------
     def test_wallstrasse_6_eave_from_main_roof(self):
