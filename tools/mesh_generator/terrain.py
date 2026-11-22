@@ -6,7 +6,7 @@ from math import ceil
 from typing import Callable
 
 import numpy as np
-from shapely import contains_xy, delaunay_triangles, get_coordinates
+from shapely import constrained_delaunay_triangles, contains_xy, delaunay_triangles, get_coordinates, orient_polygons
 from shapely.geometry import MultiPoint, Polygon
 
 from tools.geo_transform.terrain import ElevationModel
@@ -15,6 +15,44 @@ from tools.geo_transform.terrain import ElevationModel
 DEFAULT_TILE_SIZE_M = 64
 DEFAULT_MAX_ERROR_M = 0.05
 DEFAULT_MAX_TRIANGLES = 150000
+
+
+def _clip_triangle_outside(tri_xyz, cuts):
+    """
+    Return None if the triangle does not touch any cut polygon, otherwise the CCW sub-triangles of the part
+    outside all cut polygons (z from the original triangle plane, coordinates rounded like tile vertices).
+    """
+    xs = [p[0] for p in tri_xyz]
+    ys = [p[1] for p in tri_xyz]
+    tb = (min(xs), min(ys), max(xs), max(ys))
+    hits = [c for c, b in cuts if not (b[2] < tb[0] or b[0] > tb[2] or b[3] < tb[1] or b[1] > tb[3])]
+    if not hits:
+        return None
+    tri = Polygon([(p[0], p[1]) for p in tri_xyz])
+    if not any(tri.intersects(c) for c in hits):
+        return None
+    rest = tri
+    for c in hits:
+        rest = rest.difference(c)
+    (x0, y0, z0), (x1, y1, z1), (x2, y2, z2) = tri_xyz
+    det = (y1 - y2) * (x0 - x2) + (x2 - x1) * (y0 - y2)
+
+    def z_at(x, y):
+        if abs(det) < 1e-12:
+            return z0
+        w0 = ((y1 - y2) * (x - x2) + (x2 - x1) * (y - y2)) / det
+        w1 = ((y2 - y0) * (x - x2) + (x0 - x2) * (y - y2)) / det
+        return w0 * z0 + w1 * z1 + (1.0 - w0 - w1) * z2
+
+    out = []
+    parts = [rest] if rest.geom_type == "Polygon" else [g for g in getattr(rest, "geoms", []) if g.geom_type == "Polygon"]
+    for part in parts:
+        if part.is_empty or part.area < 1e-6:
+            continue
+        for sub in orient_polygons(constrained_delaunay_triangles(part)).geoms:
+            pts = list(sub.exterior.coords)[:3]
+            out.append([(round(x, 4), round(y, 4), round(z_at(x, y), 4)) for x, y in pts])
+    return out
 
 
 def _rasterize_mask(
@@ -208,6 +246,7 @@ def build_terrain_tiles(
     road_ground_z_fn: Callable[[float, float], float] | None = None,
     bridge_polygons: list[Polygon] | None = None,
     tunnel_corridors: list[tuple[Polygon, float]] | None = None,
+    interior_floors: list[tuple[Polygon, float]] | None = None,
     tile_size_m: int = DEFAULT_TILE_SIZE_M,
     max_error_m: float = DEFAULT_MAX_ERROR_M,
     max_triangles: int = DEFAULT_MAX_TRIANGLES,
@@ -321,6 +360,16 @@ def build_terrain_tiles(
             building_cut_mask |= tmask
             depressed |= tmask
 
+    # 3c. Walk-in interiors (Sprint 13): terrain triangles are clipped exactly at the outer wall below (see
+    # _clip_triangle_outside). Under ordinary buildings large TIN triangles may rise up the slope inside the
+    # footprint because the walls hide them; inside a room they would poke through the floor.
+    interior_cuts = [
+        (fpoly.buffer(-0.05, join_style="mitre"), fpoly.buffer(-0.05, join_style="mitre").bounds)
+        for fpoly, _ in (interior_floors or [])
+    ]
+    if interior_cuts:
+        building_cut_mask |= _rasterize_mask([c for c, _ in interior_cuts], e_coords, n_coords)
+
     # Open terrain points: strictly non-depressed
     open_mask = ~depressed
     edge_tol = max(0.005, max_error_m - 0.001)
@@ -420,6 +469,19 @@ def build_terrain_tiles(
                 area2 = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax)
                 if abs(area2) < 1e-6:
                     continue
+                if interior_cuts:
+                    tri_xyz = [
+                        (ax, ay, float(mesh_z[gy0, gx0])),
+                        (bx, by, float(mesh_z[gy1, gx1])),
+                        (cx, cy, float(mesh_z[gy2, gx2])),
+                    ]
+                    clipped = _clip_triangle_outside(tri_xyz, interior_cuts)
+                    if clipped is not None:
+                        for sub in clipped:
+                            base = len(vertices)
+                            vertices.extend(sub)
+                            triangles.append((base, base + 1, base + 2))
+                        continue
                 ia, ib, ic = get_v(*p0), get_v(*p1), get_v(*p2)
                 if area2 > 0.0:
                     triangles.append((ia, ib, ic))

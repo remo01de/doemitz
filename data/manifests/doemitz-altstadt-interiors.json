@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "scene_id": "doemitz-altstadt",
+  "description": "Begehbare Erdgeschoss-Innenräume (Sprint 13). Grundriss = OSM-Gebäudeumriss; Raumaufteilung, Einrichtung, Wandstärke, Tür- und Deckenmaße sind Annahmen, weil es keine öffentlichen Grundrisse gibt.",
+  "assumptions": {
+    "source": "assumed_sprint13_interior_layout",
+    "wall_thickness_m": 0.4,
+    "door_width_m": 1.2,
+    "door_height_m": 2.3,
+    "door_sill_step_m": 0.15,
+    "notes": "Türposition: Kaufhaus und Apotheke am Gehweg-Zugangspunkt aus Sprint 3 auf die nächste Fassade projiziert (Annahme), Rathaus an der realen Tür laut Referenzfoto (landmarks real_entrance_local_m). Deckenhöhe = Geschosshöhe des Fassadengenerators."
+  },
+  "interiors": [
+    {
+      "id": "interior:place_kaufhaus",
+      "name": "Kaufhaus – Verkaufsraum",
+      "building_id": "osm:way:168171467",
+      "place_id": "place_kaufhaus",
+      "room_type": "shop",
+      "template": "kaufhaus_hall",
+      "door_local_m": [45.084, -141.459],
+      "door_source": "assumed_projected_sidewalk_access"
+    },
+    {
+      "id": "interior:apotheke",
+      "name": "Fritz-Reuter-Apotheke – Offizin",
+      "building_id": "osm:way:168171462",
+      "place_id": "poi:osm:node:1794647095",
+      "room_type": "pharmacy",
+      "template": "pharmacy",
+      "door_local_m": [-97.045, -208.397],
+      "door_source": "assumed_projected_sidewalk_access"
+    },
+    {
+      "id": "interior:rathaus_buergerbuero",
+      "name": "Rathaus – Bürgerbüro",
+      "building_id": "osm:way:41020272",
+      "place_id": "poi:osm:way:41020272",
+      "room_type": "office",
+      "template": "buergerbuero",
+      "door_local_m": [-66.82, -216.75],
+      "door_source": "landmark_reference_door",
+      "door_width_m": 1.6,
+      "door_height_m": 2.6,
+      "min_floor_above_base_m": 0.45
+    }
+  ],
+  "templates": {
+    "kaufhaus_hall": {
+      "counter": {"length_m": 3.0, "depth_m": 0.7, "height_m": 1.0, "distance_from_door_m": 3.2, "lateral_offset_m": 2.6},
+      "wall_units": [
+        {"kind": "shelf", "length_m": 1.8, "depth_m": 0.5, "height_m": 1.9, "levels": 4, "gap_m": 0.3, "max_count": 14}
+      ],
+      "center_gondolas": {"length_m": 4.0, "depth_m": 0.9, "height_m": 1.4, "offsets_m": [-2.4, 2.4]},
+      "door_clearance_m": 2.8,
+      "light_spacing_m": 6.0,
+      "max_lights": 12,
+      "max_visible_citizens": 6
+    },
+    "pharmacy": {
+      "counter": {"length_m": 2.4, "depth_m": 0.65, "height_m": 1.05, "distance_from_door_m": 3.0, "lateral_offset_m": 1.6},
+      "wall_units": [
+        {"kind": "pharmacy_shelf", "length_m": 1.6, "depth_m": 0.4, "height_m": 2.2, "levels": 6, "gap_m": 0.2, "max_count": 8}
+      ],
+      "door_clearance_m": 2.4,
+      "light_spacing_m": 4.0,
+      "max_lights": 4,
+      "max_visible_citizens": 6
+    },
+    "buergerbuero": {
+      "counter": {"length_m": 2.8, "depth_m": 0.8, "height_m": 0.95, "distance_from_door_m": 3.6, "lateral_offset_m": 2.4},
+      "notice_board": true,
+      "wall_units": [
+        {"kind": "chair_row", "length_m": 2.2, "depth_m": 0.5, "height_m": 0.95, "chairs": 4, "gap_m": 0.6, "max_count": 2},
+        {"kind": "file_shelf", "length_m": 1.6, "depth_m": 0.45, "height_m": 2.0, "levels": 5, "gap_m": 0.3, "max_count": 3, "stand_spot": false}
+      ],
+      "door_clearance_m": 2.6,
+      "light_spacing_m": 4.5,
+      "max_lights": 4,
+      "max_visible_citizens": 6
+    }
+  }
+}

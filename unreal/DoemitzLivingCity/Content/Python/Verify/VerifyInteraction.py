@@ -50,8 +50,11 @@ def check(_delta_seconds):
         if ent_id != f"entrance:{APOTHEKE_ID}":
             raise RuntimeError(f"unexpected entrance_id: {ent_id}")
 
-        # Move player right to the Apotheke entrance (within 2 m)
-        pawn.set_actor_location(ent_loc + unreal.Vector(40.0, 0.0, 90.0), False, True)
+        # Sprint 13: the Apotheke has a walk-in interior; while open the menu waits at the counter inside
+        counter_loc = sub.get_place_interaction_location(APOTHEKE_ID)
+        if (counter_loc - ent_loc).length() < 150.0:
+            raise RuntimeError("expected the Apotheke interaction point at the counter inside, not at the street door")
+        pawn.set_actor_location(counter_loc + unreal.Vector(20.0, 0.0, 92.0), False, True)
 
         # 1. Monday 10:00 (open until 12:30)
         sub.set_day_number(1)
@@ -81,7 +84,8 @@ def check(_delta_seconds):
         if interaction.is_menu_open():
             raise RuntimeError("CloseMenu failed to close menu")
 
-        # 2. Sunday 10:00 (closed, opens Monday 08:00) -> entry must be rejected
+        # 2. Sunday 10:00 (closed, opens Monday 08:00) -> entry must be rejected at the street door
+        pawn.set_actor_location(ent_loc + unreal.Vector(0.0, 0.0, 90.0), False, True)
         sub.set_day_number(7)
         sub.set_time_of_day_minutes(600.0)
         interaction.refresh_nearest_entrance()

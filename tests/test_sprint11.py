@@ -156,8 +156,9 @@ class Sprint11TerrainTest(unittest.TestCase):
                     )
             self.assertGreaterEqual(b_max_z, b_min_z)
 
-        # Also check actual exported vertical wall triangles never float above local terrain at their XY
-        checked_walls = 0
+        # Also check actual exported vertical wall edges never float above local terrain at their XY.
+        # Sprint 13: wall strips above door/window openings start higher, so the lowest wall vertex per XY counts.
+        lowest_by_xy = {}
         for mesh_name, mesh in self.package["meshes"].items():
             if not mesh_name.startswith("Walls"):
                 continue
@@ -167,10 +168,11 @@ class Sprint11TerrainTest(unittest.TestCase):
                 # Vertical wall triangles have two vertices sharing (x, y) with different Z (bottom vs eave)
                 for a, b in ((tri[0], tri[1]), (tri[1], tri[2]), (tri[0], tri[2])):
                     if abs(a[0] - b[0]) < 1e-4 and abs(a[1] - b[1]) < 1e-4 and abs(a[2] - b[2]) > 0.5:
-                        z_bot = min(a[2], b[2])
-                        self.assertLessEqual(z_bot, self.elevation.sample(a[0], a[1]) + 0.02)
-                        checked_walls += 1
-        self.assertGreater(checked_walls, 1000)
+                        key = (round(a[0], 3), round(a[1], 3))
+                        lowest_by_xy[key] = min(lowest_by_xy.get(key, 1e9), a[2], b[2])
+        for (x, y), z_bot in lowest_by_xy.items():
+            self.assertLessEqual(z_bot, self.elevation.sample(x, y) + 0.02)
+        self.assertGreater(len(lowest_by_xy), 1000)
 
     def test_road_slopes_and_water_levels_in_report(self):
         re_info = self.package["terrain"]["roads_elevation"]

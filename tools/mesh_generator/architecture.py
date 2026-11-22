@@ -302,9 +302,14 @@ def add_stylized_building(
 
     ground_top_m = base_m if max_ground_m is None else max(base_m, float(max_ground_m))
     slope_span_m = ground_top_m - base_m
+    # Sprint 13: buildings with a walk-in interior get real door/window openings (see interiors.py).
+    interior = override.get("interior")
+    if interior is not None:
+        from tools.mesh_generator.interiors import add_walls_with_openings, add_window_frame_and_glass
 
     # Main wall volume (collidable); foundation starts at lowest terrain under footprint, eave counts from base_m.
-    wall_mesh.add_walls(polygon, height_m, base_m)
+    if interior is None:
+        wall_mesh.add_walls(polygon, height_m, base_m)
 
     # Roof geometry (collidable): use LoD2 ridge_height & roof_shape when provided
     resolved_shape = roof_shape or ("flat" if is_minor and height_m <= 2.9 else "gabled")
@@ -354,9 +359,12 @@ def add_stylized_building(
     floor_h = height_m / floors
     door_z0 = min(ground_top_m, base_m + max(0.0, height_m - 2.45)) if slope_span_m > 0.25 else base_m
 
-    door_placed = False
+    door_placed = interior is not None
+    if interior is not None:
+        interior.ceiling_z = base_m + floor_h - 0.16
+        interior.add_door_frame(stone_mesh)
     ring = list(polygon.exterior.coords)
-    for start, end in zip(ring, ring[1:]):
+    for edge_idx, (start, end) in enumerate(zip(ring, ring[1:])):
         dx = end[0] - start[0]
         dy = end[1] - start[1]
         length = hypot(dx, dy)
@@ -366,8 +374,13 @@ def add_stylized_building(
         # For CCW exterior ring in (east, north), outward normal is (ty, -tx)
         nx, ny = ty, -tx
 
-        # Stone plinth along wall base (extends up past highest slope terrain)
-        _add_box_on_wall(stone_mesh, start[0], start[1], tx, ty, nx, ny, 0.0, length, base_m, plinth_top_m, 0.0, 0.05)
+        # Stone plinth along wall base (extends up past highest slope terrain), interrupted by an interior door
+        door_rng = interior.door_range(edge_idx, 0.14) if interior is not None else None
+        if door_rng is None:
+            _add_box_on_wall(stone_mesh, start[0], start[1], tx, ty, nx, ny, 0.0, length, base_m, plinth_top_m, 0.0, 0.05)
+        else:
+            _add_box_on_wall(stone_mesh, start[0], start[1], tx, ty, nx, ny, 0.0, max(0.0, door_rng[0]), base_m, plinth_top_m, 0.0, 0.05)
+            _add_box_on_wall(stone_mesh, start[0], start[1], tx, ty, nx, ny, min(length, door_rng[1]), length, base_m, plinth_top_m, 0.0, 0.05)
 
         # Horizontal cornice / timber belt between floors and under eaves
         belt_mesh = timber_mesh if has_timber_framing else stone_mesh
@@ -403,6 +416,21 @@ def add_stylized_building(
                 if win_z1 - win_z0 < 0.6:
                     continue
 
+                if interior is not None and fl == 0:
+                    if interior.overlaps_door(edge_idx, u_center - win_w * 0.6, u_center + win_w * 0.6):
+                        continue
+                    if interior.add_window(edge_idx, u_center - win_w * 0.48, u_center + win_w * 0.48, win_z0, win_z1):
+                        op = interior.openings[-1]
+                        add_window_frame_and_glass(
+                            timber_mesh, meshes["WindowGlassClear"], start[0], start[1], tx, ty, nx, ny,
+                            op.u0, op.u1, op.z0, op.z1, wall_thickness_m=interior.wall_thickness_m,
+                        )
+                        if spacing >= 2.2:
+                            shutter_w = 0.38
+                            _add_box_on_wall(shutter_mesh, start[0], start[1], tx, ty, nx, ny, op.u0 - 0.1 - shutter_w, op.u0 - 0.1, op.z0, op.z1, 0.0, 0.08)
+                            _add_box_on_wall(shutter_mesh, start[0], start[1], tx, ty, nx, ny, op.u1 + 0.1, op.u1 + 0.1 + shutter_w, op.z0, op.z1, 0.0, 0.08)
+                        continue
+
                 # Window frame + glass
                 _add_box_on_wall(timber_mesh, start[0], start[1], tx, ty, nx, ny, u_center - win_w * 0.58, u_center + win_w * 0.58, win_z0 - 0.08, win_z1 + 0.08, 0.0, 0.06)
                 _add_box_on_wall(glass_mesh, start[0], start[1], tx, ty, nx, ny, u_center - win_w * 0.48, u_center + win_w * 0.48, win_z0, win_z1, 0.0, 0.075)
@@ -422,3 +450,6 @@ def add_stylized_building(
                 for bay in range(1, bays):
                     u_post = bay * spacing
                     _add_box_on_wall(timber_mesh, start[0], start[1], tx, ty, nx, ny, u_post - 0.07, u_post + 0.07, z_floor, z_floor + floor_h, 0.0, 0.05)
+
+    if interior is not None:
+        add_walls_with_openings(wall_mesh, polygon, height_m, base_m, interior.openings_by_edge())

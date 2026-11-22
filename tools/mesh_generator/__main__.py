@@ -20,6 +20,7 @@ from tools.mesh_generator.bridges import build_bridges_mesh
 from tools.mesh_generator.citizens import build_citizens
 from tools.mesh_generator.city_map import render_city_map
 from tools.mesh_generator.economy import build_economy
+from tools.mesh_generator.interiors import INTERIOR_COLLISION_MESHES, INTERIOR_PALETTE, InteriorShell, build_interior
 from tools.mesh_generator.landmarks import add_landmark_building
 from tools.mesh_generator.props import add_street_lamps, add_stylized_trees
 from tools.mesh_generator.road_elevation import (
@@ -47,6 +48,7 @@ ECONOMY_LAYOUT = ROOT / "data/manifests/doemitz-altstadt-economy.json"
 TASKS_LAYOUT = ROOT / "data/manifests/doemitz-altstadt-tasks.json"
 LANDMARKS_LAYOUT = ROOT / "data/manifests/doemitz-altstadt-landmarks.json"
 REFERENCES_MANIFEST = ROOT / "data/manifests/doemitz-altstadt-references.json"
+INTERIORS_LAYOUT = ROOT / "data/manifests/doemitz-altstadt-interiors.json"
 PALETTE = {
     "Terrain": (0.22, 0.42, 0.14),
     "Water": (0.06, 0.34, 0.42),
@@ -83,6 +85,7 @@ PALETTE = {
     "FoliageLight": (0.24, 0.54, 0.16),
     "FoliageMid": (0.15, 0.42, 0.14),
     "FoliageDark": (0.10, 0.30, 0.11),
+    **INTERIOR_PALETTE,
 }
 WALLS = WALL_STYLES
 ROOFS = ROOF_STYLES
@@ -331,7 +334,7 @@ def build(
     scene, report, sidewalk_widths=None, vehicle_config=None,
     citizens_config=None, default_sidewalk_widths=None, traffic_network_config=None,
     economy_config=None, tasks_config=None, map_output_png=None, scene_dir=None,
-    landmarks_config=None, references_manifest=None,
+    landmarks_config=None, references_manifest=None, interiors_config=None,
 ):
     if scene["schema_version"] != 1 or scene["coordinates"]["local_axes"] != ["east", "north"]:
         raise ValueError("expected scene schema 1 with local [east, north] coordinates")
@@ -392,6 +395,18 @@ def build(
     landmark_bridges = landmarks_config.get("bridges") or {}
     landmark_tunnel_portals = landmarks_config.get("tunnel_portals") or {}
 
+    interior_cfg_by_building = {c["building_id"]: c for c in (interiors_config or {}).get("interiors", [])}
+    interior_templates = (interiors_config or {}).get("templates") or {}
+    interior_assumptions = (interiors_config or {}).get("assumptions") or {}
+    known_building_ids = {f["id"] for f in scene["layers"]["buildings"]}
+    for bid, icfg in interior_cfg_by_building.items():
+        if bid not in known_building_ids:
+            raise ValueError(f"interior {icfg['id']} references unknown building {bid}")
+        if icfg.get("template") not in interior_templates:
+            raise ValueError(f"interior {icfg['id']} references unknown template {icfg.get('template')}")
+    interiors_out: list[dict] = []
+    scene_building_geoms = {f["id"]: f["geometry"] for f in scene["layers"]["buildings"]}
+
     height_sources = Counter()
     buildings = []
     building_entries: list[tuple] = []
@@ -436,11 +451,18 @@ def build(
             else (eave_h if roof_shape == "flat" else round(eave_h + min(3.4, max(1.8, eave_h * 0.36)), 3))
         )
         final_peak_h = resolved_ridge
+        icfg = interior_cfg_by_building.get(feature["id"])
+        if icfg is not None and len(polys) != 1:
+            raise ValueError(f"interior {icfg['id']} needs a single-polygon building, got {len(polys)} parts")
         for polygon in polys:
+            shell = None
+            if icfg is not None:
+                ground_fn = (lambda x, y: base_m) if elevation.is_flat else (lambda x, y: float(elevation.sample(x, y)))
+                shell = InteriorShell(icfg, polygon, round(b_min_z, 4), ground_fn, interior_assumptions)
             if lm_cfg is not None:
                 peak_h = add_landmark_building(
                     meshes, polygon, eave_h, resolved_ridge, roof_shape, ridge_dir,
-                    round(b_min_z, 4), round(b_max_z, 4), lm_cfg,
+                    round(b_min_z, 4), round(b_max_z, 4), lm_cfg, interior=shell,
                 )
                 final_peak_h = max(final_peak_h, peak_h)
             else:
@@ -451,7 +473,10 @@ def build(
                     roof_shape=roof_shape,
                     ridge_direction_deg=ridge_dir,
                     slope_direction_deg=slope_dir,
+                    style_override={"interior": shell} if shell is not None else None,
                 )
+            if shell is not None:
+                interiors_out.append(build_interior(meshes, shell, interior_templates[icfg["template"]]))
             building_entries.append((polygon, b_min_z))
         buildings_report.append({
             "id": feature["id"],
@@ -480,6 +505,7 @@ def build(
     road_network = RoadElevationNetwork(
         elevation, roads, road_width, ROAD_ELEVATION_M, CURB_HEIGHT_M,
         smoothing_window_m=smoothing_window_m,
+        built_tunnel_ids=set(landmark_tunnel_portals),
     )
     road_polygons: list = []
     non_bridge_sidewalks: list = []
@@ -538,6 +564,9 @@ def build(
             road_ground_z_fn=road_network.ground_elevation_at,
             bridge_polygons=bridge_footprints,
             tunnel_corridors=tunnel_corridors,
+            interior_floors=[
+                (shape(scene_building_geoms[e["building_id"]]), float(e["floor_z_m"])) for e in interiors_out
+            ],
             tile_size_m=tile_size_m,
             max_error_m=max_error_m,
             max_triangles=max_triangles,
@@ -641,6 +670,10 @@ def build(
             lat_off = 0.0 if idx_p == 0 else ((-1.2 if idx_p % 2 == 1 else 1.2) * ((idx_p + 1) // 2))
             landmark_entrances[pid] = (ex_out + tx_n * lat_off, ey_out + ty_n * lat_off)
 
+    # Sprint 13: entrances of places with a walk-in interior sit 0.6 m in front of the real door opening.
+    interior_entrances = {
+        entry["place_id"]: (entry["door"]["outside_m"][0], entry["door"]["outside_m"][1]) for entry in interiors_out
+    }
     citizens = None
     if citizens_config:
         citizens = build_citizens(
@@ -650,6 +683,7 @@ def build(
             crossings=road_graph.get("crossings"),
             entrances=scene.get("entrances"),
             landmark_entrances=landmark_entrances,
+            interior_entrances=interior_entrances,
         )
     economy = None
     if economy_config and citizens:
@@ -712,6 +746,7 @@ def build(
                 or name in WALLS
                 or name in GABLE_STYLES
                 or name in ROOFS
+                or name in INTERIOR_COLLISION_MESHES
             ),
             "vertices": mesh.vertices,
             "triangles": mesh.triangles,
@@ -762,6 +797,25 @@ def build(
         },
         "bridges": bridges_report,
         "tunnel_portals": tunnel_portals_report,
+        "interiors": interiors_out,
+        "interiors_summary": {
+            "count": len(interiors_out),
+            "triangle_count": sum(
+                len(compiled_meshes[m]["triangles"]) for m in INTERIOR_PALETTE if m in compiled_meshes
+            ),
+            "manifest": "data/manifests/doemitz-altstadt-interiors.json",
+            "layout_source": "assumed_sprint13_interior_layout",
+        },
+        "tunnels_not_built": [
+            {
+                "road_id": t.road_id,
+                "highway": t.highway,
+                "length_m": round(sum(((b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2) ** 0.5 for a, b in zip(t.coords, t.coords[1:])), 2),
+                "reason": "not_configured_in_landmarks_tunnel_portals",
+            }
+            for t in road_network.tunnels
+            if not t.built
+        ],
         "terrain": {
             "kind": terrain_kind,
             "reference_elevation_m": float(scene["terrain"].get("reference_elevation_m", 0.0)),
@@ -855,12 +909,18 @@ def main():
         ref_layout = json.loads(REFERENCES_MANIFEST.read_text(encoding="utf-8"))
         if scene["id"] == ref_layout.get("scene_id"):
             references_manifest = ref_layout
+    interiors_config = None
+    if INTERIORS_LAYOUT.exists():
+        int_layout = json.loads(INTERIORS_LAYOUT.read_text(encoding="utf-8"))
+        if scene["id"] == int_layout.get("scene_id"):
+            interiors_config = int_layout
     map_png_path = args.scene.with_name("city-map.png")
     package = build(
         scene, report, layout.get("sidewalk_widths_m"), layout.get("vehicle"),
         citizens_config, layout.get("default_sidewalk_widths_m"), layout.get("traffic_network"),
         economy_config, tasks_config, map_output_png=map_png_path, scene_dir=args.scene.parent,
         landmarks_config=landmarks_config, references_manifest=references_manifest,
+        interiors_config=interiors_config,
     )
     package["source_scene_sha256"] = sha256(scene_bytes).hexdigest()
     destination = args.scene.with_name("unreal-city-meshes.json")

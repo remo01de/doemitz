@@ -50,3 +50,4 @@ Das Unreal-Projekt öffnet die Altstadt-Karte als Startlevel. Im Editor startet 
 - [Sprint 11 – Reales Gelände aus DGM1](docs/SPRINT_11.md)
 - [Sprint 11.1 – Brücken auf eigener Höhe](docs/SPRINT_11_1.md)
 - [Sprint 12 – Reale Gebäudehöhen und markante Bauwerke](docs/SPRINT_12.md)
+- [Sprint 13 – Festungstor, Sichtfehler und erste Innenräume](docs/SPRINT_13.md)

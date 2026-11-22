@@ -107,7 +107,7 @@ class DOEMITZLIVINGCITY_API UDoemitzSaveGame : public USaveGame
 	GENERATED_BODY()
 
 public:
-	static constexpr int32 CurrentSchemaVersion = 6;
+	static constexpr int32 CurrentSchemaVersion = 7;
 
 	UPROPERTY(BlueprintReadWrite, Category = "SaveGame")
 	int32 SaveSchemaVersion = CurrentSchemaVersion;
@@ -166,4 +166,11 @@ public:
 
 	UPROPERTY()
 	TArray<FDoemitzSavedParkingOccupancy> ParkingOccupancy;
+
+	// SaveSchemaVersion >= 7: interior the player stood in when saving (NAME_None outdoors)
+	UPROPERTY(BlueprintReadWrite, Category = "SaveGame")
+	FName PlayerInteriorId;
+
+	UPROPERTY(BlueprintReadWrite, Category = "SaveGame")
+	FName PlayerInteriorPlaceId;
 };

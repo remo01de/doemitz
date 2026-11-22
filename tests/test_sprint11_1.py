@@ -36,6 +36,11 @@ class Sprint11_1BridgesTest(unittest.TestCase):
             ROAD_ELEVATION_M,
             CURB_HEIGHT_M,
             smoothing_window_m=float(assumptions.get("road_smoothing_window_m", 12.0)),
+            # Sprint 13: rebuild with the same walk-in tunnels as the package (they fix the drawbridge abutment)
+            built_tunnel_ids=set(
+                (json.loads((ROOT / "data/manifests/doemitz-altstadt-landmarks.json").read_text(encoding="utf-8"))
+                 .get("tunnel_portals") or {})
+            ),
         )
 
     def test_bridge_chains_detected_with_two_abutments_and_osm_tags(self):

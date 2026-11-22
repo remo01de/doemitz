@@ -39,7 +39,7 @@
     {
       "id": "ref_rathaus_front",
       "landmark": "Rathaus",
-      "osm_ids": ["osm:way:41020272"],
+      "osm_ids": ["osm:way:41020272", "osm:way:97118216"],
       "title": "File:TownHall Doemitz.jpg",
       "url": "https://commons.wikimedia.org/wiki/File:TownHall_Doemitz.jpg",
       "author": "Christian Fischer",
@@ -83,7 +83,7 @@
     {
       "id": "ref_festung_entrance_portal",
       "landmark": "Festung Dömitz (Eingangstor & Walldurchgang)",
-      "osm_ids": ["osm:way:416256369", "osm:way:96029967"],
+      "osm_ids": ["osm:way:416256369", "osm:way:120431987", "osm:way:96029967"],
       "title": "File:Doemitz Festung Eingang.jpg",
       "url": "https://commons.wikimedia.org/wiki/File:Doemitz_Festung_Eingang.jpg",
       "author": "Niteshift",
@@ -94,7 +94,7 @@
     {
       "id": "ref_festung_overview",
       "landmark": "Festung Dömitz (Gesamtensemble & Brücken)",
-      "osm_ids": ["osm:way:96029967", "osm:way:96029975", "osm:way:96029976", "osm:way:96029971"],
+      "osm_ids": ["osm:way:96029967", "osm:way:96029975", "osm:way:96029976", "osm:way:96029971", "osm:way:120431987"],
       "title": "File:Dömitz- Festung mit Burggraben und Eingangstor.jpg",
       "url": "https://commons.wikimedia.org/wiki/File:D%C3%B6mitz-_Festung_mit_Burggraben_und_Eingangstor.jpg",
       "author": "Franzfoto",

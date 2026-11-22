@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from math import ceil, cos, hypot, pi, sin
 
+import numpy as np
 from shapely.geometry import LineString, Point, Polygon
 
 from tools.geo_transform.terrain import ElevationModel
@@ -235,79 +236,74 @@ def _add_fortress_tunnel_portal_and_passage(
     tunnel: TunnelWayInfo,
     road_offset_m: float,
     portal_cfg: dict,
+    elevation: ElevationModel | None = None,
 ) -> tuple[Polygon, float, dict]:
     """
-    Build a visible red-brick fortress tunnel portal (Torbogen) and solid walkable vaulted passage
-    along tunnel.coords so the player can walk from the NW-Steg straight into the tunnel with 0 cm step.
+    Build a red-brick fortress passage along the OSM tunnel polyline (bends included): walkable floor,
+    side walls, barrel vault, a turf cap that closes the rampart over the bore at DGM height, and a
+    portal wall at each end that reaches up to the rampart surface.
     """
-    p0 = tunnel.coords[0]
-    p1 = tunnel.coords[-1]
-    dx = p1[0] - p0[0]
-    dy = p1[1] - p0[1]
-    length = max(hypot(dx, dy), 1.0)
-    fx, fy = dx / length, dy / length
-    rx, ry = fy, -fx
-
     clear_w = float(portal_cfg.get("clear_width_m", 2.6))
     clear_h = float(portal_cfg.get("clear_height_m", 3.1))
     portal_w = float(portal_cfg.get("portal_wall_width_m", 5.4))
-    portal_h = float(portal_cfg.get("portal_wall_height_m", 4.4))
+    portal_h_cfg = float(portal_cfg.get("portal_wall_height_m", 4.4))
     half_cw = clear_w * 0.5
-    half_pw = portal_w * 0.5
+    half_pw = max(portal_w * 0.5, half_cw + 0.9)
     wall_thick = 0.65
+    # The terrain cut-out is wider than the bore by more than one 1 m DGM cell, so no terrain triangle
+    # straddling the cut edge can rise into the bore; the turf cap covers the cut-out completely.
+    corridor_half_w = half_cw + wall_thick + 1.6
+    cap_hw = corridor_half_w + 1.25
 
+    coords = [(float(x), float(y)) for x, y in tunnel.coords]
+    pts, cum_s = _densify_polyline(coords, 1.0)
+    length = max(cum_s[-1], 1.0)
+    normals = _station_normals(pts)
     z0 = tunnel.portal_z_m[0] + road_offset_m
     z1 = tunnel.portal_z_m[1] + road_offset_m
 
-    def z_at(s: float) -> float:
+    def z_floor(s: float) -> float:
         return z0 + (s / length) * (z1 - z0)
 
-    def pt(s: float, lat: float, z: float) -> tuple[float, float, float]:
-        return (p0[0] + fx * s + rx * lat, p0[1] + fy * s + ry * lat, z)
+    def at(i: int, lat: float, z: float) -> tuple[float, float, float]:
+        nx, ny = normals[i]
+        return (pts[i][0] + nx * lat, pts[i][1] + ny * lat, z)
 
-    n_steps = max(4, int(ceil(length / 2.0)))
-    for i in range(n_steps):
-        sa = (i / n_steps) * length
-        sb = ((i + 1) / n_steps) * length
-        za = z_at(sa)
-        zb = z_at(sb)
-        # Walkable solid tunnel floor slab (CCW upward)
-        builder.add_quad(
-            pt(sa, -half_cw - 0.1, za), pt(sa, half_cw + 0.1, za),
-            pt(sb, half_cw + 0.1, zb), pt(sb, -half_cw - 0.1, zb),
-            COLOR_TUNNEL_FLOOR,
-        )
+    def dgm(x: float, y: float) -> float | None:
+        if elevation is None or elevation.is_flat:
+            return None
+        return float(elevation.sample(x, y))
 
     spring_h = clear_h * 0.62
     arch_r = clear_h - spring_h
     n_arch = 6
-    for i in range(n_steps):
-        sa = (i / n_steps) * length
-        sb = ((i + 1) / n_steps) * length
-        za = z_at(sa)
-        zb = z_at(sb)
+    min_cover = clear_h + 0.85
 
-        builder.add_quad(
-            pt(sa, -half_cw, za), pt(sb, -half_cw, zb),
-            pt(sb, -half_cw, zb + spring_h), pt(sa, -half_cw, za + spring_h),
-            COLOR_TUNNEL_BRICK,
-        )
-        builder.add_quad(
-            pt(sb, half_cw, zb), pt(sa, half_cw, za),
-            pt(sa, half_cw, za + spring_h), pt(sb, half_cw, zb + spring_h),
-            COLOR_TUNNEL_BRICK,
-        )
-        builder.add_quad(
-            pt(sb, -half_cw - wall_thick, zb - 0.5), pt(sa, -half_cw - wall_thick, za - 0.5),
-            pt(sa, -half_cw - wall_thick, za + clear_h + 0.8), pt(sb, -half_cw - wall_thick, zb + clear_h + 0.8),
-            COLOR_TUNNEL_BRICK,
-        )
-        builder.add_quad(
-            pt(sa, half_cw + wall_thick, za - 0.5), pt(sb, half_cw + wall_thick, zb - 0.5),
-            pt(sb, half_cw + wall_thick, zb + clear_h + 0.8), pt(sa, half_cw + wall_thick, za + clear_h + 0.8),
-            COLOR_TUNNEL_BRICK,
-        )
+    def cap_z(i: int, lat: float) -> float:
+        x, y, _ = at(i, lat, 0.0)
+        top = z_floor(cum_s[i]) + min_cover
+        g = dgm(x, y)
+        return max(top, g + 0.03) if g is not None else top
 
+    for i in range(len(pts) - 1):
+        za = z_floor(cum_s[i]) - 0.01
+        zb = z_floor(cum_s[i + 1]) - 0.01
+        # Walkable floor slab (1 cm under the approach road surface to avoid z-fighting at the portal)
+        builder.add_quad(at(i, -half_cw - 0.1, za), at(i, half_cw + 0.1, za),
+                         at(i + 1, half_cw + 0.1, zb), at(i + 1, -half_cw - 0.1, zb), COLOR_TUNNEL_FLOOR)
+        # Side walls up to the vault springing line (inner faces)
+        builder.add_quad(at(i, -half_cw, za), at(i + 1, -half_cw, zb),
+                         at(i + 1, -half_cw, zb + spring_h), at(i, -half_cw, za + spring_h), COLOR_TUNNEL_BRICK)
+        builder.add_quad(at(i + 1, half_cw, zb), at(i, half_cw, za),
+                         at(i, half_cw, za + spring_h), at(i + 1, half_cw, zb + spring_h), COLOR_TUNNEL_BRICK)
+        # Outer masonry faces (hidden in the rampart, keep the bore closed if terrain is thin)
+        builder.add_quad(at(i + 1, -half_cw - wall_thick, zb - 0.5), at(i, -half_cw - wall_thick, za - 0.5),
+                         at(i, -half_cw - wall_thick, za + clear_h + 0.8), at(i + 1, -half_cw - wall_thick, zb + clear_h + 0.8),
+                         COLOR_TUNNEL_BRICK)
+        builder.add_quad(at(i, half_cw + wall_thick, za - 0.5), at(i + 1, half_cw + wall_thick, zb - 0.5),
+                         at(i + 1, half_cw + wall_thick, zb + clear_h + 0.8), at(i, half_cw + wall_thick, za + clear_h + 0.8),
+                         COLOR_TUNNEL_BRICK)
+        # Barrel vault (faces point down into the bore)
         for k in range(n_arch):
             th0 = pi * (1.0 - k / n_arch)
             th1 = pi * (1.0 - (k + 1) / n_arch)
@@ -315,73 +311,66 @@ def _add_fortress_tunnel_portal_and_passage(
             lat1 = half_cw * cos(th1)
             hz0 = spring_h + arch_r * sin(th0)
             hz1 = spring_h + arch_r * sin(th1)
-            builder.add_quad(
-                pt(sa, lat0, za + hz0), pt(sb, lat0, zb + hz0),
-                pt(sb, lat1, zb + hz1), pt(sa, lat1, za + hz1),
-                COLOR_TUNNEL_BRICK,
-            )
+            builder.add_quad(at(i, lat0, za + hz0), at(i + 1, lat0, zb + hz0),
+                             at(i + 1, lat1, zb + hz1), at(i, lat1, za + hz1), COLOR_TUNNEL_BRICK)
+        # Turf cap closing the terrain cut-out over the bore, following the rampart surface (CCW upward)
+        lats = [-cap_hw, -corridor_half_w, 0.0, corridor_half_w, cap_hw]
+        for la, lb in zip(lats, lats[1:]):
+            builder.add_quad(at(i, la, cap_z(i, la)), at(i, lb, cap_z(i, lb)),
+                             at(i + 1, lb, cap_z(i + 1, lb)), at(i + 1, la, cap_z(i + 1, la)), COLOR_RAMPART_TURF)
 
-        cap_z_a = za + clear_h + 0.85
-        cap_z_b = zb + clear_h + 0.85
-        cap_hw = half_cw + wall_thick + 0.55
-        builder.add_quad(
-            pt(sa, -cap_hw, cap_z_a), pt(sa, cap_hw, cap_z_a),
-            pt(sb, cap_hw, cap_z_b), pt(sb, -cap_hw, cap_z_b),
-            COLOR_RAMPART_TURF,
-        )
-
-    for end_s, is_entry in ((0.0, True), (length, False)):
-        ze = z_at(end_s)
+    portal_tops: list[float] = []
+    for end_idx, is_entry in ((0, True), (len(pts) - 1, False)):
+        ze = z_floor(cum_s[end_idx])
+        # Portal frame reaches the rampart surface (highest cap height across the portal width).
+        top_needed = max(cap_z(end_idx, lat) for lat in (-cap_hw, -half_pw, 0.0, half_pw, cap_hw)) - ze + 0.25
+        portal_h = max(portal_h_cfg, top_needed)
+        portal_tops.append(round(portal_h, 3))
+        tx = pts[end_idx][0] - pts[end_idx + (1 if is_entry else -1)][0]
+        ty = pts[end_idx][1] - pts[end_idx + (1 if is_entry else -1)][1]
+        tl = hypot(tx, ty) or 1.0
+        out_dir = (tx / tl, ty / tl)              # points out of the tunnel
+        fwd = (-out_dir[0], -out_dir[1])          # points into the tunnel
+        right = (fwd[1], -fwd[0])
+        origin = pts[end_idx]
         p_depth = 0.75
-        s_a = end_s - p_depth if is_entry else end_s
-        s_b = end_s if is_entry else end_s + p_depth
-        _add_prism_along_axis(
-            builder, p0, (fx, fy), (rx, ry),
-            s_a, s_b, -half_pw, -half_cw, ze - 3.6, ze + portal_h,
-            COLOR_TUNNEL_BRICK, add_top=True,
-        )
-        _add_prism_along_axis(
-            builder, p0, (fx, fy), (rx, ry),
-            s_a, s_b, half_cw, half_pw, ze - 3.6, ze + portal_h,
-            COLOR_TUNNEL_BRICK, add_top=True,
-        )
-        _add_prism_along_axis(
-            builder, p0, (fx, fy), (rx, ry),
-            s_a, s_b, -half_cw, half_cw, ze + clear_h - 0.15, ze + portal_h,
-            COLOR_TUNNEL_BRICK, add_top=True,
-        )
-        _add_prism_along_axis(
-            builder, p0, (fx, fy), (rx, ry),
-            s_a - 0.08, s_b + 0.08, -half_pw - 0.12, half_pw + 0.12,
-            ze + portal_h, ze + portal_h + 0.28,
-            COLOR_TUNNEL_KEYSTONE, add_top=True,
-        )
-        _add_prism_along_axis(
-            builder, p0, (fx, fy), (rx, ry),
-            s_a - 0.08, s_b + 0.08, -0.32, 0.32,
-            ze + clear_h - 0.25, ze + clear_h + 0.45,
-            COLOR_TUNNEL_KEYSTONE, add_top=True,
-        )
+        s_a, s_b = -p_depth, 0.0
+        for lat_a, lat_b in ((-half_pw, -half_cw), (half_cw, half_pw)):
+            _add_prism_along_axis(builder, origin, fwd, right, s_a, s_b, lat_a, lat_b,
+                                  ze - 3.6, ze + portal_h, COLOR_TUNNEL_BRICK, add_top=True)
+        _add_prism_along_axis(builder, origin, fwd, right, s_a, s_b, -half_cw, half_cw,
+                              ze + clear_h - 0.15, ze + portal_h, COLOR_TUNNEL_BRICK, add_top=True)
+        # Solid foundation under the threshold so the portal stands on a wall, not on two legs (NW-Steg moat edge)
+        _add_prism_along_axis(builder, origin, fwd, right, s_a, s_b, -half_cw, half_cw,
+                              ze - 3.6, ze - 0.03, COLOR_TUNNEL_BRICK, add_top=True)
+        _add_prism_along_axis(builder, origin, fwd, right, s_a - 0.08, s_b + 0.08, -half_pw - 0.12, half_pw + 0.12,
+                              ze + portal_h, ze + portal_h + 0.28, COLOR_TUNNEL_KEYSTONE, add_top=True)
+        _add_prism_along_axis(builder, origin, fwd, right, s_a - 0.08, s_b + 0.08, -0.32, 0.32,
+                              ze + clear_h - 0.25, ze + clear_h + 0.45, COLOR_TUNNEL_KEYSTONE, add_top=True)
         for side_lat in (-half_cw - 0.35, half_cw):
-            _add_prism_along_axis(
-                builder, p0, (fx, fy), (rx, ry),
-                s_a - 0.06, s_b + 0.06, side_lat, side_lat + 0.35,
-                ze + spring_h - 0.18, ze + spring_h + 0.14,
-                COLOR_TUNNEL_KEYSTONE, add_top=True,
-            )
+            _add_prism_along_axis(builder, origin, fwd, right, s_a - 0.06, s_b + 0.06, side_lat, side_lat + 0.35,
+                                  ze + spring_h - 0.18, ze + spring_h + 0.14, COLOR_TUNNEL_KEYSTONE, add_top=True)
 
-    corridor_poly = LineString([p0, p1]).buffer(half_cw + 0.85, quad_segs=1, cap_style="flat")
+    corridor_poly = LineString(coords).buffer(corridor_half_w, quad_segs=1, cap_style="flat", join_style="mitre")
     floor_ref_z = min(tunnel.portal_z_m[0], tunnel.portal_z_m[1])
     report = {
         "road_id": tunnel.road_id,
         "name": portal_cfg.get("name", tunnel.name or "Tunnelportal"),
         "style": portal_cfg.get("style", "fortress_brick_arch"),
+        "highway": tunnel.highway,
         "length_m": round(length, 2),
         "clear_width_m": clear_w,
         "clear_height_m": clear_h,
+        "portal_wall_height_m": portal_tops,
+        "floor_sources": list(tunnel.floor_sources),
+        "floor_slope_percent": round(abs(z1 - z0) / length * 100.0, 2),
         "dimensions_source": portal_cfg.get("dimensions_source", "assumed_sprint12_tunnel_portal"),
-        "entry_point_3d_m": [round(p0[0], 4), round(p0[1], 4), round(z0, 4)],
-        "exit_point_3d_m": [round(p1[0], 4), round(p1[1], 4), round(z1, 4)],
+        "polyline_3d_m": [
+            [round(x, 4), round(y, 4), round(z_floor(_s), 4)]
+            for (x, y), _s in zip(coords, [0.0] + list(np.cumsum([hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(coords, coords[1:])])))
+        ],
+        "entry_point_3d_m": [round(coords[0][0], 4), round(coords[0][1], 4), round(z0, 4)],
+        "exit_point_3d_m": [round(coords[-1][0], 4), round(coords[-1][1], 4), round(z1, 4)],
     }
     return corridor_poly, floor_ref_z, report
 
@@ -633,7 +622,7 @@ def build_bridges_mesh(
         if p_cfg is None:
             continue
         corridor_poly, floor_z, p_rep = _add_fortress_tunnel_portal_and_passage(
-            builder, tunnel, road_offset_m, p_cfg,
+            builder, tunnel, road_offset_m, p_cfg, elevation,
         )
         tunnel_corridors.append((corridor_poly, floor_z))
         tunnel_portals_report.append(p_rep)

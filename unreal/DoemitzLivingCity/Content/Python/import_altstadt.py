@@ -156,6 +156,19 @@ def material(name, color):
     elif name in {"LanternGlow", "PropLanternGlow"}:
         roughness_val = 0.25
         emissive_color = (3.8, 2.6, 1.0)
+    elif name == "InteriorLamp":
+        roughness_val = 0.3
+        emissive_color = (5.0, 4.4, 3.4)
+    elif name == "WindowGlassClear":
+        roughness_val = 0.05
+        metallic_val = 0.0
+        asset.set_editor_property("blend_mode", unreal.BlendMode.BLEND_TRANSLUCENT)
+        asset.set_editor_property("two_sided", True)
+        opacity = unreal.MaterialEditingLibrary.create_material_expression(
+            asset, unreal.MaterialExpressionConstant, -300, 460
+        )
+        opacity.set_editor_property("r", 0.22)
+        unreal.MaterialEditingLibrary.connect_material_property(opacity, "", unreal.MaterialProperty.MP_OPACITY)
 
     roughness = unreal.MaterialEditingLibrary.create_material_expression(
         asset, unreal.MaterialExpressionConstant, -300, 150
@@ -182,6 +195,9 @@ def material(name, color):
         raise RuntimeError(f"Could not save material {path}")
     _MATERIAL_CACHE[name] = asset
     return asset
+
+
+CITY_MESH_NAMES: set[str] = set()
 
 
 def static_mesh(name, source):
@@ -229,8 +245,11 @@ def static_mesh(name, source):
                 "collision_trace_flag",
                 unreal.CollisionTraceFlag.CTF_USE_COMPLEX_AS_SIMPLE,
             )
-    # Disable costly 126^3 voxel Mesh Distance Field generation on tiled terrain meshes (r.Lumen.TraceMeshSDFs=0).
-    if name.startswith("Terrain"):
+    # No Mesh Distance Fields for generated city/terrain meshes (Sprint 13): they are open single-sided
+    # shells (walls, roofs and gables are separate meshes spanning many buildings), so their distance
+    # fields have no valid inside and Distance Field AO painted black blotches onto facades and roofs.
+    # Small closed prop/vehicle/citizen meshes keep their distance fields.
+    if source.get("distance_field", True) is False or name.startswith("Terrain") or name in CITY_MESH_NAMES:
         build_settings = SM_SUB.get_lod_build_settings(asset, 0)
         build_settings.set_editor_property("generate_distance_field_as_if_two_sided", False)
         build_settings.set_editor_property("distance_field_resolution_scale", 0.0)
@@ -741,9 +760,87 @@ def place_citizens(
     )
 
 
+INTERIOR_LIGHT_INTENSITY_CD = 45.0
+
+
+def place_interiors(existing, interiors):
+    """Sprint 13: door actors, ceiling lights and FDoemitzInteriorDefinition structs for walk-in interiors."""
+    door_class = unreal.load_class(None, "/Script/DoemitzLivingCity.DoemitzInteriorDoor")
+    if interiors and not door_class:
+        raise RuntimeError("Build the DoemitzLivingCityEditor target before importing interiors")
+    active_labels = set()
+    structs = []
+    for entry in interiors or []:
+        iid = entry["id"]
+        door = entry["door"]
+        safe = iid.replace(":", "_")
+        leaf_name = f"InteriorDoor_{safe}"
+        leaf_source = {
+            "color": door["leaf_mesh"]["color"],
+            "material": "Doors",
+            "collision": True,
+            "vertices": door["leaf_mesh"]["vertices"],
+            "triangles": door["leaf_mesh"]["triangles"],
+        }
+        leaf_asset = static_mesh(leaf_name, leaf_source)
+        label = f"Altstadt InteriorDoor {iid}"
+        active_labels.add(label)
+        door_actor = place(existing, label, door_class, ue_position(door["hinge_m"]))
+        door_actor.get_editor_property("door_leaf").set_static_mesh(leaf_asset)
+        door_actor.set_editor_property("place_id", entry["place_id"])
+        door_actor.set_editor_property("interior_id", iid)
+        door_actor.set_editor_property("door_center", ue_position(door["center_m"]))
+        inward = door["inward"]
+        door_actor.set_editor_property("inward_direction", unreal.Vector(inward[1], inward[0], 0.0))
+        door_actor.set_editor_property("open_yaw_degrees", float(door["open_yaw_deg"]))
+
+        for k, light_m in enumerate(entry.get("lights_m", [])):
+            light_label = f"Altstadt InteriorLight {iid} {k:02d}"
+            active_labels.add(light_label)
+            light = place(existing, light_label, unreal.PointLight, ue_position(light_m))
+            comp = light.get_component_by_class(unreal.PointLightComponent)
+            comp.set_mobility(unreal.ComponentMobility.MOVABLE)
+            comp.set_light_color(unreal.LinearColor(1.0, 0.90, 0.74, 1.0))
+            comp.set_editor_property("intensity_units", unreal.LightUnits.CANDELAS)
+            comp.set_attenuation_radius(900.0)
+            comp.set_cast_shadows(False)
+            comp.set_intensity(INTERIOR_LIGHT_INTENSITY_CD)
+
+        st = unreal.DoemitzInteriorDefinition()
+        st.set_editor_property("interior_id", iid)
+        st.set_editor_property("place_id", entry["place_id"])
+        st.set_editor_property("room_type", entry.get("room_type", ""))
+        st.set_editor_property("display_name", entry.get("name", ""))
+        st.set_editor_property("room_polygon", [unreal.Vector2D(y * 100.0, x * 100.0) for x, y in entry["room_polygon_m"]])
+        st.set_editor_property("floor_z", float(entry["floor_z_m"]) * 100.0)
+        st.set_editor_property("ceiling_z", float(entry["ceiling_z_m"]) * 100.0)
+        if entry.get("counter_m"):
+            st.set_editor_property("counter_location", ue_position(entry["counter_m"]))
+        if entry.get("notice_board_m"):
+            st.set_editor_property("has_notice_board", True)
+            st.set_editor_property("notice_board_location", ue_position(entry["notice_board_m"]))
+        st.set_editor_property("door_outside_location", ue_position(door["outside_m"]))
+        st.set_editor_property("door_inside_location", ue_position(door["inside_m"]))
+        spots = []
+        for spot in entry.get("stand_spots", []):
+            sp = unreal.DoemitzStandSpot()
+            sp.set_editor_property("location", ue_position(spot["position_m"]))
+            sp.set_editor_property("yaw_degrees", float(spot["yaw_deg"]))
+            sp.set_editor_property("role", spot.get("role", ""))
+            spots.append(sp)
+        st.set_editor_property("stand_spots", spots)
+        structs.append(st)
+    for label, actor in list(existing.items()):
+        if (label.startswith("Altstadt InteriorDoor ") or label.startswith("Altstadt InteriorLight ")) and label not in active_labels:
+            if not ACTORS.destroy_actor(actor):
+                raise RuntimeError(f"Could not remove obsolete interior actor {label}")
+    return structs
+
+
 def import_level(package):
     if package["schema_version"] != 1:
         raise ValueError("Unsupported mesh package version")
+    CITY_MESH_NAMES.update(package["meshes"].keys())
     assets = {name: static_mesh(name, source) for name, source in package["meshes"].items()}
     if EDITOR.does_asset_exist(MAP):
         loaded = LEVELS.load_level(MAP)
@@ -769,8 +866,8 @@ def import_level(package):
         component.set_static_mesh(asset)
         profile = "BlockAll" if package["meshes"][name]["collision"] else "NoCollision"
         component.set_collision_profile_name(profile)
-        if name.startswith("Terrain"):
-            component.set_editor_property("affect_distance_field_lighting", False)
+        # Generated city meshes stay out of distance field lighting (DFAO, Lumen global SDF), see static_mesh().
+        component.set_editor_property("affect_distance_field_lighting", False)
     for actor in list(existing.values()):
         if isinstance(actor, unreal.StaticMeshActor) and actor not in mesh_actors.values():
             if not ACTORS.destroy_actor(actor):
@@ -786,6 +883,11 @@ def import_level(package):
         existing, package.get("citizens"), road_edge_structs, vehicle_structs, crossing_structs,
         parking_structs, traffic_seed, economy_asset, tasks_asset, city_map_tex, city_map_bounds,
     )
+    interior_structs = place_interiors(existing, package.get("interiors"))
+    for actor in ACTORS.get_all_level_actors():
+        if actor.get_actor_label() == "Altstadt Simulation Config":
+            actor.modify()
+            actor.set_editor_property("interiors", interior_structs)
 
     start = ue_position(package["start_m"])
     ref_3d = package.get("reference_points_3d_m") or [[*point, 0] for point in package["reference_points_m"]]

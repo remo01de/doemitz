@@ -27,9 +27,15 @@
       "front_face_toward_local_m": [-66.1, -195.6],
       "real_entrance_local_m": [-66.82, -216.75],
       "entrance_place_ids": ["poi:osm:way:41020272", "poi:osm:node:2874556070", "poi:osm:node:2874556071"],
-      "tower_corner_local_m": [-70.2, -231.5],
-      "tower_height_m": 14.8,
       "reference_ids": ["ref_rathaus_front", "ref_rathaus_square"]
+    },
+    "osm:way:97118216": {
+      "variant": "rathausturm",
+      "name": "Rathausturm",
+      "spire_style": "RoofsSlate",
+      "gable_height_m": 2.2,
+      "dimensions_source": "lod2_eave_ridge_with_reference_photo_details",
+      "reference_ids": ["ref_rathaus_front"]
     },
     "osm:way:96029976": {
       "variant": "festung_zeughaus",
@@ -130,6 +136,16 @@
       "portal_wall_height_m": 4.4,
       "dimensions_source": "assumed_sprint12_tunnel_portal",
       "reference_ids": ["ref_festung_entrance_portal", "ref_festung_overview"]
+    },
+    "osm:way:120431987": {
+      "name": "Festungstor (Durchfahrt durch den Wall)",
+      "style": "fortress_brick_arch",
+      "clear_width_m": 3.6,
+      "clear_height_m": 3.9,
+      "portal_wall_width_m": 7.2,
+      "portal_wall_height_m": 5.2,
+      "dimensions_source": "assumed_sprint13_gate_passage",
+      "reference_ids": ["ref_festung_overview", "ref_festung_entrance_portal"]
     }
   }
 }

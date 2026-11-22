@@ -28,6 +28,7 @@ void ADoemitzSimulationConfig::BeginPlay()
 		Subsystem->ConfigureEconomy(EconomyData);
 		Subsystem->ConfigureTasks(TaskData);
 		Subsystem->ConfigureCityMap(CityMapTexture, CityMapBounds);
+		Subsystem->ConfigureInteriors(Interiors);
 		Subsystem->ConfigureCitizenPool(CitizenMeshVariants, CitizenLodRadiusCm);
 		if (!RoadEdges.IsEmpty() && !Vehicles.IsEmpty())
 		{

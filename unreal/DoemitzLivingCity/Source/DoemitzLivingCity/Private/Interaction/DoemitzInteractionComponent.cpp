@@ -7,6 +7,7 @@
 #include "Simulation/DoemitzSimulationSubsystem.h"
 #include "UI/DoemitzCitizenDialogWidget.h"
 #include "UI/DoemitzPlaceMenuWidget.h"
+#include "UI/DoemitzTaskBoardWidget.h"
 #include "UI/DoemitzUiText.h"
 
 UDoemitzInteractionComponent::UDoemitzInteractionComponent()
@@ -25,6 +26,7 @@ void UDoemitzInteractionComponent::RefreshNearestEntrance()
 	NearestPlaceId = NAME_None;
 	NearestEntranceId = NAME_None;
 	NearestCitizenId = NAME_None;
+	NearestNoticeBoardInteriorId = NAME_None;
 	bNearestPlaceOpen = false;
 	CurrentPromptText = FText::GetEmpty();
 
@@ -51,6 +53,22 @@ void UDoemitzInteractionComponent::RefreshNearestEntrance()
 	double CitizenDistCm = InteractionRadiusCm + 1.0;
 	const bool bHasCitizen = Subsystem->FindNearestCitizen(QueryLoc, InteractionRadiusCm, Citizen, CitizenDistCm);
 
+	FName BoardInteriorId;
+	double BoardDistCm = InteractionRadiusCm + 1.0;
+	const bool bHasBoard = Subsystem->FindNearestNoticeBoard(QueryLoc, InteractionRadiusCm, BoardInteriorId, BoardDistCm);
+
+	if (!bHasPlace && !bHasCitizen && !bHasBoard)
+	{
+		return;
+	}
+
+	// Notice board (Aushang) wins when it is the closest target
+	if (bHasBoard && (!bHasPlace || BoardDistCm < PlaceDistCm) && (!bHasCitizen || BoardDistCm < CitizenDistCm))
+	{
+		NearestNoticeBoardInteriorId = BoardInteriorId;
+		CurrentPromptText = FDoemitzUiText::FormatNoticeBoardPrompt(Subsystem->GetTasksByStatus(EDoemitzTaskStatus::Available).Num());
+		return;
+	}
 	if (!bHasPlace && !bHasCitizen)
 	{
 		return;
@@ -78,14 +96,14 @@ void UDoemitzInteractionComponent::RefreshNearestEntrance()
 
 bool UDoemitzInteractionComponent::TryInteract()
 {
-	if (ActiveMenuWidget || ActiveCitizenDialogWidget)
+	if (ActiveMenuWidget || ActiveCitizenDialogWidget || ActiveTaskBoardWidget)
 	{
 		CloseMenu();
 		return true;
 	}
 
 	RefreshNearestEntrance();
-	if (NearestPlaceId.IsNone() && NearestCitizenId.IsNone())
+	if (NearestPlaceId.IsNone() && NearestCitizenId.IsNone() && NearestNoticeBoardInteriorId.IsNone())
 	{
 		return false;
 	}
@@ -96,6 +114,26 @@ bool UDoemitzInteractionComponent::TryInteract()
 	if (!Subsystem || !PC || !PC->IsLocalController())
 	{
 		return false;
+	}
+
+	// Notice board in the Bürgerbüro (Sprint 13)
+	if (!NearestNoticeBoardInteriorId.IsNone())
+	{
+		ActiveTaskBoardWidget = CreateWidget<UDoemitzTaskBoardWidget>(PC, UDoemitzTaskBoardWidget::StaticClass());
+		if (!ActiveTaskBoardWidget)
+		{
+			return false;
+		}
+		ActiveTaskBoardWidget->OnCloseRequested.BindUObject(this, &UDoemitzInteractionComponent::CloseMenu);
+		ActiveTaskBoardWidget->AddToViewport(20);
+		ActiveTaskBoardWidget->RefreshContents();
+
+		PC->SetShowMouseCursor(true);
+		FInputModeGameAndUI InputMode;
+		InputMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
+		InputMode.SetHideCursorDuringCapture(false);
+		PC->SetInputMode(InputMode);
+		return true;
 	}
 
 	// Citizen dialog interaction (Milestone 4)
@@ -159,6 +197,11 @@ void UDoemitzInteractionComponent::CloseMenu()
 	{
 		ActiveCitizenDialogWidget->RemoveFromParent();
 		ActiveCitizenDialogWidget = nullptr;
+	}
+	if (ActiveTaskBoardWidget)
+	{
+		ActiveTaskBoardWidget->RemoveFromParent();
+		ActiveTaskBoardWidget = nullptr;
 	}
 	if (!ActiveDialogCitizenId.IsNone())
 	{

@@ -251,6 +251,69 @@ struct DOEMITZLIVINGCITY_API FDoemitzPlaceDefinition
 	TArray<FDoemitzDayOpeningHours> WeeklyOpeningHours;
 };
 
+/** Sprint 13: walk-in ground-floor interior of a place (presentation data, generated offline). */
+USTRUCT(BlueprintType)
+struct DOEMITZLIVINGCITY_API FDoemitzStandSpot
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Interior")
+	FVector Location = FVector::ZeroVector;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Interior")
+	double YawDegrees = 0.0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Interior")
+	FName Role;
+};
+
+USTRUCT(BlueprintType)
+struct DOEMITZLIVINGCITY_API FDoemitzInteriorDefinition
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Interior")
+	FName InteriorId;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Interior")
+	FName PlaceId;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Interior")
+	FName RoomType;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Interior")
+	FString DisplayName;
+
+	/** Room outline (world XY in cm) used for the "player is inside" test. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Interior")
+	TArray<FVector2D> RoomPolygon;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Interior", meta = (Units = "cm"))
+	double FloorZ = 0.0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Interior", meta = (Units = "cm"))
+	double CeilingZ = 0.0;
+
+	/** Customer side of the counter: the place menu opens here instead of at the street door. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Interior")
+	FVector CounterLocation = FVector::ZeroVector;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Interior")
+	bool bHasNoticeBoard = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Interior")
+	FVector NoticeBoardLocation = FVector::ZeroVector;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Interior")
+	FVector DoorOutsideLocation = FVector::ZeroVector;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Interior")
+	FVector DoorInsideLocation = FVector::ZeroVector;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Interior")
+	TArray<FDoemitzStandSpot> StandSpots;
+};
+
 USTRUCT(BlueprintType)
 struct DOEMITZLIVINGCITY_API FDoemitzCitizenRoute
 {
@@ -580,6 +643,35 @@ public:
 	void ConfigureEconomy(const UDoemitzEconomyDataAsset* InEconomyData);
 	void ConfigureTasks(const UDoemitzTaskDataAsset* InTaskData);
 	void ConfigureCityMap(UTexture2D* InMapTexture, const FDoemitzMapBounds& InMapBounds);
+	void ConfigureInteriors(const TArray<FDoemitzInteriorDefinition>& InInteriors);
+
+	// --- Interiors (Sprint 13, presentation data) ---
+	UFUNCTION(BlueprintPure, Category = "Interior")
+	int32 GetInteriorCount() const { return InteriorsById.Num(); }
+
+	UFUNCTION(BlueprintPure, Category = "Interior")
+	bool GetInteriorForPlace(FName PlaceId, FDoemitzInteriorDefinition& OutInterior) const;
+
+	UFUNCTION(BlueprintPure, Category = "Interior")
+	bool GetInteriorById(FName InteriorId, FDoemitzInteriorDefinition& OutInterior) const;
+
+	/** Interior whose room contains the location (2D polygon test and floor..ceiling band), NAME_None outside. */
+	UFUNCTION(BlueprintPure, Category = "Interior")
+	FName FindInteriorAtLocation(const FVector& WorldLocation) const;
+
+	/** Where the place menu opens: the counter inside for places with an interior, otherwise the entrance. */
+	UFUNCTION(BlueprintPure, Category = "Interior")
+	FVector GetPlaceInteractionLocation(FName PlaceId) const;
+
+	UFUNCTION(BlueprintPure, Category = "Interior")
+	bool FindNearestNoticeBoard(const FVector& QueryLocation, double MaxRadiusCm, FName& OutInteriorId, double& OutDistanceCm) const;
+
+	/** Where the citizen actor is shown: a stand spot inside an interior while shopping/working there, else the simulated position. */
+	UFUNCTION(BlueprintPure, Category = "Interior")
+	bool GetCitizenPresentationTransform(FName CitizenId, FVector& OutLocation, FRotator& OutRotation) const;
+
+	UFUNCTION(BlueprintPure, Category = "SaveGame")
+	FName GetLastLoadedPlayerInteriorId() const { return LastLoadedPlayerInteriorId; }
 
 	UFUNCTION(BlueprintPure, Category = "Simulation", meta = (WorldContext = "WorldContextObject"))
 	static UDoemitzSimulationSubsystem* Get(const UObject* WorldContextObject);
@@ -771,6 +863,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Simulation")
 	bool SetCitizenPositionForTest(FName CitizenId, const FVector& NewLocation);
 
+	/** Test helper: the citizen has arrived at PlaceId with the given activity (no walking). */
+	UFUNCTION(BlueprintCallable, Category = "Simulation")
+	bool SetCitizenAtPlaceForTest(FName CitizenId, FName PlaceId, EDoemitzCitizenActivity Activity);
+
 	// --- Traffic & Parking ---
 	UFUNCTION(BlueprintPure, Category = "Traffic")
 	int32 GetVehicleCount() const { return VehicleRecords.Num(); }
@@ -952,6 +1048,9 @@ private:
 	TArray<FDoemitzTaskInstance> Tasks;
 
 	TMap<FName, FDoemitzPlaceDefinition> PlacesById;
+	TMap<FName, FDoemitzInteriorDefinition> InteriorsById;
+	TMap<FName, FName> InteriorIdByPlace;
+	FName LastLoadedPlayerInteriorId;
 	TMap<FName, FDoemitzCitizenRoute> RoutesByKey;
 	TMap<FName, FCitizenRecord> CitizenRecords;
 

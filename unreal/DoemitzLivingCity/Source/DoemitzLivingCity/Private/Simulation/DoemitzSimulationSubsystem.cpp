@@ -52,7 +52,14 @@ namespace
 			|| MeshName.StartsWith(TEXT("SM_Doors"))
 			|| MeshName.StartsWith(TEXT("SM_Window"))
 			|| MeshName.StartsWith(TEXT("SM_Shutters"))
-			|| MeshName.StartsWith(TEXT("SM_Flower"));
+			|| MeshName.StartsWith(TEXT("SM_Flower"))
+			|| MeshName.StartsWith(TEXT("SM_InteriorCeiling"))
+			|| MeshName.StartsWith(TEXT("SM_InteriorFurniture"))
+			|| MeshName.StartsWith(TEXT("SM_InteriorGoods"))
+			|| MeshName.StartsWith(TEXT("SM_InteriorLamp"))
+			|| MeshName.StartsWith(TEXT("SM_InteriorDoor"))
+			|| MeshName.StartsWith(TEXT("SM_InteriorWalls"))
+			|| MeshName.StartsWith(TEXT("SM_Notice"));
 	}
 
 	bool TraceStaticGroundZ(UWorld* World, double WorldX, double WorldY, double ReferenceZ, double& OutGroundZ)
@@ -108,6 +115,22 @@ namespace
 			return true;
 		}
 		return false;
+	}
+
+	bool IsInsidePolygon2D(const TArray<FVector2D>& Polygon, double X, double Y)
+	{
+		bool bInside = false;
+		const int32 Num = Polygon.Num();
+		for (int32 I = 0, J = Num - 1; I < Num; J = I++)
+		{
+			const FVector2D& A = Polygon[I];
+			const FVector2D& B = Polygon[J];
+			if (((A.Y > Y) != (B.Y > Y)) && (X < (B.X - A.X) * (Y - A.Y) / (B.Y - A.Y) + A.X))
+			{
+				bInside = !bInside;
+			}
+		}
+		return bInside;
 	}
 
 	uint32 DeterministicHash(int32 Seed, FName KeyId, int32 Salt)
@@ -248,6 +271,171 @@ void UDoemitzSimulationSubsystem::ConfigureCityMap(UTexture2D* InMapTexture, con
 {
 	CityMapTexture = InMapTexture;
 	CityMapBounds = InMapBounds;
+}
+
+void UDoemitzSimulationSubsystem::ConfigureInteriors(const TArray<FDoemitzInteriorDefinition>& InInteriors)
+{
+	InteriorsById.Reset();
+	InteriorIdByPlace.Reset();
+	for (const FDoemitzInteriorDefinition& Interior : InInteriors)
+	{
+		if (Interior.InteriorId.IsNone() || Interior.PlaceId.IsNone() || Interior.RoomPolygon.Num() < 3)
+		{
+			continue;
+		}
+		InteriorsById.Add(Interior.InteriorId, Interior);
+		InteriorIdByPlace.Add(Interior.PlaceId, Interior.InteriorId);
+	}
+}
+
+bool UDoemitzSimulationSubsystem::GetInteriorForPlace(FName PlaceId, FDoemitzInteriorDefinition& OutInterior) const
+{
+	if (const FName* Id = InteriorIdByPlace.Find(PlaceId))
+	{
+		return GetInteriorById(*Id, OutInterior);
+	}
+	return false;
+}
+
+bool UDoemitzSimulationSubsystem::GetInteriorById(FName InteriorId, FDoemitzInteriorDefinition& OutInterior) const
+{
+	if (const FDoemitzInteriorDefinition* Found = InteriorsById.Find(InteriorId))
+	{
+		OutInterior = *Found;
+		return true;
+	}
+	return false;
+}
+
+FName UDoemitzSimulationSubsystem::FindInteriorAtLocation(const FVector& WorldLocation) const
+{
+	for (const TPair<FName, FDoemitzInteriorDefinition>& Pair : InteriorsById)
+	{
+		const FDoemitzInteriorDefinition& Interior = Pair.Value;
+		if (WorldLocation.Z < Interior.FloorZ - 60.0 || WorldLocation.Z > Interior.CeilingZ + 20.0)
+		{
+			continue;
+		}
+		if (IsInsidePolygon2D(Interior.RoomPolygon, WorldLocation.X, WorldLocation.Y))
+		{
+			return Pair.Key;
+		}
+	}
+	return NAME_None;
+}
+
+FVector UDoemitzSimulationSubsystem::GetPlaceInteractionLocation(FName PlaceId) const
+{
+	FDoemitzInteriorDefinition Interior;
+	if (GetInteriorForPlace(PlaceId, Interior) && !Interior.CounterLocation.IsNearlyZero())
+	{
+		return Interior.CounterLocation;
+	}
+	if (const FDoemitzPlaceDefinition* Place = PlacesById.Find(PlaceId))
+	{
+		return !Place->EntranceLocation.IsNearlyZero() ? Place->EntranceLocation : Place->AccessLocation;
+	}
+	return FVector::ZeroVector;
+}
+
+bool UDoemitzSimulationSubsystem::FindNearestNoticeBoard(const FVector& QueryLocation, double MaxRadiusCm, FName& OutInteriorId, double& OutDistanceCm) const
+{
+	OutInteriorId = NAME_None;
+	OutDistanceCm = MaxRadiusCm;
+	for (const TPair<FName, FDoemitzInteriorDefinition>& Pair : InteriorsById)
+	{
+		const FDoemitzInteriorDefinition& Interior = Pair.Value;
+		if (!Interior.bHasNoticeBoard || FMath::Abs(QueryLocation.Z - Interior.NoticeBoardLocation.Z) > 260.0)
+		{
+			continue;
+		}
+		const double Dist2D = FVector::Dist2D(QueryLocation, Interior.NoticeBoardLocation);
+		if (Dist2D <= OutDistanceCm)
+		{
+			OutDistanceCm = Dist2D;
+			OutInteriorId = Pair.Key;
+		}
+	}
+	return !OutInteriorId.IsNone();
+}
+
+bool UDoemitzSimulationSubsystem::GetCitizenPresentationTransform(FName CitizenId, FVector& OutLocation, FRotator& OutRotation) const
+{
+	const FCitizenRecord* Record = CitizenRecords.Find(CitizenId);
+	if (!Record)
+	{
+		return false;
+	}
+	OutLocation = Record->State.WorldLocation;
+	OutRotation = Record->State.WorldRotation;
+	const EDoemitzCitizenActivity Activity = Record->State.CurrentActivity;
+	if (Record->State.bIsMoving || Record->State.bIsPausedForDialog ||
+		(Activity != EDoemitzCitizenActivity::Shopping && Activity != EDoemitzCitizenActivity::Working))
+	{
+		return true;
+	}
+	const FName* InteriorId = InteriorIdByPlace.Find(Record->State.CurrentPlaceId);
+	const FDoemitzInteriorDefinition* Interior = InteriorId ? InteriorsById.Find(*InteriorId) : nullptr;
+	if (!Interior || Interior->StandSpots.IsEmpty() || !IsPlaceOpenNow(Record->State.CurrentPlaceId))
+	{
+		return true;
+	}
+	// Deterministic slot: staff (Work) take staff spots first, customers fill the rest in citizen-id order.
+	TArray<FName> Workers;
+	TArray<FName> Customers;
+	for (const TPair<FName, FCitizenRecord>& Pair : CitizenRecords)
+	{
+		const FDoemitzCitizenState& Other = Pair.Value.State;
+		if (Other.bIsMoving || Other.CurrentPlaceId != Record->State.CurrentPlaceId)
+		{
+			continue;
+		}
+		if (Other.CurrentActivity == EDoemitzCitizenActivity::Working)
+		{
+			Workers.Add(Pair.Key);
+		}
+		else if (Other.CurrentActivity == EDoemitzCitizenActivity::Shopping)
+		{
+			Customers.Add(Pair.Key);
+		}
+	}
+	Workers.Sort(FNameLexicalLess());
+	Customers.Sort(FNameLexicalLess());
+	TArray<int32> StaffSpots;
+	TArray<int32> CustomerSpots;
+	for (int32 Idx = 0; Idx < Interior->StandSpots.Num(); ++Idx)
+	{
+		(Interior->StandSpots[Idx].Role == FName(TEXT("staff")) ? StaffSpots : CustomerSpots).Add(Idx);
+	}
+	int32 SpotIndex = INDEX_NONE;
+	if (Activity == EDoemitzCitizenActivity::Working)
+	{
+		const int32 Rank = Workers.IndexOfByKey(CitizenId);
+		if (StaffSpots.IsValidIndex(Rank))
+		{
+			SpotIndex = StaffSpots[Rank];
+		}
+		else if (CustomerSpots.IsValidIndex(Rank - StaffSpots.Num() + Customers.Num()))
+		{
+			SpotIndex = CustomerSpots[Rank - StaffSpots.Num() + Customers.Num()];
+		}
+	}
+	else
+	{
+		const int32 Rank = Customers.IndexOfByKey(CitizenId);
+		if (CustomerSpots.IsValidIndex(Rank))
+		{
+			SpotIndex = CustomerSpots[Rank];
+		}
+	}
+	if (SpotIndex == INDEX_NONE)
+	{
+		return true; // more visitors than visible spots: stay at the simulated position outside
+	}
+	const FDoemitzStandSpot& Spot = Interior->StandSpots[SpotIndex];
+	OutLocation = Spot.Location;
+	OutRotation = FRotator(0.0, Spot.YawDegrees, 0.0);
+	return true;
 }
 
 FVector2D UDoemitzSimulationSubsystem::ProjectWorldToNormalizedMap(const FVector& WorldLocationCm) const
@@ -1345,7 +1533,23 @@ bool UDoemitzSimulationSubsystem::FindNearestEntrance(
 	for (const TPair<FName, FDoemitzPlaceDefinition>& Pair : PlacesById)
 	{
 		const FDoemitzPlaceDefinition& Place = Pair.Value;
-		const FVector EntLoc = !Place.EntranceLocation.IsNearlyZero() ? Place.EntranceLocation : Place.AccessLocation;
+		FVector EntLoc = !Place.EntranceLocation.IsNearlyZero() ? Place.EntranceLocation : Place.AccessLocation;
+		if (const FName* InteriorId = InteriorIdByPlace.Find(Place.PlaceId))
+		{
+			const FDoemitzInteriorDefinition* Interior = InteriorsById.Find(*InteriorId);
+			const FVector Counter = Interior ? Interior->CounterLocation : FVector::ZeroVector;
+			const bool bAtCounter = !Counter.IsNearlyZero() &&
+				FMath::Abs(QueryLocation.Z - Counter.Z) <= 260.0 &&
+				FVector::Dist2D(QueryLocation, Counter) <= MaxRadiusCm;
+			if (bAtCounter)
+			{
+				EntLoc = Counter;
+			}
+			else if (IsPlaceOpenNow(Place.PlaceId))
+			{
+				continue; // open: the door opens and the menu waits at the counter inside
+			}
+		}
 		if (FMath::Abs(QueryLocation.Z - EntLoc.Z) > 260.0)
 		{
 			continue;
@@ -1573,11 +1777,14 @@ bool UDoemitzSimulationSubsystem::FindNearestCitizen(
 	for (const TPair<FName, FCitizenRecord>& Pair : CitizenRecords)
 	{
 		const FCitizenRecord& Rec = Pair.Value;
-		if (FMath::Abs(QueryLocation.Z - Rec.State.WorldLocation.Z) > 260.0)
+		FVector ShownLoc = Rec.State.WorldLocation;
+		FRotator ShownRot;
+		GetCitizenPresentationTransform(Pair.Key, ShownLoc, ShownRot);
+		if (FMath::Abs(QueryLocation.Z - ShownLoc.Z) > 260.0)
 		{
 			continue;
 		}
-		const double Dist2D = FVector::Dist2D(QueryLocation, Rec.State.WorldLocation);
+		const double Dist2D = FVector::Dist2D(QueryLocation, ShownLoc);
 		if (Dist2D <= BestDist)
 		{
 			BestDist = Dist2D;
@@ -1640,6 +1847,26 @@ void UDoemitzSimulationSubsystem::SetCitizenLodRadiusCm(double NewRadiusCm)
 {
 	CitizenLodRadiusCm = FMath::Max(100.0, NewRadiusCm);
 	UpdateCitizenLodPool();
+}
+
+bool UDoemitzSimulationSubsystem::SetCitizenAtPlaceForTest(FName CitizenId, FName PlaceId, EDoemitzCitizenActivity Activity)
+{
+	FCitizenRecord* Record = CitizenRecords.Find(CitizenId);
+	const FDoemitzPlaceDefinition* Place = PlacesById.Find(PlaceId);
+	if (!Record || !Place)
+	{
+		return false;
+	}
+	Record->State.CurrentPlaceId = PlaceId;
+	Record->State.TargetPlaceId = PlaceId;
+	Record->State.CurrentActivity = Activity;
+	Record->State.bIsMoving = false;
+	Record->State.RouteProgressCm = 0.0;
+	Record->ActiveRoute.Reset();
+	Record->ActiveSegmentEnds.Reset();
+	Record->ActiveRouteLength = 0.0;
+	Record->State.WorldLocation = Place->AccessLocation;
+	return true;
 }
 
 bool UDoemitzSimulationSubsystem::SetCitizenPositionForTest(FName CitizenId, const FVector& NewLocation)
@@ -3005,6 +3232,11 @@ bool UDoemitzSimulationSubsystem::SaveCityState(const FString& SlotName)
 				SaveObj->bHasPlayerTransform = true;
 				SaveObj->PlayerLocation = Pawn->GetActorLocation();
 				SaveObj->PlayerRotation = Pawn->GetActorRotation();
+				SaveObj->PlayerInteriorId = FindInteriorAtLocation(Pawn->GetActorLocation());
+				if (const FDoemitzInteriorDefinition* Interior = InteriorsById.Find(SaveObj->PlayerInteriorId))
+				{
+					SaveObj->PlayerInteriorPlaceId = Interior->PlaceId;
+				}
 			}
 		}
 	}
@@ -3380,7 +3612,44 @@ bool UDoemitzSimulationSubsystem::LoadCityState(const FString& SlotName)
 							HalfHeight = Cap->GetScaledCapsuleHalfHeight() + 4.0;
 						}
 					}
-					if (bMigratingFromPreV6)
+					LastLoadedPlayerInteriorId = NAME_None;
+					const FDoemitzInteriorDefinition* SavedInterior = SaveObj->SaveSchemaVersion >= 7 && !SaveObj->PlayerInteriorId.IsNone()
+						? InteriorsById.Find(SaveObj->PlayerInteriorId)
+						: nullptr;
+					if (SaveObj->SaveSchemaVersion >= 7 && !SaveObj->PlayerInteriorId.IsNone() && !SavedInterior)
+					{
+						// The interior was removed from the configuration: put the player at that place's entrance.
+						if (const FDoemitzPlaceDefinition* Place = PlacesById.Find(SaveObj->PlayerInteriorPlaceId))
+						{
+							RestoredPlayerLoc = !Place->EntranceLocation.IsNearlyZero() ? Place->EntranceLocation : Place->AccessLocation;
+						}
+						if (TraceStaticGroundZ(World, RestoredPlayerLoc.X, RestoredPlayerLoc.Y, RestoredPlayerLoc.Z, GroundZ))
+						{
+							RestoredPlayerLoc.Z = GroundZ + HalfHeight;
+						}
+					}
+					else if (SavedInterior)
+					{
+						// Trace from just under the ceiling so the floor, not the upper storey or roof, is found.
+						RestoredPlayerLoc.Z = FMath::Max(SavedInterior->FloorZ + HalfHeight, FMath::Min(RestoredPlayerLoc.Z, SavedInterior->CeilingZ - 20.0));
+						FHitResult FloorHit;
+						FCollisionQueryParams FloorParams(SCENE_QUERY_STAT(DoemitzInteriorLoadTrace), false, Pawn);
+						if (World->LineTraceSingleByChannel(
+							FloorHit,
+							FVector(RestoredPlayerLoc.X, RestoredPlayerLoc.Y, SavedInterior->CeilingZ - 15.0),
+							FVector(RestoredPlayerLoc.X, RestoredPlayerLoc.Y, SavedInterior->FloorZ - 100.0),
+							ECC_Visibility,
+							FloorParams) && FloorHit.ImpactNormal.Z > 0.5f)
+						{
+							RestoredPlayerLoc.Z = FloorHit.ImpactPoint.Z + HalfHeight;
+						}
+						else
+						{
+							RestoredPlayerLoc.Z = SavedInterior->FloorZ + HalfHeight;
+						}
+						LastLoadedPlayerInteriorId = SaveObj->PlayerInteriorId;
+					}
+					else if (bMigratingFromPreV6)
 					{
 						if (TraceStaticGroundZ(World, RestoredPlayerLoc.X, RestoredPlayerLoc.Y, RestoredPlayerLoc.Z, GroundZ))
 						{

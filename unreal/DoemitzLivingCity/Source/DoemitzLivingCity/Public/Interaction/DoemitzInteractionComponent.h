@@ -6,6 +6,7 @@
 
 class UDoemitzCitizenDialogWidget;
 class UDoemitzPlaceMenuWidget;
+class UDoemitzTaskBoardWidget;
 
 UCLASS(ClassGroup = (Doemitz), meta = (BlueprintSpawnableComponent))
 class DOEMITZLIVINGCITY_API UDoemitzInteractionComponent : public UActorComponent
@@ -33,7 +34,16 @@ public:
 	bool HasInteractableCitizen() const { return !NearestCitizenId.IsNone(); }
 
 	UFUNCTION(BlueprintPure, Category = "Interaction")
-	bool HasInteractableTarget() const { return !NearestPlaceId.IsNone() || !NearestCitizenId.IsNone(); }
+	bool HasInteractableTarget() const { return !NearestPlaceId.IsNone() || !NearestCitizenId.IsNone() || !NearestNoticeBoardInteriorId.IsNone(); }
+
+	UFUNCTION(BlueprintPure, Category = "Interaction")
+	bool HasInteractableNoticeBoard() const { return !NearestNoticeBoardInteriorId.IsNone(); }
+
+	UFUNCTION(BlueprintPure, Category = "Interaction")
+	bool IsTaskBoardOpen() const { return ActiveTaskBoardWidget != nullptr; }
+
+	UFUNCTION(BlueprintPure, Category = "Interaction")
+	UDoemitzTaskBoardWidget* GetActiveTaskBoardWidget() const { return ActiveTaskBoardWidget; }
 
 	UFUNCTION(BlueprintPure, Category = "Interaction")
 	FName GetNearestPlaceId() const { return NearestPlaceId; }
@@ -54,7 +64,7 @@ public:
 	FString GetInteractionPrompt() const { return CurrentPromptText.ToString(); }
 
 	UFUNCTION(BlueprintPure, Category = "Interaction")
-	bool IsMenuOpen() const { return ActiveMenuWidget != nullptr || ActiveCitizenDialogWidget != nullptr; }
+	bool IsMenuOpen() const { return ActiveMenuWidget != nullptr || ActiveCitizenDialogWidget != nullptr || ActiveTaskBoardWidget != nullptr; }
 
 	UFUNCTION(BlueprintPure, Category = "Interaction")
 	bool IsCitizenDialogOpen() const { return ActiveCitizenDialogWidget != nullptr; }
@@ -72,6 +82,7 @@ private:
 	FName NearestPlaceId;
 	FName NearestEntranceId;
 	FName NearestCitizenId;
+	FName NearestNoticeBoardInteriorId;
 	FName ActiveDialogCitizenId;
 	bool bNearestPlaceOpen = false;
 	FText CurrentPromptText;
@@ -81,4 +92,7 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<UDoemitzCitizenDialogWidget> ActiveCitizenDialogWidget;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UDoemitzTaskBoardWidget> ActiveTaskBoardWidget;
 };

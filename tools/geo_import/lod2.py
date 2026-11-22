@@ -329,8 +329,11 @@ def parse_lod2_buildings(lod2_dir: Path, frame: LocalFrame) -> list[dict]:
             all_rz = [p[2] for ring in roof_rings for p in ring]
             if all_rz:
                 ridge_nhn = max(all_rz)
-                if rt_code in ("5000", "9999") and len(roof_surface_eaves) >= 3:
-                    # Area-weighted median eave height avoids tiny low annexes pulling down main nave eave
+                if len(roof_surface_eaves) >= 2:
+                    # Area-weighted median eave height for every roof type (Sprint 13): small low roof
+                    # surfaces (porches, cellar entrances, annexes) must not pull down the main eave.
+                    # Example: Wallstraße 6 has a 7.7 m² flat roof 0.1 m above ground next to its
+                    # 160 m² gabled main roof (eave 8.5 m); min() produced a 2 m eave.
                     roof_surface_eaves.sort(key=lambda item: item[1])
                     total_a = sum(a for a, _ in roof_surface_eaves)
                     acc = 0.0

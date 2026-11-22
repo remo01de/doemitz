@@ -24,4 +24,5 @@ public:
 	static FText FormatActiveTaskHud(const FDoemitzTaskInstance& Task, const UDoemitzSimulationSubsystem* Subsystem);
 	static FText FormatNotification(const FDoemitzNotificationEvent& Event, const UDoemitzSimulationSubsystem* Subsystem);
 	static FText GetMapAttributionText();
+	static FText FormatNoticeBoardPrompt(int32 AvailableTaskCount);
 };

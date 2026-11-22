@@ -27,6 +27,7 @@
 #include "Serialization/JsonWriter.h"
 #include "Settings/DoemitzGraphicsSettings.h"
 #include "Simulation/DoemitzSimulationConfig.h"
+#include "Simulation/DoemitzSimulationSubsystem.h"
 #include "Traffic/DoemitzTrafficVehicle.h"
 
 namespace
@@ -113,11 +114,20 @@ void UDoemitzBenchmarkSubsystem::OnWorldBeginPlay(UWorld& InWorld)
 	FParse::Value(CmdLine, TEXT("DoemitzBenchmarkWarmup="), WarmupSeconds);
 	FParse::Value(CmdLine, TEXT("DoemitzBenchmarkOut="), OutputPathOverride);
 	bOpenCityMap = FParse::Param(CmdLine, TEXT("DoemitzBenchmarkOpenMap"));
+	FParse::Value(CmdLine, TEXT("DoemitzBenchmarkInterior="), InteriorPlaceId);
+	bInteriorRouteReady = false;
 	bMapOpenedForBenchmark = false;
 	DurationSeconds = FMath::Max(1.0, DurationSeconds);
 	WarmupSeconds = FMath::Max(0.0, WarmupSeconds);
 
 	BuildBenchmarkRoute();
+	if (!InteriorPlaceId.IsEmpty())
+	{
+		// The interior route is built on the first tick, once the simulation config has registered interiors.
+		RoutePoints = { FVector::ZeroVector, FVector(100.0, 0.0, 0.0) };
+		SegmentEnds = { 100.0 };
+		RouteLengthCm = 100.0;
+	}
 	if (RoutePoints.Num() < 2 || RouteLengthCm <= 1.0)
 	{
 		UE_LOG(LogTemp, Error, TEXT("Doemitz benchmark route could not be initialized."));
@@ -189,6 +199,39 @@ void UDoemitzBenchmarkSubsystem::BuildBenchmarkRoute()
 	RouteLengthCm = Cumulative;
 }
 
+bool UDoemitzBenchmarkSubsystem::TryBuildInteriorRoute(UWorld* World)
+{
+	UDoemitzSimulationSubsystem* Sim = World ? World->GetSubsystem<UDoemitzSimulationSubsystem>() : nullptr;
+	FDoemitzInteriorDefinition Interior;
+	if (!Sim || !Sim->GetInteriorForPlace(FName(*InteriorPlaceId), Interior))
+	{
+		return false;
+	}
+	const double EyeZ = Interior.FloorZ + 170.0;
+	RoutePoints.Reset();
+	RoutePoints.Add(FVector(Interior.DoorInsideLocation.X, Interior.DoorInsideLocation.Y, EyeZ));
+	for (const FDoemitzStandSpot& Spot : Interior.StandSpots)
+	{
+		RoutePoints.Add(FVector(Spot.Location.X, Spot.Location.Y, EyeZ));
+	}
+	if (!Interior.CounterLocation.IsNearlyZero())
+	{
+		RoutePoints.Add(FVector(Interior.CounterLocation.X, Interior.CounterLocation.Y, EyeZ));
+	}
+	RoutePoints.Add(FVector(Interior.DoorInsideLocation.X, Interior.DoorInsideLocation.Y, EyeZ));
+	SegmentEnds.Reset();
+	double Cumulative = 0.0;
+	for (int32 Index = 0; Index + 1 < RoutePoints.Num(); ++Index)
+	{
+		Cumulative += FMath::Max(FVector::Distance(RoutePoints[Index], RoutePoints[Index + 1]), UE_KINDA_SMALL_NUMBER);
+		SegmentEnds.Add(Cumulative);
+	}
+	RouteLengthCm = Cumulative;
+	Sim->SetTimeOfDayMinutes(22.0 * 60.0); // night: interior lights and dark windows
+	bInteriorRouteReady = RoutePoints.Num() >= 2;
+	return bInteriorRouteReady;
+}
+
 FVector UDoemitzBenchmarkSubsystem::SampleRouteLocation(double DistanceCm, FVector& OutForward) const
 {
 	const double Clamped = FMath::Clamp(DistanceCm, 0.0, RouteLengthCm);
@@ -221,6 +264,11 @@ void UDoemitzBenchmarkSubsystem::Tick(float DeltaTime)
 	{
 		return;
 	}
+	const bool bInteriorMode = !InteriorPlaceId.IsEmpty();
+	if (bInteriorMode && !bInteriorRouteReady && !TryBuildInteriorRoute(World))
+	{
+		return;
+	}
 
 	const double Progress = ElapsedWarmup < WarmupSeconds
 		? 0.0
@@ -228,6 +276,7 @@ void UDoemitzBenchmarkSubsystem::Tick(float DeltaTime)
 
 	FVector Forward = FVector::ForwardVector;
 	FVector TargetLocation = SampleRouteLocation(Progress * RouteLengthCm, Forward);
+	if (!bInteriorMode)
 	{
 		FCollisionQueryParams GroundParams(SCENE_QUERY_STAT(DoemitzBenchmarkGroundTick), false);
 		if (APlayerController* PC = World->GetFirstPlayerController())
@@ -365,7 +414,9 @@ void UDoemitzBenchmarkSubsystem::FinishBenchmark()
 
 	TSharedRef<FJsonObject> Root = MakeShared<FJsonObject>();
 	Root->SetStringField(TEXT("profile"), ProfileName);
-	Root->SetStringField(TEXT("route"), TEXT("Goethestrasse -> Rathausplatz -> Festungszugang"));
+	Root->SetStringField(TEXT("route"), InteriorPlaceId.IsEmpty()
+		? FString(TEXT("Goethestrasse -> Rathausplatz -> Festungszugang"))
+		: FString::Printf(TEXT("interior %s at 22:00 (door -> stand spots -> counter -> door)"), *InteriorPlaceId));
 	Root->SetNumberField(TEXT("route_length_m"), RouteLengthCm / 100.0);
 	Root->SetNumberField(TEXT("warmup_seconds"), WarmupSeconds);
 	Root->SetNumberField(TEXT("duration_seconds"), ElapsedBenchmark);

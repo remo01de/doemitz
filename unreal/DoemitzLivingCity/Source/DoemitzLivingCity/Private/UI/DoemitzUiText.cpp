@@ -341,3 +341,11 @@ FText FDoemitzUiText::GetMapAttributionText()
 {
 	return FText::FromString(TEXT("Kartendaten \u00a9 OpenStreetMap contributors, ODbL 1.0  |  H\u00f6hendaten \u00a9 GeoBasis-DE/M-V 2025"));
 }
+
+FText FDoemitzUiText::FormatNoticeBoardPrompt(int32 AvailableTaskCount)
+{
+	return FText::FromString(FString::Printf(
+		TEXT("E – Aushang lesen (%d Aufgabe%s heute)"),
+		AvailableTaskCount,
+		AvailableTaskCount == 1 ? TEXT("") : TEXT("n")));
+}

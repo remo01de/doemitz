@@ -69,6 +69,9 @@ private:
 	UPROPERTY(EditInstanceOnly, Category = "Simulation")
 	TArray<FDoemitzCitizenRoute> Routes;
 
+	UPROPERTY(EditInstanceOnly, Category = "Interior")
+	TArray<FDoemitzInteriorDefinition> Interiors;
+
 	UPROPERTY(EditInstanceOnly, Category = "Simulation")
 	TArray<FDoemitzCitizenDefinition> Citizens;
 

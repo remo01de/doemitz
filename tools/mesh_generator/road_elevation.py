@@ -16,6 +16,10 @@ from tools.geo_transform.terrain import ElevationModel
 DEFAULT_SMOOTHING_WINDOW_M = 12.0
 SAMPLE_STEP_M = 1.0
 ABUTMENT_FALLBACK_RADIUS_M = 3.0
+# Sprint 13: a built (walkable) tunnel's floor at each end is the lowest DGM height found along the
+# directly connected surface roads within this distance. DGM1 is bare earth and reads the rampart
+# crest over a gate passage; the approach is cut linearly down to that floor height.
+TUNNEL_APPROACH_SEARCH_M = 15.0
 
 
 def _coord_key(xy) -> tuple[float, float]:
@@ -124,6 +128,8 @@ class TunnelWayInfo:
     width_m: float
     coords: list[tuple[float, float]]
     portal_z_m: tuple[float, float]
+    floor_sources: tuple[str, str] = ("tunnel_portal_dgm", "tunnel_portal_dgm")
+    built: bool = False
 
 
 class _RoadProfilePart:
@@ -262,6 +268,7 @@ class RoadElevationNetwork:
         road_offset_m: float,
         curb_height_m: float,
         smoothing_window_m: float = DEFAULT_SMOOTHING_WINDOW_M,
+        built_tunnel_ids=frozenset(),
     ):
         self.elevation = elevation
         self.road_offset_m = float(road_offset_m)
@@ -274,6 +281,9 @@ class RoadElevationNetwork:
         self.bridge_way_ids: set[str] = set()
         self.bridge_by_way_id: dict[str, BridgeChain] = {}
         self.tunnels: list[TunnelWayInfo] = []
+        self.built_tunnel_ids = set(built_tunnel_ids)
+        self.tunnel_floor_by_key: dict[tuple[float, float], float] = {}
+        self._approach_cuts: dict[tuple, list[tuple[str, float, float, float]]] = {}
         self._tree = None
         self._geoms: list[LineString] = []
 
@@ -313,6 +323,7 @@ class RoadElevationNetwork:
                             width_m=float(width_m),
                             coords=coords,
                             portal_z_m=(round(z0, 4), round(z1, 4)),
+                            built=road["id"] in self.built_tunnel_ids,
                         )
                     )
                 continue
@@ -338,6 +349,16 @@ class RoadElevationNetwork:
             abutment_keys.add(_coord_key(chain_entries[0][2][0]))
             abutment_keys.add(_coord_key(chain_entries[-1][2][-1]))
 
+        # 2b. Ends of built tunnels: split connected surface roads there and cut their approach down to
+        # the tunnel floor (see TUNNEL_APPROACH_SEARCH_M).
+        tunnel_end_keys: set[tuple[float, float]] = set()
+        for tunnel in self.tunnels:
+            if tunnel.built:
+                tunnel_end_keys.add(_coord_key(tunnel.coords[0]))
+                tunnel_end_keys.add(_coord_key(tunnel.coords[-1]))
+        if tunnel_end_keys and not elevation.is_flat:
+            self._resolve_tunnel_floors(non_bridge_raw, non_bridge_vertex_uses, abutment_keys, tunnel_end_keys)
+
         # 3. Split non-bridge polylines at shared non-bridge junctions AND at bridge abutments.
         non_bridge_segments: list[tuple[dict, float, list[tuple[float, float]]]] = []
         node_sample_pool: dict[tuple[float, float], list[float]] = defaultdict(list)
@@ -348,7 +369,7 @@ class RoadElevationNetwork:
             split_idx = [0]
             for i in range(1, len(coords) - 1):
                 k = _coord_key(coords[i])
-                if non_bridge_vertex_uses[k] > 1 or k in abutment_keys:
+                if non_bridge_vertex_uses[k] > 1 or k in abutment_keys or k in tunnel_end_keys:
                     split_idx.append(i)
             split_idx.append(len(coords) - 1)
             for i0, i1 in zip(split_idx, split_idx[1:]):
@@ -362,8 +383,8 @@ class RoadElevationNetwork:
                     continue
                 pts, cum_s = _densify_polyline(sub, SAMPLE_STEP_M)
                 arr = np.asarray(pts, dtype=np.float64)
-                zs = elevation.sample_array(arr[:, 0], arr[:, 1])
                 s_arr = np.asarray(cum_s, dtype=np.float64)
+                zs = self._apply_approach_cuts(road["id"], sub, s_arr, elevation.sample_array(arr[:, 0], arr[:, 1]))
                 total_len = float(s_arr[-1])
                 k_start = _coord_key(sub[0])
                 k_end = _coord_key(sub[-1])
@@ -393,6 +414,9 @@ class RoadElevationNetwork:
         node_z: dict[tuple[float, float], float] = {
             key: float(np.mean(vals)) for key, vals in node_sample_pool.items()
         }
+        # Tunnel floors are fixed like bridge abutments.
+        for key, z_floor in self.tunnel_floor_by_key.items():
+            node_z[key] = z_floor
 
         # 4. Determine fixed abutment heights & strictly linear bridge profiles BEFORE non-bridge smoothing.
         max_slope_by_road: dict[str, float] = {}
@@ -428,6 +452,9 @@ class RoadElevationNetwork:
                 if elevation.is_flat:
                     z_val = elevation.flat_elevation_m
                     src = "flat_placeholder"
+                elif key in self.tunnel_floor_by_key:
+                    z_val = self.tunnel_floor_by_key[key]
+                    src = "tunnel_floor"
                 elif key in abutment_sample_pool and abutment_sample_pool[key]:
                     z_val = float(np.mean(abutment_sample_pool[key]))
                     src = "connecting_road_profile"
@@ -561,7 +588,7 @@ class RoadElevationNetwork:
             arr = np.asarray(pts, dtype=np.float64)
             s_arr = np.asarray(cum_s, dtype=np.float64)
             total_len = float(s_arr[-1])
-            raw_z = elevation.sample_array(arr[:, 0], arr[:, 1])
+            raw_z = self._apply_approach_cuts(road["id"], sub, s_arr, elevation.sample_array(arr[:, 0], arr[:, 1]))
 
             k_start = _coord_key(sub[0])
             k_end = _coord_key(sub[-1])
@@ -643,6 +670,78 @@ class RoadElevationNetwork:
                     "is_bridge": rid in self.bridge_way_ids,
                 }
             )
+
+    def _resolve_tunnel_floors(self, non_bridge_raw, non_bridge_vertex_uses, abutment_keys, tunnel_end_keys) -> None:
+        """Fix the floor height at each built tunnel end and record the approach cuts of connected roads."""
+        elevation = self.elevation
+        touching: dict[tuple[float, float], list[tuple[str, list[tuple[float, float]], bool]]] = defaultdict(list)
+        for road, _, coords in non_bridge_raw:
+            split_idx = [0]
+            for i in range(1, len(coords) - 1):
+                k = _coord_key(coords[i])
+                if non_bridge_vertex_uses[k] > 1 or k in abutment_keys or k in tunnel_end_keys:
+                    split_idx.append(i)
+            split_idx.append(len(coords) - 1)
+            for i0, i1 in zip(split_idx, split_idx[1:]):
+                sub = coords[i0 : i1 + 1]
+                if len(sub) < 2:
+                    continue
+                for at_start, k in ((True, _coord_key(sub[0])), (False, _coord_key(sub[-1]))):
+                    if k in tunnel_end_keys:
+                        touching[k].append((road["id"], sub, at_start))
+
+        for key in sorted(tunnel_end_keys):
+            candidates = []
+            for road_id, sub, at_start in touching.get(key, []):
+                ordered = sub if at_start else list(reversed(sub))
+                pts, cum_s = _densify_polyline(ordered, SAMPLE_STEP_M)
+                arr = np.asarray(pts, dtype=np.float64)
+                s_arr = np.asarray(cum_s, dtype=np.float64)
+                zs = elevation.sample_array(arr[:, 0], arr[:, 1])
+                window = s_arr <= TUNNEL_APPROACH_SEARCH_M + 1e-9
+                idx = int(np.argmin(np.where(window, zs, np.inf)))
+                candidates.append((float(zs[idx]), road_id, sub, at_start, float(s_arr[idx])))
+            if candidates:
+                floor_z = min(c[0] for c in candidates)
+                for z_anchor, road_id, sub, at_start, s_anchor in candidates:
+                    cut_key = (road_id, _coord_key(sub[0]), _coord_key(sub[-1]))
+                    self._approach_cuts.setdefault(cut_key, []).append(
+                        ("start" if at_start else "end", s_anchor, floor_z, z_anchor)
+                    )
+                source = "tunnel_approach_min_dgm"
+            else:
+                floor_z = float(elevation.sample(key[0], key[1]))
+                source = "tunnel_portal_dgm"
+            self.tunnel_floor_by_key[key] = round(floor_z, 4)
+            for tunnel in self.tunnels:
+                if not tunnel.built:
+                    continue
+                for end_idx, xy in ((0, tunnel.coords[0]), (1, tunnel.coords[-1])):
+                    if _coord_key(xy) == key:
+                        zs_list = list(tunnel.portal_z_m)
+                        src_list = list(tunnel.floor_sources)
+                        zs_list[end_idx] = round(floor_z, 4)
+                        src_list[end_idx] = source
+                        tunnel.portal_z_m = (zs_list[0], zs_list[1])
+                        tunnel.floor_sources = (src_list[0], src_list[1])
+
+    def _apply_approach_cuts(self, road_id, sub, s_arr, zs):
+        """Lower DGM samples of a tunnel approach linearly from the tunnel floor up to the approach anchor."""
+        cuts = self._approach_cuts.get((road_id, _coord_key(sub[0]), _coord_key(sub[-1])))
+        if not cuts:
+            return zs
+        out = np.asarray(zs, dtype=np.float64).copy()
+        total = float(s_arr[-1]) if len(s_arr) else 0.0
+        for side, s_anchor, floor_z, z_anchor in cuts:
+            d = s_arr if side == "start" else (total - s_arr)
+            if s_anchor <= 1e-6:
+                mask = d <= 1e-6
+                out[mask] = np.minimum(out[mask], floor_z)
+                continue
+            mask = d <= s_anchor + 1e-9
+            line = floor_z + (d[mask] / s_anchor) * (z_anchor - floor_z)
+            out[mask] = np.minimum(out[mask], line)
+        return out
 
     def ground_elevation_at(self, east_m: float, north_m: float, road_id: str | None = None) -> float:
         """

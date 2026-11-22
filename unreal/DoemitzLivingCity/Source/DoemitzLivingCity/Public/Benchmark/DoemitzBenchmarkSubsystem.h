@@ -20,6 +20,7 @@ public:
 
 private:
 	void BuildBenchmarkRoute();
+	bool TryBuildInteriorRoute(UWorld* World);
 	FVector SampleRouteLocation(double DistanceCm, FVector& OutForward) const;
 	void FinishBenchmark();
 
@@ -29,6 +30,9 @@ private:
 	bool bMapOpenedForBenchmark = false;
 	FString ProfileName = TEXT("Default");
 	FString OutputPathOverride;
+	/** Sprint 13: -DoemitzBenchmarkInterior=<PlaceId> walks the camera through that interior at 22:00. */
+	FString InteriorPlaceId;
+	bool bInteriorRouteReady = false;
 
 	double WarmupSeconds = 3.0;
 	double DurationSeconds = 90.0;

@@ -68,10 +68,11 @@ void ADoemitzCitizenActor::SyncFromSimulation()
 	}
 	if (const UDoemitzSimulationSubsystem* Subsystem = GetWorld()->GetSubsystem<UDoemitzSimulationSubsystem>())
 	{
-		FDoemitzCitizenState State;
-		if (Subsystem->GetCitizenState(CitizenId, State))
+		FVector Location;
+		FRotator Rotation;
+		if (Subsystem->GetCitizenPresentationTransform(CitizenId, Location, Rotation))
 		{
-			SetActorLocationAndRotation(State.WorldLocation, State.WorldRotation, false);
+			SetActorLocationAndRotation(Location, Rotation, false);
 		}
 	}
 }

@@ -57,16 +57,21 @@ def _add_octagonal_spire(mesh, center_xy: tuple[float, float], radius_m: float, 
 
 
 def _add_plinth_and_cornice(stone_mesh, polygon: Polygon, base_m: float, plinth_top_m: float, eave_z: float,
-                            cornice_h: float = 0.22, cornice_d: float = 0.14) -> None:
+                            cornice_h: float = 0.22, cornice_d: float = 0.14, interior=None) -> None:
     ring = list(polygon.exterior.coords)
-    for start, end in zip(ring, ring[1:]):
+    for edge_idx, (start, end) in enumerate(zip(ring, ring[1:])):
         dx, dy = end[0] - start[0], end[1] - start[1]
         length = hypot(dx, dy)
         if length < 0.6:
             continue
         tx, ty = dx / length, dy / length
         nx, ny = ty, -tx
-        _add_box_on_wall(stone_mesh, start[0], start[1], tx, ty, nx, ny, 0.0, length, base_m, plinth_top_m, 0.0, 0.06)
+        door_rng = interior.door_range(edge_idx, 0.14) if interior is not None else None
+        if door_rng is None:
+            _add_box_on_wall(stone_mesh, start[0], start[1], tx, ty, nx, ny, 0.0, length, base_m, plinth_top_m, 0.0, 0.06)
+        else:
+            _add_box_on_wall(stone_mesh, start[0], start[1], tx, ty, nx, ny, 0.0, max(0.0, door_rng[0]), base_m, plinth_top_m, 0.0, 0.06)
+            _add_box_on_wall(stone_mesh, start[0], start[1], tx, ty, nx, ny, min(length, door_rng[1]), length, base_m, plinth_top_m, 0.0, 0.06)
         _add_box_on_wall(
             stone_mesh, start[0], start[1], tx, ty, nx, ny,
             0.0, length, eave_z - cornice_h, eave_z + 0.04, 0.0, cornice_d,
@@ -245,7 +250,8 @@ def _build_johanneskirche(meshes, polygon: Polygon, base_m: float, max_ground_m:
 
 
 def _build_rathaus(meshes, polygon: Polygon, base_m: float, max_ground_m: float,
-                   eave_height_m: float, ridge_height_m: float, ridge_direction_deg: float | None, cfg: dict) -> float:
+                   eave_height_m: float, ridge_height_m: float, ridge_direction_deg: float | None, cfg: dict,
+                   interior=None) -> float:
     """Baroque two-story half-timbered Rathaus (1819/1820) with red mansard hipped roof, Rathausturm & real front portal."""
     wall_style = cfg.get("wall_style", "WallsCream")
     wall_mesh = meshes[wall_style]
@@ -281,7 +287,10 @@ def _build_rathaus(meshes, polygon: Polygon, base_m: float, max_ground_m: float,
         (f_start[0] + inx * main_depth, f_start[1] + iny * main_depth),
     ])
 
-    wall_mesh.add_walls(polygon, eave_height_m, base_m)
+    if interior is None:
+        wall_mesh.add_walls(polygon, eave_height_m, base_m)
+    else:
+        from tools.mesh_generator.interiors import add_walls_with_openings, add_window_frame_and_glass
     ridge_rise = max(2.6, ridge_height_m - eave_height_m)
     _add_roof_with_shape(
         roof_mesh, gable_mesh, main_rect, base_m + eave_height_m, ridge_rise,
@@ -293,11 +302,15 @@ def _build_rathaus(meshes, polygon: Polygon, base_m: float, max_ground_m: float,
 
     ground_top = max(base_m, max_ground_m)
     plinth_top = max(base_m + 0.95, ground_top + 0.35)
-    _add_plinth_and_cornice(stone_mesh, polygon, base_m, plinth_top, base_m + eave_height_m, cornice_h=0.22, cornice_d=0.14)
+    _add_plinth_and_cornice(stone_mesh, polygon, base_m, plinth_top, base_m + eave_height_m, cornice_h=0.22, cornice_d=0.14,
+                            interior=interior)
 
     floors = 2
     usable_h = eave_height_m - (plinth_top - base_m)
     floor_h = usable_h / floors
+    if interior is not None:
+        interior.ceiling_z = plinth_top + floor_h - 0.14
+        interior.add_door_frame(stone_mesh, protrude_m=0.14, jamb_w=0.24)
 
     for idx, (start, end) in enumerate(zip(ring, ring[1:])):
         dx, dy = end[0] - start[0], end[1] - start[1]
@@ -308,8 +321,13 @@ def _build_rathaus(meshes, polygon: Polygon, base_m: float, max_ground_m: float,
         nx, ny = ty, -tx
         is_front = idx == best_edge_idx
 
-        # Timber sill, floor beam, and eave beam (baroque Fachwerk)
+        # Timber sill, floor beam, and eave beam (baroque Fachwerk); the sill beam stops at an interior door
+        door_rng = interior.door_range(idx, 0.26) if interior is not None else None
         for z_beam in (plinth_top + 0.08, plinth_top + floor_h, base_m + eave_height_m - 0.28):
+            if door_rng is not None and z_beam - 0.11 < interior.floor_z + interior.door_height_m + 0.3:
+                _add_box_on_wall(timber_mesh, start[0], start[1], tx, ty, nx, ny, 0.0, max(0.0, door_rng[0]), z_beam - 0.11, z_beam + 0.11, 0.0, 0.07)
+                _add_box_on_wall(timber_mesh, start[0], start[1], tx, ty, nx, ny, min(length, door_rng[1]), length, z_beam - 0.11, z_beam + 0.11, 0.0, 0.07)
+                continue
             _add_box_on_wall(timber_mesh, start[0], start[1], tx, ty, nx, ny, 0.0, length, z_beam - 0.11, z_beam + 0.11, 0.0, 0.07)
 
         # Corner posts
@@ -325,6 +343,18 @@ def _build_rathaus(meshes, polygon: Polygon, base_m: float, max_ground_m: float,
             z0_fl = plinth_top + fl * floor_h
             for bay in range(bays):
                 u_c = (bay + 0.5) * spacing
+                if interior is not None and fl == 0:
+                    if interior.overlaps_door(idx, u_c - 0.75, u_c + 0.75):
+                        continue
+                    win_w = 1.15
+                    if interior.add_window(idx, u_c - win_w * 0.48, u_c + win_w * 0.48, z0_fl + 0.72, min(z0_fl + floor_h - 0.45, z0_fl + 0.72 + 1.75)):
+                        op = interior.openings[-1]
+                        add_window_frame_and_glass(timber_mesh, meshes["WindowGlassClear"], start[0], start[1], tx, ty, nx, ny,
+                                                   op.u0, op.u1, op.z0, op.z1, wall_thickness_m=interior.wall_thickness_m)
+                        _add_box_on_wall(timber_mesh, start[0], start[1], tx, ty, nx, ny, u_c - 0.04, u_c + 0.04, op.z0, op.z1, 0.0, 0.10)
+                        wmid = op.z0 + (op.z1 - op.z0) * 0.62
+                        _add_box_on_wall(timber_mesh, start[0], start[1], tx, ty, nx, ny, op.u0, op.u1, wmid - 0.04, wmid + 0.04, 0.0, 0.10)
+                    continue
                 if is_front and fl == 0 and bay == bays // 2:
                     # Historic main Rathaus entrance portal facing Rathausplatz (stone surround, steps, double door, pediment)
                     _add_box_on_wall(stone_mesh, start[0], start[1], tx, ty, nx, ny, u_c - 1.35, u_c + 1.35, base_m, base_m + 0.45, 0.0, 0.55)
@@ -346,9 +376,11 @@ def _build_rathaus(meshes, polygon: Polygon, base_m: float, max_ground_m: float,
                 wmid = wz0 + (wz1 - wz0) * 0.62
                 _add_box_on_wall(timber_mesh, start[0], start[1], tx, ty, nx, ny, u_c - win_w * 0.48, u_c + win_w * 0.48, wmid - 0.04, wmid + 0.04, 0.0, 0.10)
 
-            # Vertical timber framing posts between bays
+            # Vertical timber framing posts between bays (not across an interior door)
             for bay in range(1, bays):
                 u_p = bay * spacing
+                if interior is not None and fl == 0 and interior.overlaps_door(idx, u_p - 0.08, u_p + 0.08, margin=0.25):
+                    continue
                 _add_box_on_wall(timber_mesh, start[0], start[1], tx, ty, nx, ny, u_p - 0.08, u_p + 0.08, z0_fl, z0_fl + floor_h, 0.0, 0.065)
 
         # Front mansard dormer accents (Gauben) facing Rathausplatz
@@ -360,6 +392,16 @@ def _build_rathaus(meshes, polygon: Polygon, base_m: float, max_ground_m: float,
                 _add_box_on_wall(gable_mesh, start[0], start[1], tx, ty, nx, ny, u_d - 0.75, u_d + 0.75, dz0, dz1, -0.55, 0.05)
                 _add_box_on_wall(glass_mesh, start[0], start[1], tx, ty, nx, ny, u_d - 0.48, u_d + 0.48, dz0 + 0.18, dz1 - 0.18, 0.0, 0.08)
                 _add_box_on_wall(roof_mesh, start[0], start[1], tx, ty, nx, ny, u_d - 0.88, u_d + 0.88, dz1, dz1 + 0.45, -0.75, 0.15)
+
+    if interior is not None:
+        d_edge = interior.door_edge_idx
+        ds, de = ring[d_edge], ring[d_edge + 1]
+        dl = max(hypot(de[0] - ds[0], de[1] - ds[1]), 1e-6)
+        dtx, dty = (de[0] - ds[0]) / dl, (de[1] - ds[1]) / dl
+        z_top = interior.floor_z + interior.door_height_m
+        _add_box_on_wall(stone_mesh, ds[0], ds[1], dtx, dty, dty, -dtx, interior.door_u - 1.25, interior.door_u + 1.25,
+                         z_top + 0.24, z_top + 0.54, 0.0, 0.24)
+        add_walls_with_openings(wall_mesh, polygon, eave_height_m, base_m, interior.openings_by_edge())
 
     # Adjacent Rathausturm accent on the SW corner projection
     tc = cfg.get("tower_corner_local_m")
@@ -511,6 +553,60 @@ def _build_fortress_building(meshes, polygon: Polygon, base_m: float, max_ground
     return ridge_height_m
 
 
+def _build_rathausturm(meshes, polygon: Polygon, base_m: float, max_ground_m: float,
+                       eave_height_m: float, ridge_height_m: float, cfg: dict) -> float:
+    """
+    Neo-Gothic red-brick Rathausturm (separate OSM/LoD2 building beside the Rathaus): square brick shaft up to
+    the LoD2 eave, four pointed gables (Wimperge) at the shaft top, slender octagonal slate spire up to the
+    LoD2 ridge and a weather vane, after the reference photo ref_rathaus_front.
+    """
+    from shapely.geometry.polygon import orient
+
+    brick_mesh = meshes["WallsBrick"]
+    gable_mesh = meshes.get("GableBrick", brick_mesh)
+    stone_mesh = meshes["StoneTrim"]
+    glass_mesh = meshes["WindowGlass"]
+    spire_mesh = meshes[cfg.get("spire_style", "RoofsSlate")]
+
+    rect = orient(polygon.minimum_rotated_rectangle, sign=1.0)
+    ring = list(rect.exterior.coords)[:4]
+    shaft_top = base_m + float(eave_height_m)
+    gable_h = float(cfg.get("gable_height_m", 2.2))
+    tip_z = base_m + max(float(ridge_height_m), float(eave_height_m) + gable_h + 4.0)
+    cx = sum(p[0] for p in ring) / 4.0
+    cy = sum(p[1] for p in ring) / 4.0
+    min_side = min(hypot(ring[(i + 1) % 4][0] - ring[i][0], ring[(i + 1) % 4][1] - ring[i][1]) for i in range(4))
+
+    for i in range(4):
+        start, end = ring[i], ring[(i + 1) % 4]
+        dx, dy = end[0] - start[0], end[1] - start[1]
+        length = max(hypot(dx, dy), 0.1)
+        tx, ty = dx / length, dy / length
+        nx, ny = ty, -tx
+        # Brick shaft face from the lowest ground up to the shaft top (no roof: the spire closes it)
+        _add_quad(brick_mesh, (start[0], start[1], base_m), (end[0], end[1], base_m),
+                  (end[0], end[1], shaft_top), (start[0], start[1], shaft_top))
+        # Wimperg: pointed brick gable in the facade plane
+        _add_triangle(gable_mesh, (start[0], start[1], shaft_top), (end[0], end[1], shaft_top),
+                      (start[0] + dx * 0.5, start[1] + dy * 0.5, shaft_top + gable_h))
+        # Stone plinth, belt courses and cornice
+        for z0, z1 in ((base_m, base_m + 0.6), (shaft_top - 5.2, shaft_top - 4.95), (shaft_top - 0.25, shaft_top + 0.05)):
+            if z0 > base_m - 0.01 and z1 < shaft_top + 0.1:
+                _add_box_on_wall(stone_mesh, start[0], start[1], tx, ty, nx, ny, 0.0, length, z0, z1, 0.0, 0.08)
+        # Twin lancet sound openings below the gable and a single lancet window in the middle of the shaft
+        for u_c in (length * 0.35, length * 0.65):
+            _add_box_on_wall(glass_mesh, start[0], start[1], tx, ty, nx, ny, u_c - 0.22, u_c + 0.22,
+                             shaft_top - 3.9, shaft_top - 1.2, 0.0, 0.06)
+        _add_box_on_wall(glass_mesh, start[0], start[1], tx, ty, nx, ny, length * 0.5 - 0.3, length * 0.5 + 0.3,
+                         base_m + (shaft_top - base_m) * 0.42, base_m + (shaft_top - base_m) * 0.42 + 2.1, 0.0, 0.06)
+
+    spire_r = max(0.9, min_side * 0.40)
+    _add_octagonal_spire(spire_mesh, (cx, cy), spire_r, shaft_top + 0.15, tip_z, sides=8)
+    # Weather vane rod
+    _add_prism(stone_mesh, (cx, cy), (1.0, 0.0), (0.0, -1.0), 0.05, 0.05, tip_z - 0.2, tip_z + 1.2, add_top=True)
+    return max(float(ridge_height_m), tip_z - base_m + 1.2)
+
+
 def add_landmark_building(
     meshes,
     polygon: Polygon,
@@ -521,13 +617,17 @@ def add_landmark_building(
     base_m: float,
     max_ground_m: float,
     landmark_cfg: dict,
+    interior=None,
 ) -> float:
     """Dispatch configured landmark variant and return final peak height above base_m."""
     variant = landmark_cfg["variant"]
     if variant == "johanneskirche":
         return _build_johanneskirche(meshes, polygon, base_m, max_ground_m, ridge_height_m, landmark_cfg)
+    if variant == "rathausturm":
+        return _build_rathausturm(meshes, polygon, base_m, max_ground_m, eave_height_m, ridge_height_m, landmark_cfg)
     if variant == "rathaus":
-        return _build_rathaus(meshes, polygon, base_m, max_ground_m, eave_height_m, ridge_height_m, ridge_direction_deg, landmark_cfg)
+        return _build_rathaus(meshes, polygon, base_m, max_ground_m, eave_height_m, ridge_height_m, ridge_direction_deg, landmark_cfg,
+                              interior=interior)
     if variant.startswith("festung_"):
         return _build_fortress_building(
             meshes, polygon, base_m, max_ground_m, eave_height_m, ridge_height_m,

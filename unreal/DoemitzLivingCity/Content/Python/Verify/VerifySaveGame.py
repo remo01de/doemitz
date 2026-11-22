@@ -202,10 +202,38 @@ def check(_delta_seconds):
                 )
             unreal.GameplayStatics.delete_game_in_slot(v5_slot, 0)
 
+            # Sprint 13: SaveSchemaVersion 6 -> 7 (no interior) and a v7 save whose interior no longer exists
+            v6_slot = "DoemitzVerifyV6Migration"
+            pawn.set_actor_location(saved_player_loc, False, True)
+            if not sub.save_city_state(v6_slot):
+                raise RuntimeError("failed to capture baseline save for v6 migration")
+            v6_save = unreal.GameplayStatics.load_game_from_slot(v6_slot, 0)
+            v6_save.set_editor_property("save_schema_version", 6)
+            if not unreal.GameplayStatics.save_game_to_slot(v6_save, v6_slot, 0):
+                raise RuntimeError("failed to write downgraded v6 save")
+            if not sub.load_city_state(v6_slot):
+                raise RuntimeError("LoadCityState failed to migrate SaveSchemaVersion 6")
+            if str(sub.get_last_loaded_player_interior_id()) != "None":
+                raise RuntimeError(f"v6 save must load without interior, got {sub.get_last_loaded_player_interior_id()}")
+            if abs(pawn.get_actor_location().z - saved_player_loc.z) > 45.0:
+                raise RuntimeError("v6->v7 player height changed unexpectedly")
+            gone = unreal.GameplayStatics.load_game_from_slot(v6_slot, 0)
+            gone.set_editor_property("save_schema_version", 7)
+            gone.set_editor_property("player_interior_id", "interior:removed_room")
+            gone.set_editor_property("player_interior_place_id", "poi:osm:node:1794647095")
+            if not unreal.GameplayStatics.save_game_to_slot(gone, v6_slot, 0) or not sub.load_city_state(v6_slot):
+                raise RuntimeError("failed to load v7 save with a removed interior")
+            apo_ent = sub.get_place_definition("poi:osm:node:1794647095").get_editor_property("entrance_location")
+            gone_loc = pawn.get_actor_location()
+            if ((gone_loc.x - apo_ent.x) ** 2 + (gone_loc.y - apo_ent.y) ** 2) ** 0.5 > 30.0:
+                raise RuntimeError(f"removed interior: player not moved to the Apotheke entrance ({gone_loc} vs {apo_ent})")
+            unreal.GameplayStatics.delete_game_in_slot(v6_slot, 0)
+
             finish(
-                f"DOEMITZ_SAVEGAME_PIE_OK: v6 saved & restored time={restored_min:.1f}m, "
+                f"DOEMITZ_SAVEGAME_PIE_OK: v7 saved & restored time={restored_min:.1f}m, "
                 f"money={saved_money}ct, inv={saved_qty}, job={saved_job}, active_task={accepted_task_id}, "
-                f"30 citizens, 8 vehicles, v4->v6 and v5->v6 terrain height migration "
+                f"30 citizens, 8 vehicles, v4->v7, v5->v7 terrain height and v6->v7 interior migration, "
+                f"removed-interior fallback to entrance, "
                 f"(player_z={mig_player_z:.1f}cm, citizen_z={mig_anna_z:.1f}cm) verified",
                 True,
             )

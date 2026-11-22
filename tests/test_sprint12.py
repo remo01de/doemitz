@@ -40,7 +40,8 @@ class Sprint12Test(unittest.TestCase):
 
         nw = by_id["bridge:osm:way:120432334"]
         sources = [ab["source"] for ab in nw["abutments"]]
-        self.assertIn("tunnel_portal_dgm", sources, f"NW-Steg must connect to tunnel portal: {nw['abutments']}")
+        # Sprint 13: the abutment takes the tunnel floor height (DGM at the portal for the NW-Steg)
+        self.assertIn("tunnel_floor", sources, f"NW-Steg must connect to tunnel portal: {nw['abutments']}")
         self.assertNotIn("assumed_max_dgm_3m_radius", sources)
         self.assertEqual(nw["warnings"], [])
         self.assertLessEqual(nw["max_slope_percent"], 6.0)
@@ -154,7 +155,7 @@ class Sprint12Test(unittest.TestCase):
 
     def test_landmarks_bridge_details_tunnel_portal_and_rathaus_entrance(self):
         lm = self.pkg["landmarks"]
-        self.assertEqual(lm["building_count"], 9)
+        self.assertEqual(lm["building_count"], 10)  # Sprint 13 adds the Rathausturm
         self.assertEqual(lm["buildings"]["osm:way:42551672"], "johanneskirche")
         self.assertEqual(lm["buildings"]["osm:way:41020272"], "rathaus")
         for fid in ("osm:way:96029976", "osm:way:1360590722", "osm:way:96029971", "osm:way:1360590724", "osm:way:96029975", "osm:way:96029967"):
@@ -166,7 +167,8 @@ class Sprint12Test(unittest.TestCase):
         # Verify Rathaus entrance is placed at the real front door on Rathausplatz
         rathaus_place = next(p for p in self.pkg["citizens"]["places"] if p["id"] == "poi:osm:way:41020272")
         ent = rathaus_place["entrance"]
-        self.assertEqual(ent["source"], "landmark_reference_door")
+        # Sprint 13: the walk-in Bürgerbüro puts the entrance in front of the opened real door
+        self.assertIn(ent["source"], ("landmark_reference_door", "interior_door"))
         real_door = self.landmarks_cfg["buildings"]["osm:way:41020272"]["real_entrance_local_m"]
         dx = ent["position_m"][0] - real_door[0]
         dy = ent["position_m"][1] - real_door[1]
@@ -176,7 +178,7 @@ class Sprint12Test(unittest.TestCase):
         portals = self.pkg.get("tunnel_portals") or []
         nw_portal = next(p for p in portals if p["road_id"] == "osm:way:416256369")
         nw_bridge = next(b for b in self.pkg["bridges"] if b["id"] == "bridge:osm:way:120432334")
-        east_ab = next(ab for ab in nw_bridge["abutments"] if ab["source"] == "tunnel_portal_dgm")
+        east_ab = next(ab for ab in nw_bridge["abutments"] if ab["source"] == "tunnel_floor")
         self.assertAlmostEqual(nw_portal["entry_point_3d_m"][2], east_ab["position_m"][2], places=3)
 
     def test_references_manifest_has_url_author_and_license(self):
