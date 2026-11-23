@@ -364,6 +364,8 @@ def build_terrain_tiles(
     tile_size_m: int = DEFAULT_TILE_SIZE_M,
     max_error_m: float = DEFAULT_MAX_ERROR_M,
     max_triangles: int = DEFAULT_MAX_TRIANGLES,
+    fine_area: Polygon | None = None,
+    outer_max_error_m: float | None = None,
 ) -> tuple[dict[str, dict], dict]:
     """
     Build simplified, crack-free 64 m TIN terrain mesh tiles from DGM1.
@@ -561,8 +563,24 @@ def build_terrain_tiles(
 
     # Open terrain points: strictly non-depressed
     open_mask = ~depressed
-    edge_tol = max(0.005, max_error_m - 0.001)
-    tin_tol = max(0.005, max_error_m - 0.0005)
+    # Error budget per tile: max_error_m where a tile touches fine_area (historic core), outer_max_error_m
+    # elsewhere. Shared tile edges use the finer budget of their two tiles so neighbours match exactly.
+    use_outer = fine_area is not None and outer_max_error_m is not None and outer_max_error_m > max_error_m
+
+    def tile_budget(tx, ty):
+        if not use_outer or tx < 0 or ty < 0 or tx >= n_tiles_x or ty >= n_tiles_y:
+            return max_error_m
+        x0b, x1b = tx * tile_size, min(max_gx, (tx + 1) * tile_size)
+        y0b, y1b = ty * tile_size, min(max_gy, (ty + 1) * tile_size)
+        tile_poly = Polygon([(e_coords[x0b], n_coords[y0b]), (e_coords[x1b], n_coords[y0b]),
+                             (e_coords[x1b], n_coords[y1b]), (e_coords[x0b], n_coords[y1b])])
+        return max_error_m if tile_poly.intersects(fine_area) else float(outer_max_error_m)
+
+    budgets = {(tx, ty): tile_budget(tx, ty) for tx in range(n_tiles_x) for ty in range(n_tiles_y)}
+
+    def edge_tol_for(*tiles):
+        err = min(budgets.get(t, max_error_m) for t in tiles if t in budgets) if any(t in budgets for t in tiles) else max_error_m
+        return max(0.005, err - 0.001)
 
     # Precompute deterministic shared tile-edge vertices on smooth raw_z so adjacent tiles match vertex-for-vertex (zero cracks!)
     h_edge_pts: dict[tuple[int, int], list[int]] = {}
@@ -573,7 +591,8 @@ def build_terrain_tiles(
             x1 = min(max_gx, (tx + 1) * tile_size)
             if x1 <= x0:
                 continue
-            h_edge_pts[(tx, ty)] = _dp_1d(raw_z[gy, x0 : x1 + 1], edge_tol, open_mask[gy, x0 : x1 + 1])
+            h_edge_pts[(tx, ty)] = _dp_1d(raw_z[gy, x0 : x1 + 1], edge_tol_for((tx, ty - 1), (tx, ty)),
+                                          open_mask[gy, x0 : x1 + 1])
 
     v_edge_pts: dict[tuple[int, int], list[int]] = {}
     for tx in range(n_tiles_x + 1):
@@ -583,11 +602,14 @@ def build_terrain_tiles(
             y1 = min(max_gy, (ty + 1) * tile_size)
             if y1 <= y0:
                 continue
-            v_edge_pts[(tx, ty)] = _dp_1d(raw_z[y0 : y1 + 1, gx], edge_tol, open_mask[y0 : y1 + 1, gx])
+            v_edge_pts[(tx, ty)] = _dp_1d(raw_z[y0 : y1 + 1, gx], edge_tol_for((tx - 1, ty), (tx, ty)),
+                                          open_mask[y0 : y1 + 1, gx])
 
     tile_meshes: dict[str, dict] = {}
     total_triangles = 0
     verified_max_open_err = 0.0
+    verified_max_open_err_fine = 0.0
+    fine_tiles = 0
 
     for ty in range(n_tiles_y):
         y0 = ty * tile_size
@@ -619,10 +641,18 @@ def build_terrain_tiles(
                 ceiling_z_sub=ceiling_z[y0 : y1 + 1, x0 : x1 + 1],
                 has_ceiling_sub=has_ceiling[y0 : y1 + 1, x0 : x1 + 1],
                 seed_pts=seed_pts,
-                tol_m=tin_tol,
+                tol_m=max(0.005, budgets[(tx, ty)] - 0.0005),
             )
+            if tile_open_err > budgets[(tx, ty)] + 1e-6:
+                raise ValueError(
+                    f"terrain tile {tx},{ty} max vertical error {tile_open_err:.4f} m exceeds its budget "
+                    f"{budgets[(tx, ty)]:.4f} m"
+                )
             if tile_open_err > verified_max_open_err:
                 verified_max_open_err = tile_open_err
+            if budgets[(tx, ty)] <= max_error_m + 1e-9:
+                fine_tiles += 1
+                verified_max_open_err_fine = max(verified_max_open_err_fine, tile_open_err)
 
             vertices: list[tuple[float, float, float]] = []
             v_map: dict[tuple[int, int], int] = {}
@@ -717,9 +747,9 @@ def build_terrain_tiles(
         raise ValueError(
             f"terrain mesh triangle count {total_triangles} exceeds budget {max_triangles}"
         )
-    if verified_max_open_err > max_error_m + 1e-6:
+    if verified_max_open_err_fine > max_error_m + 1e-6:
         raise ValueError(
-            f"terrain mesh max vertical error {verified_max_open_err:.4f} m exceeds budget {max_error_m:.4f} m"
+            f"terrain mesh max vertical error {verified_max_open_err_fine:.4f} m exceeds budget {max_error_m:.4f} m"
         )
 
     report = {
@@ -729,8 +759,11 @@ def build_terrain_tiles(
         "tile_count": len(tile_meshes),
         "triangle_count": total_triangles,
         "max_triangles_budget": max_triangles,
-        "max_vertical_error_m": round(verified_max_open_err, 5),
+        "max_vertical_error_m": round(verified_max_open_err_fine, 5),
         "max_error_budget_m": max_error_m,
         "depressed_cells": int(depressed.sum()),
+        **({"fine_tiles": fine_tiles, "outer_tiles": len(budgets) - fine_tiles,
+            "outer_max_error_budget_m": float(outer_max_error_m),
+            "outer_max_vertical_error_m": round(verified_max_open_err, 5)} if use_outer else {}),
     }
     return tile_meshes, report

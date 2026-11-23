@@ -98,6 +98,15 @@
       "courtyard_center_local_m": [-195.0, -25.0],
       "reference_ids": ["ref_festung_courtyard", "ref_festung_overview"]
     },
+    "osm:way:42883863": {
+      "variant": "speicher",
+      "name": "Speicher am Hafen",
+      "wall_style": "WallsBrick",
+      "roof_style": "RoofsClay",
+      "storey_height_m": 3.2,
+      "height_note": "OSM height=60 ist falsch; Traufe 20,23 m und First 32,37 m aus LoD2 DEMVAL76000hCycv",
+      "dimensions_source": "lod2_heights; Fassadengliederung, Ladeluken und Dachdeckung angenommen (assumed_sprint14_speicher)"
+    },
     "osm:way:96029967": {
       "variant": "festung_arrestantenhaus",
       "name": "Arrestantenhaus",

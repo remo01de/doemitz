@@ -77,9 +77,10 @@ class Sprint11TerrainTest(unittest.TestCase):
         tm = self.package["terrain"]["mesh"]
         self.assertEqual(tm["kind"], "dgm1")
         self.assertGreater(tm["tile_count"], 1)
-        # Budget from the versioned manifest (Sprint 13: 155.000, wall-line clipping along the fortress escarp)
+        # Budget from the versioned manifest (Sprint 14: 250.000 for the area up to the harbour; 5 cm in the
+        # historic core, 10 cm in the extension)
         self.assertLessEqual(tm["triangle_count"], tm["max_triangles_budget"])
-        self.assertLessEqual(tm["max_triangles_budget"], 155000)
+        self.assertLessEqual(tm["max_triangles_budget"], 250000)
         self.assertLessEqual(tm["max_vertical_error_m"], 0.05)
 
         # Three known open-ground points across Dömitz Altstadt:
@@ -117,7 +118,14 @@ class Sprint11TerrainTest(unittest.TestCase):
             self.elevation, roads, road_width, ROAD_ELEVATION_M, CURB_HEIGHT_M,
             smoothing_window_m=smoothing_window_m,
         )
-        sw_mesh = self.package["meshes"]["Sidewalks"]
+        # Sprint 14: the sidewalks are split into streaming cells ("Sidewalks__cX_Y"); check every part
+        parts = [m for n, m in sorted(self.package["meshes"].items()) if n == "Sidewalks" or n.startswith("Sidewalks__")]
+        self.assertTrue(parts)
+        sw_mesh = {"vertices": [], "triangles": []}
+        for part in parts:
+            base = len(sw_mesh["vertices"])
+            sw_mesh["vertices"].extend(part["vertices"])
+            sw_mesh["triangles"].extend((a + base, b + base, c + base) for a, b, c in part["triangles"])
         # Top sidewalk vertices are stored via Mesh.add_surface (vertex index lookup before add_draped_walls).
         # Every top-surface triangle has all 3 vertices at sidewalk_surface_z; check every top-face vertex.
         verts = sw_mesh["vertices"]

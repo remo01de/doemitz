@@ -1,69 +1,72 @@
 # Sprint 14 · Stadtgebiet bis Hafen und Schleuse
 
-Stand: Plan (23.11.2026), noch nicht umgesetzt.
+Stand: Umgesetzt und geprüft (Plan vom 23.11.2026, Umsetzung am selben Tag).
 
 ## Ziel
 
-Das spielbare Gebiet wächst von der Altstadt nach Südosten bis zum Hafen Dömitz und zur Schleuse Dömitz der Müritz-Elde-Wasserstraße. Spieler, Einwohner und Fahrzeuge erreichen den Hafen über echte Straßen. Hafenbecken, Stege, Speicher und Schleuse sind als erkennbare Bauwerke modelliert. Die gewachsene Welt wird in Zellen zerlegt und über World Partition gestreamt (Roadmap-Punkt aus Sprint 11 und 12). Das Ziel von mindestens 15 FPS auf dem Test-PC gilt weiter.
+Das spielbare Gebiet wächst von der Altstadt nach Südosten bis zum Hafen Dömitz und zur Schleuse Dömitz der Müritz-Elde-Wasserstraße. Hafenbecken, Stege, Speicher und Schleuse sind als erkennbare Bauwerke modelliert. Die gewachsene Welt ist in Zellen zerlegt und wird über World Partition gestreamt. Das Ziel von mindestens 15 FPS auf dem Test-PC gilt weiter.
 
 ## Entscheidungen des PO
 
-- **Der Festungsgraben bleibt Wasser.** Der Wasserstand hängt stark von der Witterung ab; der trockene Graben auf manchen Fotos ist ein Momentzustand. Der Punkt „Graben als Wiese“ aus Sprint 13.1 entfällt.
-- Die Erweiterung geht in Richtung Hafen und Schleuse. Andere Richtungen sind nicht Teil dieses Sprints.
+- **Der Festungsgraben bleibt Wasser.** Der Wasserstand hängt stark von der Witterung ab; der trockene Graben auf manchen Fotos ist ein Momentzustand.
+- Die Erweiterung geht in Richtung Hafen und Schleuse.
 
-## Ausgangslage
+## Ergebnisse
 
-- Ausschnitt bisher: `bounds_lonlat [11.2428, 53.1398, 11.2546, 53.1455]`, lokal etwa x −411…+411 m, y −338…+338 m, 0,50 km². Ursprung `origin_lonlat [11.2487, 53.14265]`, Bezugshöhe 13,001 m NHN.
-- Hafen und Schleuse liegen südöstlich knapp außerhalb (Erkundung mit OSM-API am 23.11.2026):
+| Nr. | Meilenstein | Ergebnis |
+| --- | --- | --- |
+| 0 | Daten und Zuschnitt | `bounds_lonlat [11.2428, 53.1372, 11.2607, 53.1455]`, lokal x −426…+819 m, y −648…+338 m, 1,11 km² statt 0,50 km². Ursprung, Bezugshöhe und Achsen bleiben gleich; Koordinaten und Spielstände gelten weiter. Ausschnitt plus 50 m Rand liegt in der vorhandenen DGM1/LoD2-Kachel `33_248_5894`, also ohne neuen amtlichen Download. Der OSM-Stand wurde neu geladen (`map.osm` plus Relationen 285875 und 1809795). **Diff Altstadt:** Kein OSM-Objekt des alten Ausschnitts hat sich geändert; nur zwei Radrouten-Relationen haben neue Versionen. Die Unterschiede im Szenen-Export kommen allein vom neuen Zuschnitt am alten Rand. Alle 72 OSM-IDs aus den Manifesten existieren weiter. Ergebnis: 782 Gebäude (vorher 645), 213 Wege, 9 Wasserflächen, 177 POIs, 20 Mauern. Stadtkarte 4096 px, 0,31 m/px. |
+| 1 | Wasser | Neue Szenenebenen `waterworks`, `piers` und `moorings`. Schleusentore, Wehre und Dämme teilen Wasserflächen in Abschnitte, jeder mit eigenem Stand aus dem eigenen Ufer (DGM1-Stand, die Schnittlinie zählt nicht mit). Die Elde-Fläche `osm:relation:285875` zerfällt in Unterwasser 11,75 m NHN, oberen Vorhafen 14,70 m NHN und altes Elde-Bett oberhalb des Wehrs 14,70 m NHN. Die Kammer steht auf Unterwasser (11,80 m NHN). Der Festungsgraben bleibt unverändert. |
+| 2 | Schleuse Dömitz | Neues Modul `tools/mesh_generator/locks.py`. Die Kammer (`osm:way:1315856502`, 61,1 m lang, etwa 5,5 m breit) hat Betonwände bis 17,3 m NHN mit Abdeckung, Leiternischen, Pollern und Geländer; das Gelände dahinter wird wie bei Stützmauern bis zur Abdeckung aufgefüllt und an der Wand geteilt. Zwei Stemmtorpaare an `osm:way:1315856503` und `osm:way:1315856504` reichen bis auf Uferhöhe, mit begehbarem Steg, Geländer und Waagebalken; sie schließen die Fallhöhe von 2,95 m. Das Wehr `osm:way:42707704` ist ein Betonkörper mit Pfeilern, Krone auf Oberwasser. Die Straßenbrücke `osm:way:42325141` kommt aus der Brückenpipeline. Maße als `assumed_sprint14_lock` gekennzeichnet. |
+| 3 | Hafen | Neues Modul `tools/mesh_generator/harbour.py`: 26 Schwimmstege (Deck 0,35 m über dem Wasser, 2,0 m breit bei Hauptstegen, 1,2 m bei Fingerstegen, über Land 0,12 m über Gelände mit Rampe), 2 Plattformen, Führungspfähle, 5 Dalben, 5 Buhnen als Steinschüttung, Kaimauern an hohen Ufern in Stegnähe und 16 Boote als HISM-Requisiten mit Kollision (Motorkreuzer und Segelboot, deterministisch, nur ganz im Wasser und ohne Berührung von Stegen oder anderen Booten). Der **Speicher** (`osm:way:42883863`) ist eine eigene Landmarke: Backstein, 6 Geschosse mit kleinen Fenstern, Ladeluken in den Giebelseiten, Kranbalken und Satteldach nach LoD2 (Traufe 20,23 m, First 32,37 m; OSM `height=60` ist falsch). |
+| 4 | Straßen, Orte, Simulation | 246 Straßenkanten, 86 Knoten, 14 Parkplätze, 75 Orte (18 im Erweiterungsgebiet: Hafenrestaurant, Hotel Dömitzer Hafen, Panorama Café, Strandbar, Cafés, Läden, Pensionen, Feuerwehr). 15 der 30 Einwohner nutzen Orte im neuen Gebiet. Neue Aufgabe `task_tpl_errand_kaufhaus_hafenhotel`: eine Kiste vom Kaufhaus zum Hotel am Hafen. |
+| 5 | Zellen und Streaming | Die Mesh-Stufe zerlegt die Stadt-Meshes in Zellen von 256 m (`<Mesh>__cX_Y`, Raster 5 × 4). Dreiecke der Landmarken (Kirche, Rathaus, Festungsbauten, Speicher) kommen nach `<Mesh>__lm` und bleiben immer geladen, ebenso Festungsmauern, Schleuse, Brücken und Wasser. 352 Zell-Meshes, 320 Geländekacheln und 168 Requisiten-Actors (je Zelle) werden räumlich geladen. Das Laufzeitraster (WorldPartitionRuntimeHashSet) stellt `UDoemitzWorldTools::ConfigureStreamingGrid` beim Import ein: Zelle 256 m, Laderadius 1000 m (vorher 128 m / 256 m). Neue PIE-Prüfung `VerifyStreaming.py`. |
+| 6 | Budgets, Prüfungen, Doku | Gelände: höchstens 5 cm Fehler in der Altstadt, höchstens 10 cm im Erweiterungsgebiet, 244.273 von 250.000 Dreiecken. Doku in `docs/GEO_DATA.md` und `docs/ARCHITECTURE.md` aktualisiert. |
 
-| Objekt | OSM | Lage (lokal, m) | Hinweise |
-| --- | --- | --- | --- |
-| Schleuse Dömitz | `osm:way:161040933` (`lock=yes`, `lock_name=Schleuse Dömitz`), Kammer `osm:way:1315856502` (`water=lock`), Tore `osm:way:1315856503` und `osm:way:1315856504` (`waterway=lock_gate`) | etwa (763, −280) | Wehr `osm:way:42707704`, Fischtreppe `osm:way:96024317`, Straßenbrücke `osm:way:42325141` (`bridge=yes`, `layer=1`), Gebäude an der Kammer `osm:way:42883859` |
-| Hafen Dömitz | Hafenfläche `osm:way:1355845079` (`landuse=harbour`), Marina `osm:node:431057011`, Motoryachtclub `osm:node:2117939128` und Steg `osm:way:117654901`, insgesamt 29 Stege (`man_made=pier`), Liegeplätze (`seamark:type=mooring`), Fähranleger `osm:way:1355845322` | etwa (670, −520) | Straßen „Am Hafen“ (`osm:way:25151524`, `osm:way:42707474`), „Hafenplatz/Alte Lüneburger Bahn“ (`osm:way:306167214`), Platz `osm:way:1355844659` |
-| Speicher | `osm:way:42883863` | etwa (710, −566) | OSM `height=60` ist falsch. LoD2 `DEMVAL76000hCycv`: Satteldach, Traufe 20,23 m, First 32,37 m. Zweithöchstes Bauwerk nach der Kirche (39,22 m). |
-| Weitere Orte | Hotel Dömitzer Hafen `osm:node:387219809`, Dömitzer Hafen Restaurant `osm:node:1125977013`, Wasserwanderzentrum `osm:node:674133513`, Cafés, Bar, Imbiss, Pensionen, Feuerwehr, ehemaliger Grenzturm | Hafen und Werder | Öffnungszeiten teils in OSM |
+## Abweichung vom Plan
 
-- Im Erweiterungsstreifen liegen 147 OSM-Gebäude (207 LoD2-Gebäude), 29 Stege, 9 Mauern und eine Stützmauer, 5 Buhnen, Kanal, Schleusenkammer, Wehr, Fischtreppe sowie etwa 70 Wege aller Klassen.
-- **Amtliche Daten liegen schon vor:** Hafen und Schleuse liegen in der vorhandenen DGM1- und LoD2-Kachel `33_248_5894` (UTM E 248–250 km, N 5894–5896 km). Ein neuer Download ist nur nötig, wenn der gewählte Zuschnitt samt 50-m-Rand diese Kachel verlässt.
+- **Schleusenhäupter ergänzt:** An jedem Torende steht ein begehbarer Betonblock auf Steghöhe (3 × 3 m). Ohne ihn endete der Torsteg am westlichen Oberhaupt an einer steilen Böschung, und die Figur rutschte ins Oberwasser.
+- **Editor-Ansicht:** Der Editor lädt räumlich geladene Zellen nicht von selbst. Skripte, die die Karte rendern, laden vorher alle Zellen (`doemitz_wp.load_all_actors()`, in `CaptureSprint13Screenshots.py` eingebaut). Wer die Karte im Editor öffnet, lädt die Zellen über das World-Partition-Fenster. Im Spiel und in PIE lädt das Laufzeit-Streaming automatisch.
 
-## Gebietszuschnitt
+- **Laderadius 1000 m statt 450 m:** Ohne HLOD fehlen entladene Zellen am Horizont ganz, also auch Gelände und Häuser. Mit 1000 m bleibt von jedem Punkt der heutigen Fläche alles Sichtbare geladen; Streaming und Zellen sind aktiv und geprüft, entladen aber bei der heutigen Größe kaum etwas. HLOD-Aufbau und ein kleinerer Radius gehören in die nächste Erweiterung.
+- **Kaimauern:** Sie entstehen automatisch an hohen Ufern in Stegnähe (16 Abschnitte); einige liegen am Kanal, wo das Ufer in Wirklichkeit eine Böschung sein kann.
 
-Vorgabe: `bounds_lonlat [11.2428, 53.1372, 11.2607, 53.1455]`.
+## Prüfungen
 
-- Das sind lokal etwa x −426…+819 m und y −648…+338 m, 1,11 km² (2,2-fach).
-- Projiziert ergibt das UTM E 248703–249948 und N 5894067–5895052. Mit 50 m Rand reicht das bis E 249998 und N 5894017, also noch in Kachel `33_248_5894`. Das muss die Kachelsuche (`discover`) bestätigen. Verlangt sie Nachbarkacheln, werden diese mit den vorhandenen Befehlen geladen und Lizenz und Quellen ergänzt.
-- **Ursprung, Bezugshöhe und Achsenabbildung bleiben unverändert.** Damit gelten alle lokalen Koordinaten, Spielstände (v7) und Manifest-Positionen weiter.
-- Der Campingplatz südlich des Hafens (`osm:way:310930661`) bleibt außerhalb.
+- Python: `python -m unittest discover -s tests`, 72 Tests in 651 s, alle bestanden. Neu ist `tests/test_sprint14.py` (7 Tests: Ausschnitt und Ursprung, Ober- und Unterwasser, Schleuse, Hafen und Boote, Speicherhöhe, Geländebudget je Bereich, Zellen, Karte und Hafen-Aufgabe). Angepasst wurden fest eingetragene Zählwerte älterer Tests (782 Gebäude, 9 Brücken, 11 Landmarken, 9 OSM-Eingänge, Karte 4096 px, Geländebudget 250.000) und die Mesh-Namen nach der Zellteilung.
+- Offline-Pipeline: `python -m tools.geo_import build` und `python -m tools.mesh_generator`, 696 Meshes, 524.804 Dreiecke, Gelände 244.273 Dreiecke (Altstadt max. 4,95 cm, Erweiterung max. 9,95 cm).
+- C++-Editor-Build (`DoemitzLivingCityEditor Win64 Development`): erfolgreich. Neu: `UDoemitzWorldTools` (Streaming-Raster setzen und auslesen, Streaming-Abschluss), zweite Benchmark-Strecke `-DoemitzBenchmarkRoute=hafen`.
+- Import (`scripts/Import-Altstadt.ps1`): `DOEMITZ_IMPORT_OK: 696 meshes`, Kollision von Gelände, Dächern, Wänden, Gehwegen und 9 Brücken bestanden; `DOEMITZ_HISM_IMPORT_OK: 168 HISM actors, 1543 instances, 1123 blocking`; `DOEMITZ_STREAMING_GRID_OK: WorldPartitionRuntimeHashSet: MainPartition 12800/25600 -> 25600/100000`.
+- PIE (`scripts/Verify-All.ps1`): `DOEMITZ_VERIFY_ALL_OK: 21/21 PIE checks passed`. Neu `VerifyStreaming.py`: 21 Positionen vom Rathaus über die Schleuse zum Hafen, an jeder ist nach dem Streaming (höchstens 0,1 s) Boden unter der Figur; danach geht die Figur über den oberen Torsteg von Haupt zu Haupt (tiefster Fuß 4,35 m, Steg 4,33 m). Angepasst: `VerifyCrossing.py` liest die Kante des Zebrastreifens aus dem Paket (die Kantennummer hat sich durch den größeren Ausschnitt verschoben), `VerifyMap.py` die Kartengröße, `VerifyEconomy.py` lässt die Uhr in der Einkaufsphase halb so schnell laufen (siehe Offen), `VerifyPropCollision.py` erkennt die Requisiten je Zelle.
+- Windows-Build (`scripts/Build-Windows.ps1 -ArchiveDirectory …\unreal\DoemitzLivingCity\Saved\Builds\Win64Sprint14` im Hauptprojekt): `BUILD SUCCESSFUL`.
+- Benchmark (`scripts/Run-Benchmark.ps1 -Profile DoemitzLow`, 1920×1080, 90 s, gepackter Build, Ergebnisse unter `Saved/Benchmarks/Sprint14/`):
 
-## Meilensteine
+  | Strecke | Lauf | FPS (Mittel) | Frametime p50 / p95 / p99 | GPU / Draw / Game |
+  | --- | --- | --- | --- | --- |
+  | Goethestraße → Rathausplatz → Festungszugang (328 m) | 1 | 44,34 | 22,13 / 27,82 / 35,45 ms | 22,6 / 17,9 / 3,5 ms |
+  | Goethestraße → Rathausplatz → Festungszugang (328 m) | 2 | 44,33 | 21,97 / 27,70 / 36,43 ms | 22,6 / 17,7 / 3,5 ms |
+  | Rathausplatz → Hafen → Schleuse (1092 m, `-Route hafen`) | 1 | 48,08 | 19,92 / 27,76 / 38,89 ms | 20,8 / 16,3 / 3,4 ms |
+  | Rathausplatz → Hafen → Schleuse (1092 m, `-Route hafen`) | 2 | 47,41 | 20,17 / 26,64 / 38,42 ms | 21,1 / 16,3 / 3,4 ms |
 
-| Nr. | Meilenstein | Inhalt | Abnahme |
-| --- | --- | --- | --- |
-| 0 | Daten und Zuschnitt | Neuer OSM-Ausschnitt mit allen benötigten Multipolygon-Bestandteilen (Hafen- und Elbwasserflächen). Der Ausschnitt wird für die ganze Fläche neu geladen. Deshalb kommt ein Diff-Bericht der Altstadt zwischen altem und neuem OSM-Stand dazu. `bounds_lonlat` in `data/manifests/doemitz-altstadt.json`, Kartenmetadaten und Importbericht anpassen. Stadtkarte mit höchstens 0,5 m/px. | Jede in den Manifesten referenzierte OSM-ID existiert weiter (Landmarken, Mauern, Tore, Innenräume, Straßen, Plätze) oder ist begründet ersetzt. Der Offline-Build ist bytegleich wiederholbar. |
-| 1 | Wasser | Hafenbecken, Kanal, Schleusenkammer und Elbe als Wasserflächen. Der Wasserstand kommt je Gewässer aus DGM1 (Stand der Befliegung) und ist als `dgm1_capture_level` gekennzeichnet. Ober- und Unterwasser der Schleuse sind getrennte Flächen mit eigener Höhe, geteilt an den Toren. Eine versionierte Übersteuerung je Gewässer in der Konfiguration bereitet spätere Witterungsstände vor. Der Festungsgraben bleibt unverändert Wasser. | Kein Gelände ragt durch Wasserflächen, keine Lücke zwischen Wasser und Ufer. Ober- und Unterwasser haben einen sichtbaren Höhenunterschied, im Bericht dokumentiert. |
-| 2 | Schleuse Dömitz | Kammerwände aus Beton oder Mauerwerk entlang `water=lock` bis über Oberwasser. Zwei Stemmtorpaare an den `lock_gate`-Wegen, statisch geschlossen, mit begehbarem Steg und Geländer. Poller und Leitern an der Kammer, das Gebäude an der Kammer aus LoD2, Wehr und Fischtreppe als einfache Bauwerke, die Straßenbrücke `osm:way:42325141` über die bestehende Brückenpipeline. Maße als `assumed_sprint14_lock` gekennzeichnet, Referenzfotos mit Lizenz im Referenzmanifest. | Kammer, Tore und Brücke sind begehbar und kollidieren. Neue PIE-Prüfung: Die Spielfigur geht über die Schleusenbrücke oder den Torsteg, ohne in die Kammer zu fallen. |
-| 3 | Hafen | Kaimauern entlang Hafenbecken und Hafenfläche. Stege aus `man_made=pier`: Linien als Holzstege (Breite aus `width`, sonst 2 m, als Annahme gekennzeichnet), Flächen als Plattformen. Liegeplätze als Pfähle. Boote als stilisierte HISM-Requisiten an Stegen und Liegeplätzen, deterministisch gesetzt, mit Kollision wie in Sprint 13.1. Speicher als Landmarke nach LoD2 (Backstein, Ladeluken). Hafenplatz mit Pflaster, Bänken und Laternen. Buhnen an der Elbe als Steinschüttung, wenn sie im Ausschnitt liegen. | Stege tragen die Spielfigur. Kein Boot schneidet Stege oder Kaimauern. Der Speicher steht mit 32,4 m First nach LoD2, nicht mit 60 m. |
-| 4 | Straßen, Orte und Simulation | Neue Straßen, Gehwege, Kreuzungen und Parkplätze im Straßengraph, Fahrzeugrouten bis zum Hafen. Neue Orte aus den POIs (Hotel, Restaurant, Cafés, Bar, Imbiss, Pensionen, Wasserwanderzentrum) mit Eingängen und Öffnungszeiten aus OSM, sonst gekennzeichneten Annahmen. Einige Einwohner bekommen Arbeits- oder Freizeitziele am Hafen, Einwohnerzahl bleibt 30. Mindestens eine Aufgabe führt zum Hafen. | `VerifyCitizens`, `VerifyTrafficNetwork`, `VerifyParking`, `VerifyTasks` bestehen mit dem größeren Netz. Ein Fahrzeug erreicht den Hafenparkplatz, ein Einwohner einen Hafenort. |
-| 5 | Zellen und Streaming | Die generierten Stadt-Meshes (Wände, Dächer, Giebel, Straßen, Gehwege und andere, bisher je Material ein Mesh für die ganze Stadt) werden in Zellen von 256 m zerlegt. Stabile Asset-Namen: `SM_<Name>_<Zelle>`. HISM-Requisiten ebenfalls je Zelle. Diese Actors werden räumlich geladen (World Partition, Laderadius zunächst 450 m, im Bericht begründet). Immer geladen bleiben Landmarken für die Silhouette (Kirche, Speicher, Festung), Wasser, Simulation, Tag-Nacht-Steuerung und Innenräume in Reichweite. Die Simulation bleibt global; Einwohner und Fahrzeuge brauchen keine geladene Kollision (wie bisher). Spielstand laden und Teleports in PIE warten, bis die Zielzelle gestreamt ist. | Kein sichtbares Loch und kein Durchfallen beim Sprint vom Rathaus zur Schleuse. Spielstand am Hafen laden: Figur steht auf dem Boden. Alle PIE-Prüfungen laufen mit Streaming. |
-| 6 | Budgets, Prüfungen und Doku | Geländebudget neu festlegen: maximal 5 cm Fehler in der Altstadt, Dreieckszahl im Bericht. Benchmarkstrecke um „Festungszugang → Hafen → Schleuse“ erweitern oder zweite Strecke anlegen. Screenshots: Schleuse vom Torsteg, Hafen vom Hafenplatz, Speicher, Stege mit Booten, Übergang Altstadt–Hafen. Tests mit festen Zählwerten (Gebäude, Mauern, Brücken, Orte) begründet anpassen, neue Tests für Schleuse, Hafen, Speicherhöhe und Zellen. `docs/GEO_DATA.md` und `docs/ARCHITECTURE.md` (Streaming statt „alles geladen“) aktualisieren. | `python -m unittest discover -s tests` grün, `scripts/Verify-All.ps1` grün (bisherige 20 Prüfungen plus neue), Win64-Build startet, mindestens 15 FPS im Mittel bei 1080p (`DoemitzLow`) auf beiden Strecken. A/B gegen Sprint 13.1 am selben Tag, weil die absoluten Werte des Test-PCs schwanken (siehe Sprint 13.1). |
+  Das Ziel von mindestens 15 FPS ist auf beiden Strecken deutlich erfüllt. Auf der Altstadt-Strecke liegen die Werte etwa 10 % unter dem Stand von Sprint 13.1 am selben Tag (47–50 FPS), weil mit 1000 m Laderadius die ganze größere Stadt geladen bleibt.
 
-## Reihenfolge
+## Sichtprüfung
 
-1. Meilenstein 0 zuerst, mit Diff-Bericht. Wenn der neue OSM-Stand die Altstadt stark verändert, vor dem Weiterbauen mit dem PO klären, ob der alte Stand für die Altstadt eingefroren wird.
-2. Danach 1 bis 4 auf Basis des bisherigen Modells (alles geladen), mit FPS-Messung nach jedem Meilenstein.
-3. Meilenstein 5 zum Schluss, damit Zerlegung und Streaming an der fertigen Welt gemessen werden.
+Aufnahmen mit `CaptureSprint13Screenshots.py` unter `unreal/DoemitzLivingCity/Saved/Screenshots/Sprint13/`:
 
-## Risiken
+| Bild | Was zu sehen ist |
+| --- | --- |
+| [27_schleuse_unterhaupt.png](../unreal/DoemitzLivingCity/Saved/Screenshots/Sprint13/27_schleuse_unterhaupt.png) | Vom Unterwasser: Kammerwände mit Leitern und Pollern, unteres Tor mit Steg und Geländer, Betonhäupter beiderseits des Tors, Waagebalken über dem Ufer, Schleusengebäude. |
+| [28_schleuse_kammer.png](../unreal/DoemitzLivingCity/Saved/Screenshots/Sprint13/28_schleuse_kammer.png) | Vom oberen Torsteg in die Kammer, Geländer entlang der Kammerkanten. |
+| [29_hafen_steganlage.png](../unreal/DoemitzLivingCity/Saved/Screenshots/Sprint13/29_hafen_steganlage.png) | Auf dem Hauptsteg am Südkai: Boot, Fingerstege, Kaimauer mit Leiter, dahinter der Speicher. |
+| [30_speicher.png](../unreal/DoemitzLivingCity/Saved/Screenshots/Sprint13/30_speicher.png) | Speicher mit Satteldach über Kaimauer und Steganlage. |
+| [31_hafen_steg.png](../unreal/DoemitzLivingCity/Saved/Screenshots/Sprint13/31_hafen_steg.png) | Nordsteg mit Fingerstegen, Pfählen und Segelboot, Kaimauer am Kanal. |
+| [32_weg_altstadt_hafen.png](../unreal/DoemitzLivingCity/Saved/Screenshots/Sprint13/32_weg_altstadt_hafen.png) | Übergang von der Altstadt zum Hafen. |
 
-- **Neuer OSM-Stand in der Altstadt:** geänderte Wege oder Gebäude können Landmarken-Konfiguration, Torvorhof oder Innenräume verschieben. Gegenmittel: ID-Prüfung und Diff-Bericht in Meilenstein 0.
-- **Streaming und Prüfskripte:** Teleports in PIE treffen ungeladene Zellen. Gegenmittel: in den Skripten auf den Streaming-Abschluss warten.
-- **Leistung:** Die zerlegten Meshes erhöhen die Zahl der Draw Calls, ermöglichen aber Culling. Das muss gemessen und nicht angenommen werden.
-- **Wasserstände:** DGM1 zeigt einen Momentzustand. Die Übersteuerung in der Konfiguration hält die Tür für Witterungsstände offen, ohne sie jetzt umzusetzen.
+## Offen
 
-## Nicht im Umfang
-
-- Schleusenbetrieb (Tore bewegen, Kammer füllen), Schiffs- und Fährverkehr.
-- Innenräume am Hafen (Speicher, Hotel).
-- Witterungsabhängige Wasserstände zur Laufzeit.
-- Erweiterung in andere Richtungen.
-- Die offenen Punkte der Festung aus Sprint 13.1 (Brustwehr der Bastionsflanken, Zierformen am Sandsteintor, Poternen, Kasematten) bleiben offen.
+- HLOD für entfernte Zellen und ein kleinerer Laderadius (nötig bei weiterem Wachstum).
+- Am neuen Ostrand (bei der Schleuse) endet die Welt sichtbar; ein Abschluss (Gelände-Schürze oder Horizontkulisse) fehlt.
+- Annas Einkaufsfenster (60 Spielminuten) ist kürzer als ihr Weg vom Amt zum Kaufhaus bei 1x (94 Spielminuten); das war schon vor Sprint 14 so und fiel nur nicht auf, weil zwei andere Einwohner im Kaufhaus einkauften.
+- Schleusenbetrieb, Schiffs- und Fährverkehr, Innenräume am Hafen.
+- Die offenen Punkte der Festung aus Sprint 13.1 bleiben offen.

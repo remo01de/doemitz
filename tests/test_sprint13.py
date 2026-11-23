@@ -187,11 +187,14 @@ class Sprint13Test(unittest.TestCase):
 
     def test_interior_meshes_have_collision_and_glass_is_double_sided(self):
         meshes = self.pkg["meshes"]
+        # Sprint 14: city meshes are split into streaming cells ("<name>__cX_Y" / "<name>__lm")
+        def parts(name):
+            return [m for n, m in meshes.items() if n == name or n.startswith(name + "__")]
         for name in ("InteriorFloor", "InteriorWalls", "InteriorCeiling", "InteriorFurniture", "WindowGlassClear"):
-            self.assertIn(name, meshes)
-            self.assertTrue(meshes[name]["collision"], name)
-        glass = meshes["WindowGlassClear"]
-        self.assertEqual(len(glass["triangles"]) % 4, 0, "every pane needs a front and a back face")
+            self.assertTrue(parts(name), name)
+            self.assertTrue(all(m["collision"] for m in parts(name)), name)
+        glass_tris = sum(len(m["triangles"]) for m in parts("WindowGlassClear"))
+        self.assertEqual(glass_tris % 4, 0, "every pane needs a front and a back face")
 
     def test_inner_and_outer_walls_share_window_openings(self):
         for entry in self.pkg["interiors"]:

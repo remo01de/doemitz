@@ -5,7 +5,9 @@ from collections import Counter
 from dataclasses import dataclass, field
 from hashlib import sha256
 import json
-from math import hypot, isfinite
+from math import ceil, hypot, isfinite
+
+import numpy as np
 from pathlib import Path
 import re
 
@@ -25,6 +27,8 @@ from tools.mesh_generator.walls import build_osm_walls
 from tools.mesh_generator.fortress import (
     FORTRESS_COLLISION_MESHES, FORTRESS_MATERIALS, FORTRESS_PALETTE, build_fortress_wall,
 )
+from tools.mesh_generator.locks import LOCK_COLLISION_MESHES, LOCK_PALETTE, build_locks
+from tools.mesh_generator.harbour import HARBOUR_COLLISION_MESHES, HARBOUR_PALETTE, build_harbour
 from tools.mesh_generator.interiors import INTERIOR_COLLISION_MESHES, INTERIOR_PALETTE, InteriorShell, build_interior
 from tools.mesh_generator.landmarks import add_landmark_building
 from tools.mesh_generator.props import add_street_lamps, add_stylized_trees
@@ -92,6 +96,8 @@ PALETTE = {
     "FoliageDark": (0.10, 0.30, 0.11),
     **INTERIOR_PALETTE,
     **FORTRESS_PALETTE,
+    **LOCK_PALETTE,
+    **HARBOUR_PALETTE,
 }
 WALLS = WALL_STYLES
 ROOFS = ROOF_STYLES
@@ -354,10 +360,18 @@ def build(
     tile_size_m = int(assumptions.get("terrain_tile_size_m", DEFAULT_TILE_SIZE_M))
     max_error_m = float(assumptions.get("terrain_max_error_m", DEFAULT_MAX_ERROR_M))
     max_triangles = int(assumptions.get("terrain_max_triangles", DEFAULT_MAX_TRIANGLES))
+    outer_max_error_m = assumptions.get("terrain_outer_max_error_m")
+    fine_area = None
+    if assumptions.get("terrain_fine_bounds_lonlat"):
+        from tools.geo_transform.local import LocalFrame as _LocalFrame
+        _frame = _LocalFrame(scene["coordinates"]["projected_crs"], scene["coordinates"]["origin_lonlat"])
+        w, s_, e, n = assumptions["terrain_fine_bounds_lonlat"]
+        fine_area = Polygon([_frame.xy(lon, lat) for lon, lat in ((w, s_), (e, s_), (e, n), (w, n))])
     smoothing_window_m = float(assumptions.get("road_smoothing_window_m", DEFAULT_SMOOTHING_WINDOW_M))
     water_depression_m = float(assumptions.get("water_bank_depression_m", 0.05))
 
     meshes = {name: Mesh() for name in PALETTE}
+    landmark_ranges: dict[str, list[tuple[int, int]]] = {}
     bounds = shape(scene["terrain"]["boundary"])
     base_m = float(scene["terrain"].get("elevation_m", 0.0)) if elevation.is_flat else 0.0
 
@@ -365,25 +379,73 @@ def build(
     water_geoms = []
     water_surfaces: list[tuple] = []
     water_levels_report: list[dict] = []
+    # Sprint 14: lock gates, weirs and dams split a water body into reaches with their own level (upper and
+    # lower water of the Elde lock). Each reach takes its level from its own shore, not from the cut line.
+    water_cuts = []
+    for wf in scene["layers"].get("waterworks", []):
+        if wf["properties"].get("waterway") not in ("lock_gate", "weir", "dam"):
+            continue
+        for part in geometry_parts(shape(wf["geometry"]), "LineString"):
+            pc = list(part.coords)
+            (x0, y0), (x1, y1) = pc[0], pc[1]
+            (xa, ya), (xb, yb) = pc[-2], pc[-1]
+            d0 = hypot(x1 - x0, y1 - y0) or 1.0
+            d1 = hypot(xb - xa, yb - ya) or 1.0
+            water_cuts.append(LineString(
+                [(x0 - (x1 - x0) / d0 * 3.0, y0 - (y1 - y0) / d0 * 3.0)] + pc
+                + [(xb + (xb - xa) / d1 * 3.0, yb + (yb - ya) / d1 * 3.0)]
+            ))
+    water_cut_union = union_all(water_cuts) if water_cuts else None
+
+    def _shore_min_max(poly):
+        if water_cut_union is None:
+            return elevation.boundary_min_max(poly)
+        rings = [LineString(poly.exterior.coords)] + [LineString(r.coords) for r in poly.interiors]
+        shore = union_all(rings).difference(water_cut_union.buffer(0.8))
+        pts = []
+        for line in geometry_parts(shore, "LineString"):
+            n = max(2, int(ceil(line.length)) + 1)
+            pts.extend((p.x, p.y) for p in (line.interpolate(i / (n - 1), normalized=True) for i in range(n)))
+        if not pts:
+            return elevation.boundary_min_max(poly)
+        zs = elevation.sample_array(np.array([p[0] for p in pts]), np.array([p[1] for p in pts]))
+        return float(zs.min()), float(zs.max())
+
     for feature in scene["layers"]["water"]:
         geom = shape(feature["geometry"])
         water_geoms.append(geom)
         polys = list(geometry_parts(geom, "Polygon"))
         if not polys:
             continue
+        reaches = []
+        for p in polys:
+            if water_cut_union is not None and not elevation.is_flat and p.intersects(water_cut_union):
+                reaches.extend(g for g in geometry_parts(_split_polygon(p, water_cut_union), "Polygon") if g.area > 1.0)
+            else:
+                reaches.append(p)
+        split = len(reaches) > len(polys)
+        reach_levels = []
+        for reach in reaches:
+            if elevation.is_flat:
+                r_min, r_max, r_level = base_m, base_m, base_m + 0.04
+            else:
+                r_min, r_max = _shore_min_max(reach) if split else elevation.boundary_min_max(reach)
+                r_level = round(r_min - water_depression_m, 4)
+            reach_levels.append((reach, r_min, r_max, r_level))
         if elevation.is_flat:
-            w_level = base_m + 0.04
-            b_min = base_m
-            b_max = base_m
             w_source = "flat_placeholder_offset_4cm"
         else:
-            b_min = min(elevation.boundary_min_max(p)[0] for p in polys)
-            b_max = max(elevation.boundary_min_max(p)[1] for p in polys)
-            w_level = round(b_min - water_depression_m, 4)
             w_source = f"assumed_bank_min_minus_{int(round(water_depression_m * 100))}cm"
-        for polygon in polys:
-            meshes["Water"].add_surface(polygon, w_level)
-            water_surfaces.append((polygon, w_level))
+            if split:
+                w_source += "_per_reach_split_at_lock_gates_and_weirs"
+        b_min = min(r[1] for r in reach_levels)
+        b_max = max(r[2] for r in reach_levels)
+        main_reach = max(reach_levels, key=lambda r: r[0].area)
+        w_level = main_reach[3] if split else min(r[3] for r in reach_levels)
+        for reach, _, _, r_level in reach_levels:
+            level = r_level if split else w_level
+            meshes["Water"].add_surface(reach, level)
+            water_surfaces.append((reach, level))
         water_levels_report.append({
             "id": feature["id"],
             "name": feature["properties"].get("name", ""),
@@ -392,6 +454,12 @@ def build(
             "water_level_m": round(w_level, 4),
             "water_level_nhn_m": round(elevation.local_to_nhn(w_level), 4),
             "source": w_source,
+            **({"reaches": [
+                {"area_m2": round(r[0].area, 1), "water_level_m": round(r[3], 4),
+                 "water_level_nhn_m": round(elevation.local_to_nhn(r[3]), 4),
+                 "centroid_m": [round(r[0].centroid.x, 2), round(r[0].centroid.y, 2)]}
+                for r in sorted(reach_levels, key=lambda r: (r[0].centroid.x, r[0].centroid.y))
+            ]} if split else {}),
         })
     water = union_all(water_geoms)
 
@@ -466,11 +534,16 @@ def build(
                 ground_fn = (lambda x, y: base_m) if elevation.is_flat else (lambda x, y: float(elevation.sample(x, y)))
                 shell = InteriorShell(icfg, polygon, round(b_min_z, 4), ground_fn, interior_assumptions)
             if lm_cfg is not None:
+                tri_before = {n: len(m.triangles) for n, m in meshes.items()}
                 peak_h = add_landmark_building(
                     meshes, polygon, eave_h, resolved_ridge, roof_shape, ridge_dir,
                     round(b_min_z, 4), round(b_max_z, 4), lm_cfg, interior=shell,
                 )
                 final_peak_h = max(final_peak_h, peak_h)
+                # landmark triangles stay together and always loaded (skyline), see the cell split below
+                for n, m in meshes.items():
+                    if len(m.triangles) > tri_before[n]:
+                        landmark_ranges.setdefault(n, []).append((tri_before[n], len(m.triangles)))
             else:
                 add_stylized_building(
                     meshes, polygon, eave_h, round(b_min_z, 4), osm_id, feature["properties"],
@@ -649,6 +722,26 @@ def build(
             flat_zones=[z for prof in fortress_profiles for z in (prof.flat_zones or [])],
         )
         fortress_bands.extend(wall_bands)
+    # 3d. Locks and weirs (Sprint 14): Schleuse Dömitz with chamber walls and mitre gates, weir on the old Elde
+    lock_reports: list[dict] = []
+    weir_reports: list[dict] = []
+    if not elevation.is_flat and scene["layers"].get("waterworks"):
+        lock_reports, weir_reports, lock_steps, lock_bands = build_locks(
+            meshes, scene["layers"], water_surfaces, elevation, landmarks_config.get("locks") or {},
+        )
+        wall_steps.extend(lock_steps)
+        fortress_bands.extend(lock_bands)
+    # 3e. Harbour (Sprint 14): floating jetties, piles, groynes, quay walls and moored boats
+    harbour_report: dict = {}
+    boat_instances: list = []
+    if not elevation.is_flat and scene["layers"].get("piers"):
+        harbour_report, boat_instances, quay_steps, pier_decks, pier_bands = build_harbour(
+            meshes, scene["layers"], water_surfaces, elevation, landmarks_config.get("harbour") or {},
+            skip_water=[shape(w["geometry"]) for w in scene["layers"]["water"] if w["properties"].get("water") == "lock"],
+            existing_walls=[shape(w["geometry"]) for w in scene["layers"].get("walls", [])],
+        )
+        wall_steps.extend(quay_steps)
+        fortress_bands.extend(pier_bands)
     # Gate forecourts (level courts from build_fortress_wall) are paved with cobbles like the real court
     for prof in fortress_profiles:
         for zone_poly, zone_z in prof.flat_zones or []:
@@ -695,6 +788,8 @@ def build(
             tile_size_m=tile_size_m,
             max_error_m=max_error_m,
             max_triangles=max_triangles,
+            fine_area=fine_area,
+            outer_max_error_m=float(outer_max_error_m) if outer_max_error_m is not None else None,
         )
 
     road_z_resolver = road_network.road_surface_z if not elevation.is_flat else (base_m + ROAD_ELEVATION_M)
@@ -731,7 +826,7 @@ def build(
         forbidden_area=bridge_exclusion_zone,
     )
     vegetation_instances = add_stylized_trees(meshes, bounds, excluded_for_trees, terrain_z_resolver)
-    prop_instances = {**street_prop_instances, **vegetation_instances}
+    prop_instances = {**street_prop_instances, **vegetation_instances, "boats": boat_instances}
     road_graph = build_road_graph(
         roads, road_width, road_z_resolver,
         crossings=scene.get("crossings"),
@@ -874,12 +969,23 @@ def build(
                 or name in ROOFS
                 or name in INTERIOR_COLLISION_MESHES
                 or name in FORTRESS_COLLISION_MESHES
+                or name in LOCK_COLLISION_MESHES
+                or name in HARBOUR_COLLISION_MESHES
             ),
             "vertices": mesh.vertices,
             "triangles": mesh.triangles,
         }
         for name, mesh in meshes.items() if mesh.triangles
     }
+    # Sprint 14: split the city meshes into square cells (World Partition streaming and culling). Landmark
+    # triangles go to "<mesh>__lm" (always loaded), fortress, water, locks and bridges stay whole.
+    cell_size_m = float(assumptions.get("streaming_cell_size_m", 256.0))
+    cell_report = {"cell_size_m": cell_size_m, "origin_m": [round(bounds.bounds[0], 3), round(bounds.bounds[1], 3)]}
+    if not elevation.is_flat:
+        compiled_meshes, cell_report = _split_meshes_into_cells(
+            compiled_meshes, landmark_ranges, bounds.bounds, cell_size_m,
+            keep_whole=lambda n: n in FORTRESS_PALETTE or n in LOCK_PALETTE or n == "Water",
+        )
     for tile_name, tile_data in terrain_tiles.items():
         compiled_meshes[tile_name] = {
             "color": PALETTE["Terrain"],
@@ -926,6 +1032,9 @@ def build(
         "tunnel_portals": tunnel_portals_report,
         "fortress_walls": fortress_reports,
         "osm_walls": wall_reports,
+        "locks": lock_reports,
+        "harbour": harbour_report,
+        "weirs": weir_reports,
         "interiors": interiors_out,
         "interiors_summary": {
             "count": len(interiors_out),
@@ -998,10 +1107,73 @@ def build(
             "planters": len(prop_instances["planters"]),
             "bollards": len(prop_instances["bollards"]),
             "trees_and_bushes": len(prop_instances["trees"]) + len(prop_instances["bushes"]),
+            "boats": len(prop_instances["boats"]),
             "instances": prop_instances,
         },
+        "cells": cell_report,
         "meshes": compiled_meshes,
     }
+
+
+STREAMING_LOADING_RANGE_M = 1000.0
+
+
+def _split_meshes_into_cells(compiled, landmark_ranges, bounds_xy, cell_size, keep_whole):
+    """Split each mesh's triangles by centroid into cells of cell_size; landmark ranges into '<name>__lm'."""
+    min_e, min_n, max_e, max_n = bounds_xy
+    nx = max(1, int(ceil((max_e - min_e) / cell_size)))
+    ny = max(1, int(ceil((max_n - min_n) / cell_size)))
+    out = {}
+    spatial = 0
+    for name, data in compiled.items():
+        if keep_whole(name):
+            out[name] = data
+            continue
+        verts, tris = data["vertices"], data["triangles"]
+        lm = set()
+        for a, b in landmark_ranges.get(name, []):
+            lm.update(range(a, b))
+        buckets: dict[str, list] = {}
+        for ti, tri in enumerate(tris):
+            if ti in lm:
+                key = "lm"
+            else:
+                cx = (verts[tri[0]][0] + verts[tri[1]][0] + verts[tri[2]][0]) / 3.0
+                cy = (verts[tri[0]][1] + verts[tri[1]][1] + verts[tri[2]][1]) / 3.0
+                ix = min(nx - 1, max(0, int((cx - min_e) // cell_size)))
+                iy = min(ny - 1, max(0, int((cy - min_n) // cell_size)))
+                key = f"c{ix}_{iy}"
+            buckets.setdefault(key, []).append(tri)
+        base = {k: v for k, v in data.items() if k not in ("vertices", "triangles", "vertex_colors")}
+        base.setdefault("material", name)
+        for key in sorted(buckets):
+            remap: dict[int, int] = {}
+            new_v, new_t, new_c = [], [], []
+            colors = data.get("vertex_colors")
+            for tri in buckets[key]:
+                idx = []
+                for vi in tri:
+                    if vi not in remap:
+                        remap[vi] = len(new_v)
+                        new_v.append(verts[vi])
+                        if colors is not None:
+                            new_c.append(colors[vi])
+                    idx.append(remap[vi])
+                new_t.append(tuple(idx))
+            entry = {**base, "vertices": new_v, "triangles": new_t, "cell": key}
+            if colors is not None:
+                entry["vertex_colors"] = new_c
+            out[f"{name}__{key}"] = entry
+            spatial += key != "lm"
+    report = {
+        "cell_size_m": cell_size,
+        "loading_range_m": STREAMING_LOADING_RANGE_M,
+        "grid": [nx, ny],
+        "origin_m": [round(min_e, 3), round(min_n, 3)],
+        "spatial_meshes": spatial,
+        "always_loaded_meshes": sorted(n for n, d in out.items() if "cell" not in d or d["cell"] == "lm"),
+    }
+    return out, report
 
 
 def main():

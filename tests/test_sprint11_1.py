@@ -45,8 +45,9 @@ class Sprint11_1BridgesTest(unittest.TestCase):
 
     def test_bridge_chains_detected_with_two_abutments_and_osm_tags(self):
         bridges = self.package.get("bridges") or []
-        # 6 OSM bridge ways form 5 connected bridge chains (120431984 + 120431986 combine into 1 chain)
-        self.assertEqual(len(bridges), 5)
+        # Altstadt: 6 OSM bridge ways form 5 connected bridge chains (120431984 + 120431986 combine into 1 chain);
+        # Sprint 14 adds 4 bridges in the harbour/lock extension
+        self.assertEqual(len(bridges), 9)
         ids = {b["id"] for b in bridges}
         self.assertIn("bridge:osm:way:94526517", ids)   # Steinbrücke
         self.assertIn("bridge:osm:way:29732766", ids)   # Torbrücke
@@ -170,7 +171,7 @@ class Sprint11_1BridgesTest(unittest.TestCase):
             ra = json.loads((fa / "import-report.json").read_text(encoding="utf-8"))
             p1 = mesh_build(sa, ra, scene_dir=fa)
             p2 = mesh_build(sa, ra, scene_dir=fb)
-            self.assertEqual(len(p1["bridges"]), 5)
+            self.assertEqual(len(p1["bridges"]), 9)
             write_json(fa / "p.json", p1)
             write_json(fb / "p.json", p2)
             self.assertEqual((fa / "p.json").read_bytes(), (fb / "p.json").read_bytes())

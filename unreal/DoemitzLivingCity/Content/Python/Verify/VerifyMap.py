@@ -1,3 +1,5 @@
+import json
+from pathlib import Path
 from time import monotonic
 import traceback
 
@@ -8,6 +10,9 @@ level = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
 cfg_class = unreal.load_class(None, "/Script/DoemitzLivingCity.DoemitzSimulationConfig")
 deadline = monotonic() + 90
 done = False
+_project = Path(unreal.Paths.convert_relative_path_to_full(unreal.Paths.project_dir()))
+MAP_PX = int(json.loads((_project.parents[1] / "data/processed/doemitz-altstadt/unreal-city-meshes.json")
+                        .read_text(encoding="utf-8"))["city_map"]["width_px"])  # 4096 since Sprint 14
 
 
 def finish(message, success):
@@ -46,7 +51,7 @@ def check(_delta_seconds):
         if tex is None:
             raise RuntimeError("CityMapTexture is None on simulation subsystem")
         bounds = sub.get_city_map_bounds()
-        if bounds.get_editor_property("width_px") != 2048 or bounds.get_editor_property("height_px") != 2048:
+        if bounds.get_editor_property("width_px") != MAP_PX or bounds.get_editor_property("height_px") != MAP_PX:
             raise RuntimeError(f"unexpected map texture dimensions: {bounds}")
 
         # Shrink LOD radius to 15 m so distant citizens have NO active Actor
@@ -118,7 +123,7 @@ def check(_delta_seconds):
 
         done = True
         finish(
-            f"DOEMITZ_MAP_PIE_OK: 2048x2048 texture loaded, 30 citizens / 8 vehicles / "
+            f"DOEMITZ_MAP_PIE_OK: {MAP_PX}x{MAP_PX} texture loaded, 30 citizens / 8 vehicles / "
             f"{map_widget.get_parking_marker_count()} parking lots / {map_widget.get_place_marker_count()} places, "
             f"player_uv=({actual_player_uv.x:.3f},{actual_player_uv.y:.3f}), "
             f"off_pool_citizen={far_cid} uv=({actual_far_uv.x:.3f},{actual_far_uv.y:.3f}), attribution OK",

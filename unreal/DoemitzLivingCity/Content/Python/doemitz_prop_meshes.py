@@ -166,6 +166,66 @@ def stylized_tree(variant_index):
     }
 
 
+HULL_COLORS = ((0.80, 0.80, 0.78), (0.05, 0.10, 0.25), (0.55, 0.08, 0.06))
+STRIPE_COLORS = ((0.05, 0.12, 0.35), (0.80, 0.80, 0.78), (0.80, 0.78, 0.70))
+CABIN_WHITE = (0.82, 0.82, 0.80)
+WINDOW_DARK = (0.03, 0.04, 0.05)
+DECK_TEAK = (0.36, 0.24, 0.13)
+
+
+def stylized_boat(variant_index):
+    """Moored leisure boat, 9 m long (local +north is the bow), 3 m beam: motor cruiser (0, 1) or sailboat (2)."""
+    v = variant_index % 3
+    verts, tris, cols = [], [], []
+    hull, stripe = HULL_COLORS[v], STRIPE_COLORS[v]
+
+    def quad(a, b, c, d, color):
+        base = len(verts)
+        verts.extend((a, b, c, d))
+        cols.extend((color,) * 4)
+        tris.extend(((base, base + 1, base + 2), (base, base + 2, base + 3)))
+
+    def tri(a, b, c, color):
+        base = len(verts)
+        verts.extend((a, b, c))
+        cols.extend((color,) * 3)
+        tris.append((base, base + 1, base + 2))
+
+    # hull outline (half beam per station along north), bottom narrower than the sheer line
+    stations = ((-4.5, 1.30), (-2.0, 1.50), (1.5, 1.45), (3.3, 1.0), (4.5, 0.05))
+    z_keel, z_chine, z_sheer = -0.45, 0.15, 0.85
+    for (y0, w0), (y1, w1) in zip(stations, stations[1:]):
+        for side in (1.0, -1.0):
+            lo0, lo1 = (side * w0 * 0.55, y0, z_keel), (side * w1 * 0.55, y1, z_keel + (0.3 if y1 > 4 else 0.0))
+            ch0, ch1 = (side * w0, y0, z_chine), (side * w1, y1, z_chine + (0.3 if y1 > 4 else 0.0))
+            sh0, sh1 = (side * w0, y0, z_sheer), (side * w1, y1, z_sheer + (0.15 if y1 > 4 else 0.0))
+            if side > 0:
+                quad(lo0, lo1, ch1, ch0, hull)
+                quad(ch0, ch1, sh1, sh0, stripe if v != 1 else hull)
+            else:
+                quad(lo1, lo0, ch0, ch1, hull)
+                quad(ch1, ch0, sh0, sh1, stripe if v != 1 else hull)
+        # deck
+        quad((-w0, y0, z_sheer), (w0, y0, z_sheer), (w1, y1, z_sheer + (0.15 if y1 > 4 else 0.0)),
+             (-w1, y1, z_sheer + (0.15 if y1 > 4 else 0.0)), DECK_TEAK if v != 2 else CABIN_WHITE)
+    # transom
+    quad((-1.30 * 0.55, -4.5, z_keel), (1.30 * 0.55, -4.5, z_keel), (1.30, -4.5, z_sheer), (-1.30, -4.5, z_sheer), hull)
+    if v in (0, 1):
+        # cabin with dark window band
+        _add_box(verts, tris, cols, 0.0, -0.6, z_sheer, z_sheer + 0.75, 1.05, 2.1, CABIN_WHITE)
+        _add_box(verts, tris, cols, 0.0, -0.6, z_sheer + 0.75, z_sheer + 1.15, 1.07, 2.12, WINDOW_DARK)
+        _add_box(verts, tris, cols, 0.0, -0.8, z_sheer + 1.15, z_sheer + 1.30, 1.15, 2.3, CABIN_WHITE)
+    else:
+        # sailboat: low coachroof, mast and boom
+        _add_box(verts, tris, cols, 0.0, 0.2, z_sheer, z_sheer + 0.45, 0.85, 1.6, CABIN_WHITE)
+        _add_cylinder(verts, tris, cols, 0.0, 1.0, z_sheer, z_sheer + 9.0, 0.07, 0.05, LAMP_METAL, 6)
+        _add_box(verts, tris, cols, 0.0, -0.9, z_sheer + 1.4, z_sheer + 1.5, 0.05, 1.9, LAMP_METAL)
+    return {
+        "collision": False, "vertices": verts, "triangles": tris, "vertex_colors": cols,
+        "blocking_shapes": [_box(1.45, 4.4, -0.45, 1.3)],
+    }
+
+
 def stylized_bush(variant_index):
     color = FOLIAGE_VARIANTS[variant_index % len(FOLIAGE_VARIANTS)]
     verts, tris, cols = [], [], []

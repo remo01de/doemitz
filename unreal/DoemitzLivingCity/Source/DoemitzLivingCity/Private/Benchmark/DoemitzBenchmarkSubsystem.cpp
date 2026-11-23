@@ -115,6 +115,7 @@ void UDoemitzBenchmarkSubsystem::OnWorldBeginPlay(UWorld& InWorld)
 	FParse::Value(CmdLine, TEXT("DoemitzBenchmarkOut="), OutputPathOverride);
 	bOpenCityMap = FParse::Param(CmdLine, TEXT("DoemitzBenchmarkOpenMap"));
 	FParse::Value(CmdLine, TEXT("DoemitzBenchmarkInterior="), InteriorPlaceId);
+	FParse::Value(CmdLine, TEXT("DoemitzBenchmarkRoute="), RouteName);
 	bInteriorRouteReady = false;
 	bMapOpenedForBenchmark = false;
 	DurationSeconds = FMath::Max(1.0, DurationSeconds);
@@ -154,6 +155,24 @@ void UDoemitzBenchmarkSubsystem::BuildBenchmarkRoute()
 {
 	// Fixed Altstadt benchmark route: Goethestrasse -> Rathausplatz -> Festungszugang (An der Festung)
 	// Horizontal coordinates in Unreal cm (X = North * 100, Y = East * 100); Z follows real terrain + 180 cm eye height.
+	if (RouteName.Equals(TEXT("hafen"), ESearchCase::IgnoreCase))
+	{
+		// Sprint 14: Rathausplatz -> Elbstrasse -> harbour access road -> Schleuse Doemitz (shortest path in the
+		// road graph, sampled every ~45 m, 1195 m)
+		RoutePoints = {
+			FVector(-21959.3, -8109.0, 180.0), FVector(-20879.2, -5421.8, 180.0), FVector(-21548.4, -2155.1, 180.0),
+			FVector(-18352.5, 1143.3, 180.0), FVector(-15015.5, 4305.9, 180.0), FVector(-13196.9, 7617.7, 180.0),
+			FVector(-15229.0, 11741.7, 180.0), FVector(-17196.0, 15897.9, 180.0), FVector(-19163.1, 20054.1, 180.0),
+			FVector(-20821.5, 24335.1, 180.0), FVector(-22163.5, 28733.0, 180.0), FVector(-23471.5, 33141.2, 180.0),
+			FVector(-24736.2, 37561.9, 180.0), FVector(-25986.7, 41986.8, 180.0), FVector(-27237.1, 46411.6, 180.0),
+			FVector(-28689.5, 50772.2, 180.0), FVector(-30498.1, 54997.8, 180.0), FVector(-32701.1, 59033.9, 180.0),
+			FVector(-35239.2, 61959.1, 180.0), FVector(-39289.4, 60996.0, 180.0), FVector(-37085.6, 61004.3, 180.0),
+			FVector(-35297.1, 63827.7, 180.0), FVector(-37472.2, 67878.9, 180.0), FVector(-33265.0, 69285.6, 180.0),
+			FVector(-28750.2, 69267.1, 180.0), FVector(-26034.9, 70687.7, 180.0), FVector(-28151.7, 74768.5, 180.0)
+		};
+	}
+	else
+	{
 	RoutePoints = {
 		FVector(-13001.7,   5429.4, 180.0),
 		FVector(-14081.7,   5126.1, 180.0),
@@ -173,6 +192,7 @@ void UDoemitzBenchmarkSubsystem::BuildBenchmarkRoute()
 		FVector(-11862.1, -17415.8, 180.0),
 		FVector(-11418.6, -17495.7, 180.0)
 	};
+	}
 
 	if (UWorld* World = GetWorld())
 	{
@@ -415,7 +435,9 @@ void UDoemitzBenchmarkSubsystem::FinishBenchmark()
 	TSharedRef<FJsonObject> Root = MakeShared<FJsonObject>();
 	Root->SetStringField(TEXT("profile"), ProfileName);
 	Root->SetStringField(TEXT("route"), InteriorPlaceId.IsEmpty()
-		? FString(TEXT("Goethestrasse -> Rathausplatz -> Festungszugang"))
+		? FString(RouteName.Equals(TEXT("hafen"), ESearchCase::IgnoreCase)
+			? TEXT("Rathausplatz -> Hafen -> Schleuse")
+			: TEXT("Goethestrasse -> Rathausplatz -> Festungszugang"))
 		: FString::Printf(TEXT("interior %s at 22:00 (door -> stand spots -> counter -> door)"), *InteriorPlaceId));
 	Root->SetNumberField(TEXT("route_length_m"), RouteLengthCm / 100.0);
 	Root->SetNumberField(TEXT("warmup_seconds"), WarmupSeconds);

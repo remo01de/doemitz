@@ -65,6 +65,18 @@
       "reward_source": "assumed_fictional_task_reward"
     },
     {
+      "id": "task_tpl_errand_kaufhaus_hafenhotel",
+      "type": "errand",
+      "title": "Kiste für das Hotel am Hafen",
+      "description": "Hole die bestellte Kiste im Kaufhaus ab und bringe sie zum Hotel Dömitzer Hafen.",
+      "pickup_place_id": "place_kaufhaus",
+      "delivery_place_id": "poi:osm:node:387219809",
+      "parcel_name": "Warenkiste",
+      "duration_minutes": 210,
+      "reward_cents": 1250,
+      "reward_source": "assumed_fictional_task_reward"
+    },
+    {
       "id": "task_tpl_fetch_pflaster",
       "type": "fetch",
       "title": "Besorgung: Pflasterset",

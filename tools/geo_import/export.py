@@ -15,7 +15,7 @@ from tools.geo_transform.local import LocalFrame
 from tools.validation.scene import reference_measurement, validate
 
 
-LAYERS = ("roads", "buildings", "water", "pois", "walls")
+LAYERS = ("roads", "buildings", "water", "pois", "walls", "waterworks", "piers", "moorings")
 WALL_BARRIERS = ("wall", "city_wall", "retaining_wall")
 WALL_TAGS = ("barrier", "height", "material", "name", "wall", "historic")
 AREA_TAGS = (
@@ -26,6 +26,13 @@ ROAD_TAGS = (
     "highway", "name", "bridge", "bridge:structure", "bridge:name", "material",
     "tunnel", "layer", "lanes", "width", "surface", "oneway", "maxspeed", "incline",
 )
+# Sprint 14: lock gates, weirs and lock basins, piers/groynes and mooring piles (harbour and Elde lock)
+WATERWORK_TYPES = ("lock_gate", "weir", "dam", "fish_pass")
+WATERWORK_TAGS = ("waterway", "lock", "lock_name", "lock_ref", "name", "width", "height", "material",
+                  "seamark:type", "seamark:name")
+PIER_TYPES = ("pier", "groyne", "breakwater")
+PIER_TAGS = ("man_made", "name", "width", "material", "surface", "floating", "seamark:type", "access")
+MOORING_TAGS = ("seamark:type", "seamark:mooring:category", "seamark:mooring:construction", "mooring", "name")
 POI_TAGS = ("name", "shop", "amenity", "office", "tourism", "opening_hours", "building", "addr:street", "addr:housenumber", "parking", "capacity", "access")
 
 
@@ -52,16 +59,21 @@ def clipped_geometry(geometry, bounds, is_area: bool):
     return (parts[0] if len(parts) == 1 else MultiLineString(parts)), repaired
 
 
-def add_feature(layer, element_type, osm_id, attributes, geometry, bounds, layers, issues):
+LINE_LAYERS = ("roads", "walls", "waterworks")
+LAYER_TAGS = {"walls": WALL_TAGS, "waterworks": WATERWORK_TAGS, "piers": PIER_TAGS}
+
+
+def add_feature(layer, element_type, osm_id, attributes, geometry, bounds, layers, issues, is_area=None):
     feature_id = f"osm:{element_type}:{osm_id}"
-    is_area = layer not in ("roads", "walls")
+    if is_area is None:
+        is_area = layer not in LINE_LAYERS
     geometry, repaired = clipped_geometry(geometry, bounds, is_area)
     if repaired:
         action = "repaired invalid source geometry" if geometry is not None else "no usable geometry after repair"
         issues.append({"id": feature_id, "reason": action})
     if geometry is None:
         return False
-    keys = AREA_TAGS if is_area else (WALL_TAGS if layer == "walls" else ROAD_TAGS)
+    keys = LAYER_TAGS.get(layer) or (AREA_TAGS if is_area else ROAD_TAGS)
     layers[layer].append(
         {
             "type": "Feature",
@@ -172,6 +184,20 @@ def extract(config: dict, raw_dir: Path):
             coordinates = dataset.way_coordinates(way)
             if len(set(coordinates)) >= 2:
                 add_feature("walls", "way", way_id, attributes, LineString(coordinates), bounds, layers, issues)
+        elif not layer and (attributes.get("waterway") in WATERWORK_TYPES
+                            or (attributes.get("waterway") == "canal" and attributes.get("lock") == "yes")):
+            coordinates = dataset.way_coordinates(way)
+            if len(set(coordinates)) >= 2:
+                add_feature("waterworks", "way", way_id, attributes, LineString(coordinates), bounds, layers, issues)
+        elif not layer and attributes.get("man_made") in PIER_TYPES:
+            coordinates = dataset.way_coordinates(way)
+            closed = len(coordinates) >= 4 and coordinates[0] == coordinates[-1]
+            if closed and attributes.get("man_made") == "pier" and attributes.get("area") != "no":
+                add_feature("piers", "way", way_id, attributes, Polygon(coordinates), bounds, layers, issues,
+                            is_area=True)
+            elif len(set(coordinates)) >= 2:
+                add_feature("piers", "way", way_id, attributes, LineString(coordinates), bounds, layers, issues,
+                            is_area=False)
         elif not layer and osm.is_poi(attributes) and way_id not in relation_outers["pois"]:
             coordinates = dataset.way_coordinates(way)
             if len(coordinates) >= 4 and coordinates[0] == coordinates[-1]:
@@ -182,6 +208,15 @@ def extract(config: dict, raw_dir: Path):
         if osm.is_poi(attributes) and node_id in dataset.nodes:
             lon, lat = dataset.nodes[node_id]
             add_poi_feature("node", node_id, attributes, Point(lon, lat), bounds, layers, issues)
+        if (attributes.get("seamark:type") == "mooring" or attributes.get("mooring")) and node_id in dataset.nodes:
+            lon, lat = dataset.nodes[node_id]
+            if bounds.covers(Point(lon, lat)):
+                layers["moorings"].append({
+                    "type": "Feature",
+                    "id": f"osm:node:{node_id}",
+                    "geometry": mapping(Point(lon, lat)),
+                    "properties": {key: attributes[key] for key in MOORING_TAGS if key in attributes},
+                })
 
     validate(layers)
     return dataset, bounds, layers, issues, sources

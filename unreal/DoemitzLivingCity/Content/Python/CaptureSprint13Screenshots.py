@@ -54,6 +54,13 @@ ALL_SHOTS = [
     # Sprint 13.1: gate front from the timber bridge and the forecourt parapet from across the moat
     ("25_torbau_bruecke.png", ue_pos(-175.3, -92.6, 4.8), ue_pos(-169.0, -84.7, 5.6)),
     ("26_torvorhof_graben.png", ue_pos(-181.0, -97.0, 5.2), ue_pos(-166.0, -84.5, 4.6)),
+    # Sprint 14: Schleuse Dömitz, Hafen, Speicher and the way from the Altstadt to the harbour
+    ("27_schleuse_unterhaupt.png", ue_pos(741.0, -319.0, 7.5), ue_pos(772.0, -262.0, 2.0)),
+    ("28_schleuse_kammer.png", ue_pos(781.0, -243.0, 6.4), ue_pos(756.0, -294.0, 0.0)),
+    ("29_hafen_steganlage.png", ue_pos(626.0, -548.5, 0.9), ue_pos(690.0, -524.0, 0.2)),
+    ("30_speicher.png", ue_pos(650.0, -520.0, 3.0), ue_pos(712.0, -566.0, 14.0)),
+    ("31_hafen_steg.png", ue_pos(652.0, -458.0, 1.2), ue_pos(615.0, -490.0, 0.0)),
+    ("32_weg_altstadt_hafen.png", ue_pos(420.0, -300.0, 8.0), ue_pos(640.0, -470.0, 2.0)),
 ]
 # Interior views (day and night), computed from the generated package: camera just inside the door
 _project = Path(unreal.Paths.convert_relative_path_to_full(unreal.Paths.project_dir()))
@@ -137,8 +144,12 @@ def tick(_dt):
             raise RuntimeError(f"Screenshot capture timed out at shot {shot_idx} ({state})")
 
         if state == "warmup":
+            if wait_ticks == 0:
+                # Sprint 14: city cells stream with World Partition; load them all in the editor before rendering
+                import doemitz_wp
+                doemitz_wp.load_all_actors()
             wait_ticks += 1
-            if wait_ticks < 40:
+            if wait_ticks < 120:
                 return
             level.editor_set_game_view(True)
             world = editor.get_editor_world()

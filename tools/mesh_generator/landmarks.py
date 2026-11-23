@@ -553,6 +553,86 @@ def _build_fortress_building(meshes, polygon: Polygon, base_m: float, max_ground
     return ridge_height_m
 
 
+def _build_speicher(meshes, polygon: Polygon, base_m: float, max_ground_m: float, eave_height_m: float,
+                    ridge_height_m: float, roof_shape: str, ridge_direction_deg: float | None, cfg: dict) -> float:
+    """
+    Brick granary at the harbour (Speicher, LoD2 eave 20.2 m / ridge 32.4 m): many low storeys with small windows
+    on the long facades, a column of timber loading hatches in each gable facade with a hoist beam under the ridge,
+    stone plinth, belt courses and cornice, gabled roof from LoD2.
+    """
+    wall_style = cfg.get("wall_style", "WallsBrick")
+    wall_mesh = meshes[wall_style]
+    gable_mesh = meshes.get(wall_style.replace("Walls", "Gable", 1), wall_mesh)
+    roof_mesh = meshes[cfg.get("roof_style", "RoofsClay")]
+    stone_mesh = meshes["StoneTrim"]
+    timber_mesh = meshes["TimberTrim"]
+    glass_mesh = meshes["WindowGlass"]
+    door_mesh = meshes["Doors"]
+
+    wall_mesh.add_walls(polygon, eave_height_m, base_m)
+    ridge_rise = max(2.0, ridge_height_m - eave_height_m)
+    # The OSM footprint has small stair-tower offsets (13 corners); the gabled roof spans the simplified main
+    # body, the leftover slivers get a flat cap at eave height.
+    from shapely.geometry.polygon import orient as _orient
+    roof_poly = polygon.simplify(1.3, preserve_topology=True)
+    if len(roof_poly.exterior.coords) > 12:
+        roof_poly = polygon.minimum_rotated_rectangle.intersection(polygon.buffer(0.01))
+    roof_poly = _orient(roof_poly, sign=1.0)
+    _add_roof_with_shape(roof_mesh, gable_mesh, roof_poly, base_m + eave_height_m, ridge_rise,
+                         roof_shape=cfg.get("roof_shape", roof_shape or "gabled"),
+                         ridge_direction_deg=ridge_direction_deg, overhang=0.3)
+    rest = polygon.difference(roof_poly)
+    for part in getattr(rest, "geoms", [rest]):
+        if part.geom_type == "Polygon" and part.area > 0.2:
+            roof_mesh.add_surface(_orient(part, sign=1.0), base_m + eave_height_m)
+    ground_top = max(base_m, max_ground_m)
+    plinth_top = min(base_m + eave_height_m - 0.4, max(base_m + 1.0, ground_top + 0.5))
+    _add_plinth_and_cornice(stone_mesh, polygon, base_m, plinth_top, base_m + eave_height_m, cornice_h=0.3, cornice_d=0.16)
+
+    usable = (base_m + eave_height_m) - plinth_top
+    floors = max(3, int(round(usable / float(cfg.get("storey_height_m", 3.2)))))
+    floor_h = usable / floors
+    ring = list(polygon.exterior.coords)
+    longest = max(hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(ring, ring[1:]))
+    for start, end in zip(ring, ring[1:]):
+        dx, dy = end[0] - start[0], end[1] - start[1]
+        length = hypot(dx, dy)
+        if length < 3.0:
+            continue
+        tx, ty = dx / length, dy / length
+        nx, ny = ty, -tx
+        gable_side = length < 0.6 * longest
+        for fl in range(1, floors):
+            z_belt = plinth_top + fl * floor_h
+            _add_box_on_wall(stone_mesh, start[0], start[1], tx, ty, nx, ny, 0.0, length, z_belt - 0.08, z_belt + 0.04, 0.0, 0.06)
+        bays = max(2, floor(length / 3.0))
+        step = length / bays
+        for fl in range(floors):
+            z0 = plinth_top + fl * floor_h
+            for bay in range(bays):
+                u_c = (bay + 0.5) * step
+                if gable_side and abs(u_c - length * 0.5) < step * 0.6:
+                    # loading hatch column in the middle of the gable facade
+                    hz0, hz1 = z0 + 0.25, min(z0 + floor_h - 0.25, z0 + 2.1)
+                    _add_box_on_wall(stone_mesh, start[0], start[1], tx, ty, nx, ny, u_c - 0.85, u_c + 0.85, hz0 - 0.1, hz1 + 0.12, 0.0, 0.07)
+                    _add_box_on_wall(door_mesh, start[0], start[1], tx, ty, nx, ny, u_c - 0.7, u_c + 0.7, hz0, hz1, 0.0, 0.1)
+                    continue
+                wz0 = z0 + 0.8
+                wz1 = min(z0 + floor_h - 0.55, wz0 + 1.2)
+                if wz1 - wz0 < 0.5:
+                    continue
+                _add_box_on_wall(stone_mesh, start[0], start[1], tx, ty, nx, ny, u_c - 0.55, u_c + 0.55, wz0 - 0.08, wz1 + 0.1, 0.0, 0.06)
+                _add_box_on_wall(glass_mesh, start[0], start[1], tx, ty, nx, ny, u_c - 0.42, u_c + 0.42, wz0, wz1, 0.0, 0.08)
+        if gable_side and ridge_rise > 3.0:
+            u_c = length * 0.5
+            hz0 = base_m + eave_height_m + 0.6
+            _add_box_on_wall(door_mesh, start[0], start[1], tx, ty, nx, ny, u_c - 0.7, u_c + 0.7, hz0, hz0 + 1.9, 0.0, 0.1)
+            # hoist beam under the ridge
+            zb = base_m + eave_height_m + min(ridge_rise - 0.8, 3.6)
+            _add_box_on_wall(timber_mesh, start[0], start[1], tx, ty, nx, ny, u_c - 0.18, u_c + 0.18, zb, zb + 0.35, 0.0, 1.1)
+    return ridge_height_m
+
+
 def _build_rathausturm(meshes, polygon: Polygon, base_m: float, max_ground_m: float,
                        eave_height_m: float, ridge_height_m: float, cfg: dict) -> float:
     """
@@ -628,6 +708,9 @@ def add_landmark_building(
     if variant == "rathaus":
         return _build_rathaus(meshes, polygon, base_m, max_ground_m, eave_height_m, ridge_height_m, ridge_direction_deg, landmark_cfg,
                               interior=interior)
+    if variant == "speicher":
+        return _build_speicher(meshes, polygon, base_m, max_ground_m, eave_height_m, ridge_height_m,
+                               roof_shape, ridge_direction_deg, landmark_cfg)
     if variant.startswith("festung_"):
         return _build_fortress_building(
             meshes, polygon, base_m, max_ground_m, eave_height_m, ridge_height_m,

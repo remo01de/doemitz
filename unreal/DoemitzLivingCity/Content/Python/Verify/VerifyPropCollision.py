@@ -123,16 +123,18 @@ def tick(_dt):
             if monotonic() - pawn_seen < 3.0:
                 return
             actors = prop_actors(world)
-            for label in BLOCKING:
-                if label not in actors:
-                    raise RuntimeError(f"missing prop actor {label}")
-                if not actors[label].blocks_movement():
-                    raise RuntimeError(f"{label} does not block movement")
-            for label in WALK_THROUGH:
-                if label in actors and actors[label].blocks_movement():
-                    raise RuntimeError(f"{label} must stay walk-through")
+            # Sprint 14: prop actors are split per streaming cell ("<label> cX_Y")
+            for prefix in BLOCKING:
+                group = [a for lbl, a in actors.items() if lbl == prefix or lbl.startswith(prefix + " c")]
+                if not group:
+                    raise RuntimeError(f"missing prop actor {prefix}")
+                if not all(a.blocks_movement() for a in group):
+                    raise RuntimeError(f"{prefix} does not block movement")
+            for prefix in WALK_THROUGH:
+                if any(a.blocks_movement() for lbl, a in actors.items() if lbl == prefix or lbl.startswith(prefix + " c")):
+                    raise RuntimeError(f"{prefix} must stay walk-through")
             # Ground traces (Visibility) must pass through props: trace down onto the first tree trunk.
-            tree = actors["Altstadt HISM Trees 0"]
+            tree = next(a for lbl, a in sorted(actors.items()) if lbl.startswith("Altstadt HISM Trees 0"))
             _, t = next(instances(tree))
             hit = unreal.SystemLibrary.line_trace_single(
                 world, t.translation + unreal.Vector(0, 0, 250.0), t.translation - unreal.Vector(0, 0, 200.0),

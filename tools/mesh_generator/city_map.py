@@ -13,7 +13,7 @@ from shapely.geometry import Polygon, shape
 from tools.geo_import.export import geometry_parts
 
 
-DEFAULT_MAP_SIZE_PX = 2048
+DEFAULT_MAP_SIZE_PX = 4096
 MAP_ATTRIBUTION = "Kartendaten © OpenStreetMap contributors, ODbL 1.0"
 
 # Stylized top-down palette matching the game world (RGB 0..255)

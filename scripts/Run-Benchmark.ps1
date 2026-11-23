@@ -7,7 +7,8 @@ param(
     [int] $ResY = 1080,
     [string] $OutputJson,
     [switch] $OpenMap,
-    [string] $InteriorPlaceId
+    [string] $InteriorPlaceId,
+    [string] $Route
 )
 
 $ErrorActionPreference = 'Stop'
@@ -45,6 +46,9 @@ if ($OpenMap) {
 }
 if ($InteriorPlaceId) {
     $argsList += "-DoemitzBenchmarkInterior=$InteriorPlaceId"
+}
+if ($Route) {
+    $argsList += "-DoemitzBenchmarkRoute=$Route"
 }
 
 Write-Host "Running benchmark: profile=$Profile ${ResX}x${ResY} duration=${DurationSeconds}s -> $OutputJson"

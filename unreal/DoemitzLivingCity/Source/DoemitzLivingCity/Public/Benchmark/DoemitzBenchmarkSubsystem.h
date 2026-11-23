@@ -32,6 +32,8 @@ private:
 	FString OutputPathOverride;
 	/** Sprint 13: -DoemitzBenchmarkInterior=<PlaceId> walks the camera through that interior at 22:00. */
 	FString InteriorPlaceId;
+	/** -DoemitzBenchmarkRoute=hafen: Rathausplatz -> Hafen -> Schleuse (Sprint 14); default: Altstadt route */
+	FString RouteName;
 	bool bInteriorRouteReady = false;
 
 	double WarmupSeconds = 3.0;

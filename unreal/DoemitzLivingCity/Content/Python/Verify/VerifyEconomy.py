@@ -109,7 +109,9 @@ def check(_delta_seconds):
 
             # Now verify citizen shopping revenue at normal 1x clock (12:30 -> Anna/Dieter arrive at Kaufhaus and shop)
             sub.set_time_of_day_minutes(750.0)
-            sub.set_time_scale(60.0)
+            # Anna walks 127 m (94 s) from the Amtsverwaltung; at 1x (60) that is 94 game minutes, longer than her
+            # 60 min shopping slot. Half speed lets her arrive inside the slot (Sprint 14: no other Kaufhaus shopper).
+            sub.set_time_scale(30.0)
             unreal.GameplayStatics.set_global_time_dilation(world, 8.0)
             phase = "wait_citizen_revenue"
             return

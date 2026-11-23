@@ -12,6 +12,7 @@ from doemitz_prop_meshes import (
     street_lamp_glow,
     street_lamp_metal,
     street_planter,
+    stylized_boat,
     stylized_bush,
     stylized_tree,
 )
@@ -261,7 +262,13 @@ def static_mesh(name, source):
     return asset
 
 
-def place(existing, name, actor_class, position, rotation=None):
+def is_streamed_mesh(name, source):
+    """Cell meshes ('<name>__cX_Y') and terrain tiles stream with World Partition; landmarks, fortress, water,
+    locks and bridges stay always loaded (Sprint 14)."""
+    return name.startswith("Terrain_") or (source.get("cell", "lm") != "lm")
+
+
+def place(existing, name, actor_class, position, rotation=None, spatially_loaded=False):
     rotation = rotation or unreal.Rotator()
     actor = existing.get(name)
     if actor is None:
@@ -277,7 +284,7 @@ def place(existing, name, actor_class, position, rotation=None):
         actor.set_actor_location(position, False, False)
         actor.set_actor_rotation(rotation, False)
     actor.modify()
-    actor.set_editor_property("is_spatially_loaded", False)
+    actor.set_editor_property("is_spatially_loaded", bool(spatially_loaded))
     return actor
 
 
@@ -297,7 +304,7 @@ def prop_collision_shape(shape):
     return result
 
 
-def place_instanced_props(existing, prop_instances):
+def place_instanced_props(existing, prop_instances, cells=None):
     hism_class = unreal.load_class(None, "/Script/DoemitzLivingCity.DoemitzInstancedPropActor")
     if not hism_class:
         raise RuntimeError("Build the DoemitzLivingCityEditor target before importing HISM props")
@@ -314,35 +321,56 @@ def place_instanced_props(existing, prop_instances):
             result.append(unreal.Transform(pos, rot, unreal.Vector(s, s, s)))
         return result
 
-    groups = [
-        ("Altstadt HISM Lamps Metal", "PropLampMetal", street_lamp_metal(), make_transforms(prop_instances.get("street_lamps", []))),
-        ("Altstadt HISM Lamps Glow", "PropLanternGlow", street_lamp_glow(), make_transforms(prop_instances.get("street_lamps", []))),
-        ("Altstadt HISM Benches", "PropBench", street_bench(), make_transforms(prop_instances.get("benches", []))),
-        ("Altstadt HISM Planters", "PropPlanter", street_planter(), make_transforms(prop_instances.get("planters", []))),
-        ("Altstadt HISM Bollards", "PropBollard", street_bollard(), make_transforms(prop_instances.get("bollards", []))),
+    base_groups = [
+        ("Altstadt HISM Lamps Metal", "PropLampMetal", street_lamp_metal(), prop_instances.get("street_lamps", []), False),
+        ("Altstadt HISM Lamps Glow", "PropLanternGlow", street_lamp_glow(), prop_instances.get("street_lamps", []), False),
+        ("Altstadt HISM Benches", "PropBench", street_bench(), prop_instances.get("benches", []), False),
+        ("Altstadt HISM Planters", "PropPlanter", street_planter(), prop_instances.get("planters", []), False),
+        ("Altstadt HISM Bollards", "PropBollard", street_bollard(), prop_instances.get("bollards", []), False),
     ]
-
     for variant in range(3):
-        tree_entries = [e for e in prop_instances.get("trees", []) if int(e[5]) == variant]
-        groups.append((f"Altstadt HISM Trees {variant}", f"PropTree_{variant}", stylized_tree(variant), make_transforms(tree_entries, has_scale=True)))
-        bush_entries = [e for e in prop_instances.get("bushes", []) if int(e[5]) == variant]
-        groups.append((f"Altstadt HISM Bushes {variant}", f"PropBush_{variant}", stylized_bush(variant), make_transforms(bush_entries, has_scale=True)))
+        for key, label, mesh_name, builder in (("trees", "Trees", "PropTree", stylized_tree),
+                                                ("bushes", "Bushes", "PropBush", stylized_bush),
+                                                ("boats", "Boats", "PropBoat", stylized_boat)):
+            entries = [e for e in prop_instances.get(key, []) if int(e[5]) == variant]
+            base_groups.append((f"Altstadt HISM {label} {variant}", f"{mesh_name}_{variant}", builder(variant), entries, True))
+
+    # Sprint 14: one HISM actor per streaming cell, spatially loaded like the cell meshes
+    groups = []
+    for label, mesh_name, mesh_data, entries, has_scale in base_groups:
+        if not cells:
+            groups.append((label, mesh_name, mesh_data, make_transforms(entries, has_scale=has_scale), False))
+            continue
+        size = float(cells["cell_size_m"])
+        ox, oy = cells["origin_m"]
+        nx_c, ny_c = cells["grid"]
+        buckets = {}
+        for e in entries:
+            ix = min(nx_c - 1, max(0, int((float(e[0]) - ox) // size)))
+            iy = min(ny_c - 1, max(0, int((float(e[1]) - oy) // size)))
+            buckets.setdefault(f"c{ix}_{iy}", []).append(e)
+        for key in sorted(buckets):
+            groups.append((f"{label} {key}", mesh_name, mesh_data, make_transforms(buckets[key], has_scale=has_scale), True))
 
     active_labels = set()
     total_instances = 0
     blocking_instances = 0
-    for label, mesh_name, mesh_data, transforms in groups:
+    prepared = {}
+    for label, mesh_name, mesh_data, transforms, streamed in groups:
         if not transforms:
             continue
         active_labels.add(label)
-        actor = place(existing, label, hism_class, unreal.Vector())
+        actor = place(existing, label, hism_class, unreal.Vector(), spatially_loaded=streamed)
         hism_comp = actor.get_editor_property("hism_component")
-        asset = static_mesh(mesh_name, mesh_data)
-        shapes = [prop_collision_shape(shape) for shape in mesh_data.get("blocking_shapes", [])]
-        if unreal.DoemitzInstancedPropActor.set_mesh_collision_shapes(asset, shapes) != len(shapes):
-            raise RuntimeError(f"Could not set {len(shapes)} collision shapes on {mesh_name}")
-        if not EDITOR.save_loaded_asset(asset):
-            raise RuntimeError(f"Could not save mesh collision of {mesh_name}")
+        if mesh_name not in prepared:
+            asset = static_mesh(mesh_name, mesh_data)
+            shapes = [prop_collision_shape(shape) for shape in mesh_data.get("blocking_shapes", [])]
+            if unreal.DoemitzInstancedPropActor.set_mesh_collision_shapes(asset, shapes) != len(shapes):
+                raise RuntimeError(f"Could not set {len(shapes)} collision shapes on {mesh_name}")
+            if not EDITOR.save_loaded_asset(asset):
+                raise RuntimeError(f"Could not save mesh collision of {mesh_name}")
+            prepared[mesh_name] = (asset, shapes)
+        asset, shapes = prepared[mesh_name]
         hism_comp.set_static_mesh(asset)
         actor.set_instances(transforms)
         actor.set_blocks_movement(bool(shapes))
@@ -886,7 +914,8 @@ def import_level(package):
 
     mesh_actors = {}
     for name, asset in assets.items():
-        actor = place(existing, f"Altstadt {name}", unreal.StaticMeshActor, unreal.Vector())
+        actor = place(existing, f"Altstadt {name}", unreal.StaticMeshActor, unreal.Vector(),
+                      spatially_loaded=is_streamed_mesh(name, package["meshes"][name]))
         mesh_actors[name] = actor
         component = actor.static_mesh_component
         actor.modify()
@@ -900,7 +929,13 @@ def import_level(package):
         if isinstance(actor, unreal.StaticMeshActor) and actor not in mesh_actors.values():
             if not ACTORS.destroy_actor(actor):
                 raise RuntimeError(f"Could not remove obsolete generated actor {actor.get_actor_label()}")
-    place_instanced_props(existing, package.get("props", {}).get("instances", {}))
+    # Sprint 14: meshes split into streaming cells leave their former whole-city asset unused
+    split_bases = {n.split("__")[0] for n in package["meshes"] if "__" in n} - set(package["meshes"])
+    for base in sorted(split_bases):
+        path = f"{ASSETS}/SM_{base}"
+        if EDITOR.does_asset_exist(path) and not EDITOR.delete_asset(path):
+            raise RuntimeError(f"Could not delete obsolete mesh asset {path}")
+    place_instanced_props(existing, package.get("props", {}).get("instances", {}), package.get("cells"))
     road_edge_structs, vehicle_structs, crossing_structs, parking_structs, traffic_seed = place_traffic_network(
         existing, package.get("road-graph"), package.get("traffic_network"), package.get("vehicle"),
     )
@@ -912,6 +947,14 @@ def import_level(package):
         parking_structs, traffic_seed, economy_asset, tasks_asset, city_map_tex, city_map_bounds,
     )
     interior_structs = place_interiors(existing, package.get("interiors"))
+    cells = package.get("cells") or {}
+    if cells.get("spatial_meshes"):
+        world = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_editor_world()
+        grid_report = unreal.DoemitzWorldTools.configure_streaming_grid(
+            world, int(float(cells["cell_size_m"]) * 100), int(float(cells.get("loading_range_m", 1000.0)) * 100))
+        if grid_report.startswith("ERROR"):
+            raise RuntimeError(f"World Partition streaming grid: {grid_report}")
+        unreal.log(f"DOEMITZ_STREAMING_GRID_OK: {grid_report} ({cells['spatial_meshes']} cell meshes)")
     for actor in ACTORS.get_all_level_actors():
         if actor.get_actor_label() == "Altstadt Simulation Config":
             actor.modify()
@@ -1046,7 +1089,9 @@ def import_level(package):
         if hit is None:
             raise RuntimeError("Sidewalk collision test missed")
         result = hit.to_dict()
-        if result["hit_actor"] != mesh_actors["Sidewalks"] or abs(result["impact_point"].z - point.z) > 2.5:
+        hit_label = result["hit_actor"].get_actor_label() if result["hit_actor"] else ""
+        on_sidewalk = hit_label == "Altstadt Sidewalks" or hit_label.startswith("Altstadt Sidewalks__")
+        if not on_sidewalk or abs(result["impact_point"].z - point.z) > 2.5:
             raise RuntimeError(f"Sidewalk collision test hit the wrong surface: {result}")
 
     bridges = package.get("bridges") or []

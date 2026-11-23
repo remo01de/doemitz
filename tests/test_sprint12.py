@@ -109,7 +109,7 @@ class Sprint12Test(unittest.TestCase):
     def test_lod2_matching_above_threshold_and_no_double_assignment(self):
         threshold = float(self.pkg["lod2"]["overlap_threshold"])
         items = self.pkg["buildings"]["items"]
-        self.assertEqual(len(items), 645)
+        self.assertEqual(len(items), 782)  # Sprint 14: 645 Altstadt buildings + 137 up to the harbour
 
         seen_lod2_ids = set()
         valid_sources = {"lod2", "osm_height", "osm_levels", "reference_photo_estimate", "assumed_default"}
@@ -155,7 +155,7 @@ class Sprint12Test(unittest.TestCase):
 
     def test_landmarks_bridge_details_tunnel_portal_and_rathaus_entrance(self):
         lm = self.pkg["landmarks"]
-        self.assertEqual(lm["building_count"], 10)  # Sprint 13 adds the Rathausturm
+        self.assertEqual(lm["building_count"], 11)  # Sprint 13 adds the Rathausturm, Sprint 14 the Speicher
         self.assertEqual(lm["buildings"]["osm:way:42551672"], "johanneskirche")
         self.assertEqual(lm["buildings"]["osm:way:41020272"], "rathaus")
         for fid in ("osm:way:96029976", "osm:way:1360590722", "osm:way:96029971", "osm:way:1360590724", "osm:way:96029975", "osm:way:96029967"):

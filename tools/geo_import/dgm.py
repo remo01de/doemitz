@@ -323,6 +323,10 @@ def load_clipped_dgm1(
             "terrain_max_triangles": int(dgm_cfg.get("terrain_max_triangles", 150000)),
             "road_smoothing_window_m": float(dgm_cfg.get("road_smoothing_window_m", 12.0)),
             "water_bank_depression_m": float(dgm_cfg.get("water_bank_depression_m", 0.05)),
+            # Sprint 14: finer tolerance only in the historic core (the Sprint 1-13 area), coarser outside
+            **({"terrain_fine_bounds_lonlat": [float(v) for v in dgm_cfg["terrain_fine_bounds_lonlat"]],
+                "terrain_outer_max_error_m": float(dgm_cfg.get("terrain_outer_max_error_m", 0.10))}
+               if dgm_cfg.get("terrain_fine_bounds_lonlat") else {}),
         },
         "grid": {
             "file": "terrain-grid.bin",

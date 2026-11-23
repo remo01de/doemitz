@@ -157,7 +157,7 @@ class Sprint10AltstadtTests(unittest.TestCase):
 
     def test_osm_entrances_all_accounted_for_and_place_buildings_use_osm_entrance(self):
         osm_entrances = self.scene.get("entrances", [])
-        self.assertEqual(len(osm_entrances), 8)
+        self.assertEqual(len(osm_entrances), 9)  # Sprint 14: one more OSM entrance in the harbour extension
         report = self.pkg["citizens"]["osm_entrances_report"]
         self.assertEqual(len(report), len(osm_entrances))
 
@@ -204,22 +204,23 @@ class Sprint10AltstadtTests(unittest.TestCase):
         v_min_e, v_min_n, v_max_e, v_max_n = full_meta["view_bounds_m"]
         for ref_east, ref_north in self.pkg["reference_points_m"]:
             px, py = world_to_pixel(ref_east, ref_north, full_meta)
-            expected_px = (ref_east - v_min_e) / (v_max_e - v_min_e) * 2048.0
-            expected_py = (v_max_n - ref_north) / (v_max_n - v_min_n) * 2048.0
+            size = float(full_meta["width_px"])  # Sprint 14: 4096 px for the extended area (<= 0.5 m/px)
+            expected_px = (ref_east - v_min_e) / (v_max_e - v_min_e) * size
+            expected_py = (v_max_n - ref_north) / (v_max_n - v_min_n) * size
             self.assertAlmostEqual(px, expected_px, delta=1.0)
             self.assertAlmostEqual(py, expected_py, delta=1.0)
-            self.assertTrue(0.0 <= px <= 2048.0 and 0.0 <= py <= 2048.0)
+            self.assertTrue(0.0 <= px <= size and 0.0 <= py <= size)
             back_e, back_n = pixel_to_world(px, py, full_meta)
             self.assertAlmostEqual(back_e, ref_east, delta=1e-4)
             self.assertAlmostEqual(back_n, ref_north, delta=1e-4)
 
-        # Check generated 2048x2048 city-map.png on disk if present
+        # Check generated 4096x4096 city-map.png on disk if present (Sprint 14)
         disk_png = PROCESSED / "city-map.png"
         if disk_png.exists():
             raw = disk_png.read_bytes()
             self.assertTrue(raw.startswith(b"\x89PNG\r\n\x1a\n"))
             w, h = struct.unpack(">II", raw[16:24])
-            self.assertEqual((w, h), (2048, 2048))
+            self.assertEqual((w, h), (4096, 4096))
 
     def test_tasks_manifest_compiled_with_valid_places_and_items(self):
         tasks = self.pkg["tasks"]

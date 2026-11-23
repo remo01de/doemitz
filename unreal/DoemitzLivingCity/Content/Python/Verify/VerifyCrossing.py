@@ -1,3 +1,5 @@
+import json
+from pathlib import Path
 from time import monotonic
 import traceback
 
@@ -6,8 +8,15 @@ import unreal
 editor = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem)
 level = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
 CROSSING_ID = "osm:node:1125976999"
-CROSSING_EDGE = "edge:osm:way:45239596:0:2:fwd"
-APPROACH_DIST_CM = 2500.0  # ~6.25 m before the zebra crossing at 31.25 m
+# The edge carrying the zebra crossing comes from the package (edge indices shift when the area grows, Sprint 14)
+_project = Path(unreal.Paths.convert_relative_path_to_full(unreal.Paths.project_dir()))
+_graph = json.loads((_project.parents[1] / "data/processed/doemitz-altstadt/unreal-city-meshes.json")
+                    .read_text(encoding="utf-8"))["road-graph"]
+_crossing = next(c for c in _graph["crossings"] if c["id"] == CROSSING_ID)
+CROSSING_EDGE = next(e for e in _crossing["edge_ids"] if e.endswith(":fwd"))
+_edge = next(e for e in _graph["edges"] if e["id"] == CROSSING_EDGE)
+_dist_m = next(c["distance_m"] for c in _edge["crossings"] if c["id"] == CROSSING_ID)
+APPROACH_DIST_CM = max(0.0, (_dist_m - 6.25) * 100.0)  # ~6.25 m before the zebra crossing
 
 deadline = monotonic() + 90
 phase = "setup"
