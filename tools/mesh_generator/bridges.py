@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from math import ceil, cos, hypot, pi, sin
+from math import acos, ceil, cos, degrees, hypot, pi, sin
 
 import numpy as np
 from shapely.geometry import LineString, Point, Polygon
 
 from tools.geo_transform.terrain import ElevationModel
 from tools.mesh_generator.road_elevation import BridgeChain, TunnelWayInfo, _densify_polyline
+from tools.mesh_generator.solids import arch_curve, arched_face, beam, box_faces, frame_box, orient
 
 
 BRIDGE_DECK_THICKNESS_M = 0.50
@@ -35,8 +36,17 @@ COLOR_TUNNEL_BRICK = (0.48, 0.22, 0.16)
 COLOR_TUNNEL_KEYSTONE = (0.62, 0.59, 0.54)
 COLOR_TUNNEL_FLOOR = (0.34, 0.31, 0.27)
 COLOR_RAMPART_TURF = (0.26, 0.36, 0.19)
-COLOR_SANDSTONE = (0.76, 0.68, 0.53)
-COLOR_SANDSTONE_SHADE = (0.62, 0.55, 0.43)
+COLOR_SANDSTONE = (0.52, 0.33, 0.15)
+COLOR_SANDSTONE_SHADE = (0.42, 0.27, 0.12)
+COLOR_SANDSTONE_DARK = (0.31, 0.20, 0.09)
+COLOR_DOOR_WOOD = (0.50, 0.18, 0.08)
+COLOR_WOOD_PLANK_A = (0.29, 0.23, 0.17)
+COLOR_WOOD_PLANK_B = (0.24, 0.19, 0.14)
+COLOR_WOOD_POST = (0.19, 0.14, 0.10)
+COLOR_WOOD_RAIL = (0.26, 0.20, 0.15)
+WOOD_PLANK_M = 0.3
+WOOD_POST_SPACING_M = 1.25
+WOOD_TRESTLE_SPACING_M = 5.0
 
 
 def resolve_bridge_material(chain: BridgeChain) -> tuple[str, str]:
@@ -63,6 +73,13 @@ class _ColoredMeshBuilder:
         self.vertices: list[tuple[float, float, float]] = []
         self.triangles: list[tuple[int, int, int]] = []
         self.vertex_colors: list[tuple[float, float, float]] = []
+
+    def add_triangle(self, p0, p1, p2, color):
+        offset = len(self.vertices)
+        for p in (p0, p1, p2):
+            self.vertices.append((round(float(p[0]), 4), round(float(p[1]), 4), round(float(p[2]), 4)))
+            self.vertex_colors.append(color)
+        self.triangles.append((offset, offset + 1, offset + 2))
 
     def add_quad(self, p0, p1, p2, p3, color):
         offset = len(self.vertices)
@@ -136,6 +153,103 @@ def _add_prism_along_axis(
         builder.add_quad(t0, t1, t2, t3, color)
     if add_bottom:
         builder.add_quad(b1, b0, b3, b2, color)
+
+
+def _add_faces(builder: _ColoredMeshBuilder, quads, color) -> None:
+    for q in quads:
+        if len(q) == 3:
+            builder.add_triangle(q[0], q[1], q[2], color)
+        else:
+            builder.add_quad(q[0], q[1], q[2], q[3], color)
+
+
+def _add_timber_details(builder, chain, pts, cum_s, normals, z_tops, z_bots, total_half_w, elevation, water_level_m):
+    """
+    Wooden bridges (OSM material=wood or footways): transverse deck planks, an open timber railing (posts,
+    handrail, middle rail) instead of a solid parapet, and timber trestle bents down to the moat or river floor
+    (reference photos of the fortress drawbridge approach).
+    """
+    def frame(i):
+        j = i + 1 if i + 1 < len(pts) else i
+        k = j - 1
+        tx, ty = pts[j][0] - pts[k][0], pts[j][1] - pts[k][1]
+        tl = hypot(tx, ty) or 1.0
+        return (tx / tl, ty / tl), normals[i]
+
+    def z_top_at(s_pos):
+        return float(np.interp(s_pos, cum_s, z_tops))
+
+    def xy_at(s_pos):
+        for i in range(len(cum_s) - 1):
+            if cum_s[i] - 1e-9 <= s_pos <= cum_s[i + 1] + 1e-9:
+                t = 0.0 if cum_s[i + 1] - cum_s[i] < 1e-9 else (s_pos - cum_s[i]) / (cum_s[i + 1] - cum_s[i])
+                x = pts[i][0] + (pts[i + 1][0] - pts[i][0]) * t
+                y = pts[i][1] + (pts[i + 1][1] - pts[i][1]) * t
+                n0, n1 = normals[i], normals[i + 1]
+                nx, ny = n0[0] + (n1[0] - n0[0]) * t, n0[1] + (n1[1] - n0[1]) * t
+                nl = hypot(nx, ny) or 1.0
+                tx, ty = pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]
+                tl = hypot(tx, ty) or 1.0
+                return (x, y), (tx / tl, ty / tl), (nx / nl, ny / nl)
+        return pts[-1], frame(len(pts) - 1)[0], normals[-1]
+
+    length = cum_s[-1]
+    # 1. deck planks (2 mm above the walkable deck so the colours read without z-fighting)
+    n_planks = max(1, int(round(length / WOOD_PLANK_M)))
+    for k in range(n_planks):
+        sa, sb = length * k / n_planks, length * (k + 1) / n_planks
+        (pa, _, na), (pb, _, nb) = xy_at(sa), xy_at(sb)
+        za, zb = z_top_at(sa) + 0.002, z_top_at(sb) + 0.002
+        hw = total_half_w - 0.02
+        quad = [(pa[0] - na[0] * hw, pa[1] - na[1] * hw, za), (pa[0] + na[0] * hw, pa[1] + na[1] * hw, za),
+                (pb[0] + nb[0] * hw, pb[1] + nb[1] * hw, zb), (pb[0] - nb[0] * hw, pb[1] - nb[1] * hw, zb)]
+        _add_faces(builder, [orient(quad, (0.0, 0.0, 1.0))], COLOR_WOOD_PLANK_A if k % 2 == 0 else COLOR_WOOD_PLANK_B)
+    # 2. railing: posts, handrail and middle rail on both edges
+    n_posts = max(1, int(ceil(length / WOOD_POST_SPACING_M)))
+    for side in (-1.0, 1.0):
+        lat_c = side * (total_half_w - 0.08)
+        for k in range(n_posts + 1):
+            sp = min(length, k * length / n_posts)
+            (pxy, t, nrm) = xy_at(sp)
+            z0 = z_top_at(sp)
+            _add_faces(builder, frame_box(pxy, t, nrm, -0.06, 0.06, lat_c - 0.06, lat_c + 0.06, z0, z0 + 1.08), COLOR_WOOD_POST)
+        for i in range(len(pts) - 1):
+            for dz0, dz1, h_w in ((0.97, 1.09, 0.07), (0.46, 0.56, 0.05)):
+                la, lb = lat_c - h_w, lat_c + h_w
+                corners = []
+                for z_off in (dz0, dz1):
+                    for idx, lat in ((i, la), (i, lb), (i + 1, lb), (i + 1, la)):
+                        nx, ny = normals[idx]
+                        corners.append((pts[idx][0] + nx * lat, pts[idx][1] + ny * lat, z_tops[idx] + z_off))
+                _add_faces(builder, box_faces(corners), COLOR_WOOD_RAIL)
+    # 3. trestle bents every few metres where the deck stands clear of the ground
+    n_bents = int(length // WOOD_TRESTLE_SPACING_M)
+    for k in range(1, n_bents + 1):
+        sp = k * length / (n_bents + 1)
+        (pxy, t, nrm) = xy_at(sp)
+        z_bot = float(np.interp(sp, cum_s, z_bots))
+        lats = [-(total_half_w - 0.3), total_half_w - 0.3]
+        if total_half_w > 1.6:
+            lats.insert(1, 0.0)
+        bases = []
+        for lat in lats:
+            x, y = pxy[0] + nrm[0] * lat, pxy[1] + nrm[1] * lat
+            g = float(elevation.sample(x, y))
+            if water_level_m is not None:
+                g = min(g, water_level_m - 0.4)
+            bases.append(g - 0.3)
+        if z_bot - max(bases) < 0.8:
+            continue
+        for lat, zb in zip(lats, bases):
+            _add_faces(builder, frame_box(pxy, t, nrm, -0.1, 0.1, lat - 0.1, lat + 0.1, zb, z_bot - 0.02), COLOR_WOOD_POST)
+        _add_faces(builder, frame_box(pxy, t, nrm, -0.13, 0.13, -total_half_w + 0.05, total_half_w - 0.05,
+                                      z_bot - 0.3, z_bot - 0.01), COLOR_WOOD_SIDE)
+        d = 1.0 if k % 2 else -1.0
+        z_lo = max(bases) + 0.6
+        p0 = (pxy[0] + nrm[0] * lats[0] * d, pxy[1] + nrm[1] * lats[0] * d, z_lo)
+        p1 = (pxy[0] + nrm[0] * lats[-1] * d, pxy[1] + nrm[1] * lats[-1] * d, z_bot - 0.35)
+        _add_faces(builder, beam((p0[0] + t[0] * 0.12, p0[1] + t[1] * 0.12, p0[2]),
+                                 (p1[0] + t[0] * 0.12, p1[1] + t[1] * 0.12, p1[2]), 0.08, 0.16), COLOR_WOOD_POST)
 
 
 def _add_stone_bridge_arches_and_piers(
@@ -233,6 +347,137 @@ def _add_stone_bridge_arches_and_piers(
             )
 
 
+def _pt(origin, fwd, right, s_pos, lat, z):
+    return (origin[0] + fwd[0] * s_pos + right[0] * lat, origin[1] + fwd[1] * s_pos + right[1] * lat, z)
+
+
+def _add_sandstone_gate(builder, origin, fwd, right, s_front, ze, half_cw, clear_h, spring_h, arch_r, n_arch):
+    """
+    Renaissance sandstone gate (Sandsteintor 1565, reference photos): rusticated jambs and voussoir arch with
+    keystone, pilasters with diamond bosses, entablature with inscription tablet, an attic with two coats of
+    arms between volutes and urns, a triangular pediment with a bust, and the small side door with its own
+    pediment to the right of the gate. Everything stands in front of the portal face (s < s_front).
+    """
+    out = (-fwd[0], -fwd[1])
+    out3 = (out[0], out[1], 0.0)
+
+    def box(lat0, lat1, z0, z1, proud, color, back=0.0):
+        _add_prism_along_axis(builder, origin, fwd, right, s_front - proud, s_front - back, min(lat0, lat1),
+                              max(lat0, lat1), ze + z0, ze + z1, color, add_top=True, add_bottom=True)
+
+    def face(lat_z, proud, color):
+        """Flat polygon (list of (lat, z)) in a plane `proud` in front of the portal, as a triangle fan."""
+        c_lat = sum(p[0] for p in lat_z) / len(lat_z)
+        c_z = sum(p[1] for p in lat_z) / len(lat_z)
+        c = _pt(origin, fwd, right, s_front - proud, c_lat, ze + c_z)
+        for (la, za), (lb, zb) in zip(lat_z, lat_z[1:] + lat_z[:1]):
+            tri = [c, _pt(origin, fwd, right, s_front - proud, la, ze + za), _pt(origin, fwd, right, s_front - proud, lb, ze + zb)]
+            _add_faces(builder, [orient(tri, out3)], color)
+
+    def edge(la, za, lb, zb, p0, p1, toward, color):
+        q = [_pt(origin, fwd, right, s_front - p0, la, ze + za), _pt(origin, fwd, right, s_front - p0, lb, ze + zb),
+             _pt(origin, fwd, right, s_front - p1, lb, ze + zb), _pt(origin, fwd, right, s_front - p1, la, ze + za)]
+        _add_faces(builder, [orient(q, toward)], color)
+
+    ent0 = clear_h + 0.55
+    hw_panel = half_cw + 0.65
+    # stone background of the gate front (spandrels) with the arched opening
+    arch = arch_curve(half_cw, spring_h, arch_r, n_arch)
+    arch_w = [(u, ze + z) for u, z in arch]
+    _add_faces(builder, arched_face(origin, right, out, -(s_front - 0.06), -hw_panel, hw_panel, ze - 0.05,
+                                    lambda _u: ze + ent0, arch_w, out3), COLOR_SANDSTONE)
+    for lat_e, d in ((-hw_panel, -1.0), (hw_panel, 1.0)):
+        edge(lat_e, -0.05, lat_e, ent0, 0.0, 0.06, (right[0] * d, right[1] * d, 0.0), COLOR_SANDSTONE)
+    # voussoirs around the arch, alternating shades, and a keystone
+    ring = 0.42
+    outer = [(u * (half_cw + ring) / half_cw, spring_h + (z - spring_h) * (arch_r + ring) / arch_r) for u, z in arch]
+    for k, ((ua, za), (ub, zb), (uc, zc), (ud, zd)) in enumerate(zip(arch, arch[1:], outer[1:], outer)):
+        color = COLOR_SANDSTONE if k % 2 == 0 else COLOR_SANDSTONE_SHADE
+        face([(ua, za), (ub, zb), (uc, zc), (ud, zd)], 0.18, color)
+        um, zm = 0.5 * (uc + ud), 0.5 * (zc + zd)
+        edge(ud, zd, uc, zc, 0.06, 0.18, (right[0] * um, right[1] * um, zm - spring_h), color)
+        um, zm = 0.5 * (ua + ub), 0.5 * (za + zb)
+        edge(ua, za, ub, zb, 0.0, 0.18, (-right[0] * um, -right[1] * um, spring_h - zm), color)
+    box(-0.22, 0.22, clear_h - 0.08, clear_h + 0.55, 0.28, COLOR_SANDSTONE_SHADE)
+    # rusticated jambs below the spring and impost blocks
+    for side in (-1.0, 1.0):
+        z = -0.05
+        k = 0
+        while z < spring_h - 0.05:
+            z1 = min(spring_h, z + 0.48)
+            box(side * half_cw, side * (half_cw + ring), z, z1, 0.18 if k % 2 == 0 else 0.22,
+                COLOR_SANDSTONE if k % 2 == 0 else COLOR_SANDSTONE_SHADE)
+            z, k = z1, k + 1
+        box(side * (half_cw - 0.05), side * (half_cw + 0.55), spring_h - 0.24, spring_h, 0.26, COLOR_SANDSTONE)
+    # pilasters with pedestal, diamond bosses and capital
+    for side in (-1.0, 1.0):
+        l0, l1 = side * (half_cw + 0.65), side * (half_cw + 1.2)
+        box(l0, l1, -0.05, ent0, 0.24, COLOR_SANDSTONE)
+        box(side * (half_cw + 0.58), side * (half_cw + 1.27), -0.05, 0.7, 0.3, COLOR_SANDSTONE_SHADE)
+        box(side * (half_cw + 0.58), side * (half_cw + 1.27), ent0 - 0.3, ent0, 0.32, COLOR_SANDSTONE_SHADE)
+        zb = 1.0
+        while zb + 0.3 < ent0 - 0.35:
+            box(side * (half_cw + 0.75), side * (half_cw + 1.1), zb, zb + 0.3, 0.33, COLOR_SANDSTONE_SHADE)
+            zb += 0.85
+        # medallion head in the spandrel
+        box(side * (half_cw + 0.05), side * (half_cw + 0.5), clear_h - 0.05, clear_h + 0.4, 0.12, COLOR_SANDSTONE_DARK)
+    # entablature: architrave, frieze with inscription tablet and lion heads, cornice
+    hw_ent = half_cw + 1.4
+    box(-hw_ent, hw_ent, ent0, ent0 + 0.22, 0.32, COLOR_SANDSTONE)
+    box(-hw_ent, hw_ent, ent0 + 0.22, ent0 + 0.72, 0.26, COLOR_SANDSTONE_SHADE)
+    box(-1.05, 1.05, ent0 + 0.28, ent0 + 0.66, 0.3, COLOR_SANDSTONE)
+    for lat_c in (-2.6, -1.65, 1.65, 2.6):
+        box(lat_c - 0.18, lat_c + 0.18, ent0 + 0.3, ent0 + 0.64, 0.32, COLOR_SANDSTONE_DARK)
+    box(-hw_ent - 0.15, hw_ent + 0.15, ent0 + 0.72, ent0 + 0.98, 0.45, COLOR_SANDSTONE)
+    # attic with two coats of arms, side pilasters, volutes and urns
+    a0, a1 = ent0 + 0.98, ent0 + 2.33
+    box(-1.75, 1.75, a0, a1, 0.24, COLOR_SANDSTONE)
+    for l0, l1 in ((-1.42, -0.12), (0.12, 1.42)):
+        box(l0, l1, a0 + 0.15, a1 - 0.12, 0.3, COLOR_SANDSTONE_DARK)
+    for side in (-1.0, 1.0):
+        box(side * 1.55, side * 1.8, a0, a1, 0.3, COLOR_SANDSTONE_SHADE)
+        v_in, v_out = side * 1.8, side * 2.55
+        tri = [(v_in, a0), (v_out, a0), (v_in, a0 + 0.95)]
+        face(tri if side > 0 else tri[::-1], 0.22, COLOR_SANDSTONE_SHADE)
+        dl, dz = v_out - v_in, -0.95
+        slope_n = (right[0] * side * 0.95, right[1] * side * 0.95, abs(dl))
+        edge(v_in, a0 + 0.95, v_out, a0, 0.0, 0.22, slope_n, COLOR_SANDSTONE_SHADE)
+        box(side * 2.8, side * 3.1, a0, a0 + 0.22, 0.34, COLOR_SANDSTONE_SHADE)
+        box(side * 2.85, side * 3.05, a0 + 0.22, a0 + 0.48, 0.3, COLOR_SANDSTONE)
+    # triangular pediment with its cornice, bust on the apex
+    p0, apex = a1 + 0.16, a1 + 0.86
+    box(-1.95, 1.95, a1, p0, 0.32, COLOR_SANDSTONE)
+    face([(-1.95, p0), (1.95, p0), (0.0, apex)], 0.3, COLOR_SANDSTONE)
+    for side in (-1.0, 1.0):
+        edge(0.0, apex, side * 1.95, p0, 0.0, 0.3, (right[0] * side * 0.7, right[1] * side * 0.7, 1.95), COLOR_SANDSTONE)
+    box(-0.17, 0.17, apex - 0.1, apex + 0.18, 0.3, COLOR_SANDSTONE_SHADE)
+    box(-0.13, 0.13, apex + 0.18, apex + 0.58, 0.27, COLOR_SANDSTONE_DARK)
+    # side door with arched frame, frieze, cornice and pediment (to the right seen from the forecourt)
+    d0, d1 = half_cw + 1.65, half_cw + 2.75
+    dc, dr = 0.5 * (d0 + d1), 0.5 * (d1 - d0)
+    d_spring = 2.1
+    face([(d1, -0.02), (d1, d_spring)] + [(dc + dr * cos(pi * k / 8), d_spring + dr * sin(pi * k / 8)) for k in range(1, 8)]
+         + [(d0, d_spring), (d0, -0.02)], 0.01, COLOR_DOOR_WOOD)
+    for l0, l1 in ((d0 - 0.3, d0), (d1, d1 + 0.3)):
+        z = -0.05
+        k = 0
+        while z < d_spring + 0.6:
+            z1 = min(d_spring + 0.65, z + 0.45)
+            box(l0, l1, z, z1, 0.14 if k % 2 == 0 else 0.18, COLOR_SANDSTONE if k % 2 == 0 else COLOR_SANDSTONE_SHADE)
+            z, k = z1, k + 1
+    door_arch = [(dc - dr * cos(pi * k / 8), d_spring + dr * sin(pi * k / 8)) for k in range(9)]
+    door_out = [(dc - (dr + 0.3) * cos(pi * k / 8), d_spring + (dr + 0.3) * sin(pi * k / 8)) for k in range(9)]
+    for (ua, za), (ub, zb), (uc, zc), (ud, zd) in zip(door_arch, door_arch[1:], door_out[1:], door_out):
+        face([(ua, za), (ub, zb), (uc, zc), (ud, zd)], 0.14, COLOR_SANDSTONE)
+    box(d0 - 0.3, d1 + 0.3, d_spring + 0.65, d_spring + 0.95, 0.14, COLOR_SANDSTONE)
+    box(d0 - 0.35, d1 + 0.35, d_spring + 0.95, d_spring + 1.4, 0.16, COLOR_SANDSTONE_SHADE)
+    box(d0 - 0.45, d1 + 0.45, d_spring + 1.4, d_spring + 1.55, 0.26, COLOR_SANDSTONE)
+    face([(d0 - 0.42, d_spring + 1.55), (d1 + 0.42, d_spring + 1.55), (dc, d_spring + 2.05)], 0.22, COLOR_SANDSTONE)
+    for side, lat_e in ((-1.0, d0 - 0.42), (1.0, d1 + 0.42)):
+        edge(dc, d_spring + 2.05, lat_e, d_spring + 1.55, 0.0, 0.22,
+             (right[0] * side * 0.5, right[1] * side * 0.5, abs(lat_e - dc)), COLOR_SANDSTONE)
+
+
 def _add_fortress_tunnel_portal_and_passage(
     builder: _ColoredMeshBuilder,
     tunnel: TunnelWayInfo,
@@ -261,6 +506,32 @@ def _add_fortress_tunnel_portal_and_passage(
     pts, cum_s = _densify_polyline(coords, 1.0)
     length = max(cum_s[-1], 1.0)
     normals = _station_normals(pts)
+    # Portal facade in the plane of the wall the passage opens into (e.g. the Sandsteintor in the gate wall):
+    # the last cross-section of the bore is turned into the wall line, the portal is built in that frame.
+    facades = {}
+    for key, end_idx in (("entry", 0), ("exit", len(pts) - 1)):
+        fl = (portal_cfg.get("facade_lines") or {}).get(key)
+        if not fl:
+            continue
+        (fx0, fy0), (fx1, fy1) = fl[0], fl[1]
+        wl = hypot(fx1 - fx0, fy1 - fy0) or 1.0
+        w = ((fx1 - fx0) / wl, (fy1 - fy0) / wl)
+        n0 = normals[end_idx]
+        if w[0] * n0[0] + w[1] * n0[1] < 0:
+            w = (-w[0], -w[1])
+        skew = degrees(acos(max(-1.0, min(1.0, w[0] * n0[0] + w[1] * n0[1]))))
+        if skew < 5.0 or skew > 35.0:
+            continue
+        normals[end_idx] = w
+        # signed distance of the bore end in front of the wall line (out of the passage)
+        ex, ey = pts[end_idx]
+        nbx, nby = pts[end_idx + (1 if end_idx == 0 else -1)]
+        ox, oy = ex - nbx, ey - nby
+        fn = (w[1], -w[0])
+        if fn[0] * ox + fn[1] * oy < 0:
+            fn = (-fn[0], -fn[1])
+        sd = (ex - fx0) * fn[0] + (ey - fy0) * fn[1]
+        facades[end_idx] = {"tangent": w, "out": fn, "end_offset_m": sd, "skew_deg": round(skew, 1)}
     z0 = tunnel.portal_z_m[0] + road_offset_m
     z1 = tunnel.portal_z_m[1] + road_offset_m
 
@@ -278,7 +549,7 @@ def _add_fortress_tunnel_portal_and_passage(
 
     spring_h = clear_h * 0.62
     arch_r = clear_h - spring_h
-    n_arch = 6
+    n_arch = 10
     min_cover = clear_h + 0.85
 
     def cap_z(i: int, lat: float) -> float:
@@ -322,6 +593,7 @@ def _add_fortress_tunnel_portal_and_passage(
                              at(i + 1, lb, cap_z(i + 1, lb)), at(i + 1, la, cap_z(i + 1, la)), COLOR_RAMPART_TURF)
 
     portal_tops: list[float] = []
+    aprons: list[dict] = []
     for end_idx, is_entry in ((0, True), (len(pts) - 1, False)):
         ze = z_floor(cum_s[end_idx])
         # Portal frame reaches the rampart surface (highest cap height across the portal width).
@@ -332,50 +604,61 @@ def _add_fortress_tunnel_portal_and_passage(
         ty = pts[end_idx][1] - pts[end_idx + (1 if is_entry else -1)][1]
         tl = hypot(tx, ty) or 1.0
         out_dir = (tx / tl, ty / tl)              # points out of the tunnel
+        p_depth = 0.75
+        if end_idx in facades:
+            out_dir = facades[end_idx]["out"]
+            # portal front 5 cm proud of the wall face (retaining wall face = OSM line)
+            p_depth = max(0.15, 0.05 - facades[end_idx]["end_offset_m"])
         fwd = (-out_dir[0], -out_dir[1])          # points into the tunnel
         right = (fwd[1], -fwd[0])
         origin = pts[end_idx]
-        p_depth = 0.75
         s_a, s_b = -p_depth, 0.0
+        # level apron in front of and under the portal block (hidden there): no DGM rampart slope may
+        # reach out in front of the portal face
+        apron = [_pt(origin, fwd, right, s, lat, 0.0)[:2]
+                 for s, lat in ((s_b + 0.3, -half_pw - 0.3), (s_b + 0.3, half_pw + 0.3),
+                                (s_a - 3.0, half_pw + 0.3), (s_a - 3.0, -half_pw - 0.3))]
+        aprons.append({"polygon_m": [[round(x, 4), round(y, 4)] for x, y in apron], "z_m": round(ze - 0.05, 4)})
         for lat_a, lat_b in ((-half_pw, -half_cw), (half_cw, half_pw)):
             _add_prism_along_axis(builder, origin, fwd, right, s_a, s_b, lat_a, lat_b,
                                   ze - 3.6, ze + portal_h, COLOR_TUNNEL_BRICK, add_top=True)
-        _add_prism_along_axis(builder, origin, fwd, right, s_a, s_b, -half_cw, half_cw,
-                              ze + clear_h - 0.15, ze + portal_h, COLOR_TUNNEL_BRICK, add_top=True)
+        # arched opening matching the barrel vault: spandrel face and soffit
+        arch_pts = arch_curve(half_cw, ze + spring_h, arch_r, n_arch)
+        out3 = (out_dir[0], out_dir[1], 0.0)
+        _add_faces(builder, arched_face(origin, right, out_dir, p_depth, -half_cw, half_cw, ze + spring_h,
+                                        lambda _u: ze + portal_h, arch_pts, out3), COLOR_TUNNEL_BRICK)
+        for (ua, za), (ub, zb) in zip(arch_pts, arch_pts[1:]):
+            um, zm = 0.5 * (ua + ub), 0.5 * (za + zb)
+            qa = [_pt(origin, fwd, right, s_a, ua, za), _pt(origin, fwd, right, s_a, ub, zb),
+                  _pt(origin, fwd, right, s_b, ub, zb), _pt(origin, fwd, right, s_b, ua, za)]
+            _add_faces(builder, [orient(qa, (-right[0] * um, -right[1] * um, ze + spring_h - zm))], COLOR_TUNNEL_BRICK)
+        _add_faces(builder, [orient([_pt(origin, fwd, right, s_a, -half_cw, ze + portal_h),
+                                     _pt(origin, fwd, right, s_a, half_cw, ze + portal_h),
+                                     _pt(origin, fwd, right, s_b, half_cw, ze + portal_h),
+                                     _pt(origin, fwd, right, s_b, -half_cw, ze + portal_h)], (0, 0, 1))],
+                   COLOR_TUNNEL_BRICK)
         # Solid foundation under the threshold so the portal stands on a wall, not on two legs (NW-Steg moat edge)
         _add_prism_along_axis(builder, origin, fwd, right, s_a, s_b, -half_cw, half_cw,
                               ze - 3.6, ze - 0.03, COLOR_TUNNEL_BRICK, add_top=True)
         _add_prism_along_axis(builder, origin, fwd, right, s_a - 0.08, s_b + 0.08, -half_pw - 0.12, half_pw + 0.12,
                               ze + portal_h, ze + portal_h + 0.28, COLOR_TUNNEL_KEYSTONE, add_top=True)
-        _add_prism_along_axis(builder, origin, fwd, right, s_a - 0.08, s_b + 0.08, -0.32, 0.32,
-                              ze + clear_h - 0.25, ze + clear_h + 0.45, COLOR_TUNNEL_KEYSTONE, add_top=True)
-        for side_lat in (-half_cw - 0.35, half_cw):
+        sandstone_end = (portal_cfg.get("end_styles") or {}).get("entry" if is_entry else "exit") == "sandstone_aedicula"
+        if not sandstone_end:
+            _add_prism_along_axis(builder, origin, fwd, right, s_a - 0.08, s_b + 0.08, -0.32, 0.32,
+                                  ze + clear_h - 0.25, ze + clear_h + 0.45, COLOR_TUNNEL_KEYSTONE, add_top=True)
+        for side_lat in ((-half_cw - 0.35, half_cw) if not sandstone_end else ()):
             _add_prism_along_axis(builder, origin, fwd, right, s_a - 0.06, s_b + 0.06, side_lat, side_lat + 0.35,
                                   ze + spring_h - 0.18, ze + spring_h + 0.14, COLOR_TUNNEL_KEYSTONE, add_top=True)
         end_style = (portal_cfg.get("end_styles") or {}).get("entry" if is_entry else "exit")
         if end_style == "sandstone_aedicula":
-            # Renaissance sandstone gate (e.g. Sandsteintor 1565): framed opening, pilasters, entablature, pediment
-            f0, f1 = s_a - 0.32, s_a
-            _add_prism_along_axis(builder, origin, fwd, right, f0 + 0.1, f1, -half_cw - 0.35, -half_cw,
-                                  ze - 0.05, ze + clear_h + 0.1, COLOR_SANDSTONE, add_top=True)
-            _add_prism_along_axis(builder, origin, fwd, right, f0 + 0.1, f1, half_cw, half_cw + 0.35,
-                                  ze - 0.05, ze + clear_h + 0.1, COLOR_SANDSTONE, add_top=True)
-            _add_prism_along_axis(builder, origin, fwd, right, f0 + 0.1, f1, -half_cw - 0.35, half_cw + 0.35,
-                                  ze + clear_h - 0.2, ze + clear_h + 0.25, COLOR_SANDSTONE, add_top=True)
-            for side in (-1.0, 1.0):
-                lat0 = side * (half_cw + 0.55)
-                lat1 = side * (half_cw + 1.05)
-                _add_prism_along_axis(builder, origin, fwd, right, f0, f1, min(lat0, lat1), max(lat0, lat1),
-                                      ze - 0.05, ze + clear_h + 0.7, COLOR_SANDSTONE_SHADE, add_top=True)
-            ent_hw = half_cw + 1.25
-            _add_prism_along_axis(builder, origin, fwd, right, f0 - 0.08, f1, -ent_hw, ent_hw,
-                                  ze + clear_h + 0.7, ze + clear_h + 1.15, COLOR_SANDSTONE, add_top=True)
-            for k, (hw, dz) in enumerate(((ent_hw - 0.2, 0.35), (ent_hw * 0.62, 0.35), (ent_hw * 0.3, 0.35))):
-                zp = ze + clear_h + 1.15 + 0.35 * k
-                _add_prism_along_axis(builder, origin, fwd, right, f0, f1, -hw, hw, zp, zp + dz,
-                                      COLOR_SANDSTONE if k % 2 == 0 else COLOR_SANDSTONE_SHADE, add_top=True)
+            _add_sandstone_gate(builder, origin, fwd, right, s_a, ze, half_cw, clear_h, spring_h, arch_r, n_arch)
 
     corridor_poly = LineString(coords).buffer(corridor_half_w, quad_segs=1, cap_style="flat", join_style="mitre")
+    if facades:
+        # terrain cut-out with the same turned end as the bore, so no cut sliver shows in front of the facade
+        left = [at(i, -corridor_half_w, 0.0)[:2] for i in range(len(pts))]
+        right_side = [at(i, corridor_half_w, 0.0)[:2] for i in range(len(pts))]
+        corridor_poly = Polygon(left + right_side[::-1]).buffer(0)
     floor_ref_z = min(tunnel.portal_z_m[0], tunnel.portal_z_m[1])
     report = {
         "road_id": tunnel.road_id,
@@ -388,6 +671,10 @@ def _add_fortress_tunnel_portal_and_passage(
         "portal_wall_height_m": portal_tops,
         "floor_sources": list(tunnel.floor_sources),
         "floor_slope_percent": round(abs(z1 - z0) / length * 100.0, 2),
+        "facades": {("entry" if k == 0 else "exit"): {"skew_deg": v["skew_deg"], "end_offset_m": round(v["end_offset_m"], 3)}
+                    for k, v in sorted(facades.items())},
+        "end_styles": portal_cfg.get("end_styles") or {},
+        "aprons": aprons,
         "dimensions_source": portal_cfg.get("dimensions_source", "assumed_sprint12_tunnel_portal"),
         "polyline_3d_m": [
             [round(x, 4), round(y, 4), round(z_floor(_s), 4)]
@@ -490,7 +777,9 @@ def build_bridges_mesh(
             builder.add_quad(r0_b, r1_b, r1_t, r0_t, side_color)
             builder.add_quad(l1_b, l0_b, l0_t, l1_t, side_color)
 
-            # 4. Left & right parapets / railings (1.0 m above outer deck/sidewalk edge)
+            # 4. Left & right parapets (1.0 m above outer deck/sidewalk edge); wooden bridges get timber railings
+            if material_kind == "wood":
+                continue
             for lat_lo, lat_hi in (
                 (-total_half_w, -total_half_w + para_w),
                 (total_half_w - para_w, total_half_w),
@@ -524,7 +813,9 @@ def build_bridges_mesh(
             else:
                 builder.add_quad(r_sk, l_sk, l_top, r_top, side_color)
 
-            # Parapet end caps
+            # Parapet end caps (stone parapets only)
+            if material_kind == "wood":
+                continue
             for lat_lo, lat_hi in (
                 (-total_half_w, -total_half_w + para_w),
                 (total_half_w - para_w, total_half_w),
@@ -540,6 +831,12 @@ def build_bridges_mesh(
 
         # Bridge footprint polygon (flat cap so it stays strictly over the bridge span)
         line = LineString(chain.coords)
+        railing = "solid_parapet"
+        if material_kind == "wood":
+            wood_water = [wl for wpoly, wl in water_surfaces if wpoly.intersects(line.buffer(total_half_w))]
+            _add_timber_details(builder, chain, pts, cum_s, normals, z_tops, z_bots, total_half_w, elevation,
+                                max(wood_water) if wood_water else None)
+            railing = "timber_posts_rails"
         fp = line.buffer(total_half_w, quad_segs=2, cap_style="flat")
         if fp.geom_type == "Polygon" and not fp.is_empty:
             footprints.append(fp)
@@ -617,6 +914,7 @@ def build_bridges_mesh(
             "total_width_m": round(total_half_w * 2.0, 2),
             "deck_thickness_m": BRIDGE_DECK_THICKNESS_M,
             "parapet_height_m": BRIDGE_PARAPET_HEIGHT_M,
+            "railing": railing,
             "dimensions_source": "assumed_sprint11_1_bridge_defaults",
             "max_slope_percent": chain.max_slope_percent,
             "incline": chain.incline,

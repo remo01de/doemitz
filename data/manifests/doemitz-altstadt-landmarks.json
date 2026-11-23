@@ -166,9 +166,19 @@
       "gap_extra_width_m": 1.0,
       "fill_band_m": 4.0,
       "approach_cheek_walls": false,
-      "gatehouse": {"opening_height_m": 3.8, "gable_height_m": 1.6, "above_crest_m": 0.8},
+      "gatehouse": {
+        "opening_width_m": 3.3, "opening_height_m": 4.1, "pier_width_m": 1.45, "depth_m": 1.3,
+        "attic_height_m": 5.0, "attic_crown_m": 5.7,
+        "dimensions_source": "assumed_sprint13_1_gatehouse: Rundbogen zwischen zwei Pfeilern mit Ochsenaugen und hellen Steinfeldern, geschweiftes Attikagesims ohne Dach, Sandsteinsockel, Zugbrückenbalken mit Ketten (Referenzfotos Torbau)"
+      },
+      "forecourt_parapet": {
+        "height_m": 2.3, "thickness_m": 0.6, "loophole_spacing_m": 1.5, "loophole_height_m": 1.2,
+        "loophole_size_m": [0.16, 0.32],
+        "dimensions_source": "assumed_sprint13_1_forecourt_parapet: niedrige waagerechte Schartenmauer beiderseits des Torbaus auf Sandsteinsockel (Referenzfotos Torvorhof)"
+      },
       "stone_plinth_height_m": 1.8,
-      "dimensions_source": "assumed_sprint13_fortress_wall: Mauerlinie aus OSM-Umriss, Fuß 0,6 m unter Grabenwasserspiegel, Krone aus DGM1-Höhe 1–3 m hinter der Mauerlinie (10 m geglättet), Gesims und Scharten nach Referenzfotos",
+      "stone_plinth_scope": "forecourt",
+      "dimensions_source": "assumed_sprint13_fortress_wall: Mauerlinie aus OSM-Umriss, Fuß 0,6 m unter Grabenwasserspiegel, Krone aus DGM1-Höhe 1–3 m hinter der Mauerlinie (10 m geglättet), Gesims und Scharten nach Referenzfotos; Backstein bis zum Grabenboden, Sandsteinsockel nur am Torvorhof",
       "reference_ids": ["ref_festung_mauer", "ref_festung_bastion_held", "ref_festung_zugbruecke"]
     }
   },

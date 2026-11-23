@@ -8,6 +8,23 @@ LANTERN_GLOW = (1.00, 0.84, 0.48)
 TIMBER = (0.28, 0.16, 0.09)
 TERRACOTTA = (0.74, 0.31, 0.21)
 TRUNK = (0.26, 0.17, 0.11)
+# Simple collision primitives per prototype (Sprint 13.1): the player must not walk through lamps, benches,
+# bollards, planters or tree trunks. Local metres (east, north, up) like the mesh vertices; capsules are upright,
+# half_height_m includes the caps. Bushes and foliage canopies stay walk-through on purpose.
+
+
+def _capsule(radius_m, height_m, east=0.0, north=0.0):
+    return {"kind": "capsule", "center_m": (east, north, height_m * 0.5), "radius_m": radius_m, "half_height_m": height_m * 0.5}
+
+
+def _box(east_half_m, north_half_m, z0_m, z1_m, east=0.0, north=0.0):
+    return {
+        "kind": "box",
+        "center_m": (east, north, (z0_m + z1_m) * 0.5),
+        "half_extent_m": (east_half_m, north_half_m, (z1_m - z0_m) * 0.5),
+    }
+
+
 FOLIAGE_VARIANTS = (
     (0.24, 0.54, 0.16),
     (0.15, 0.42, 0.14),
@@ -91,7 +108,10 @@ def street_lamp_metal():
     _add_cylinder(verts, tris, None, 0.0, 0.0, 0.45, 3.45, 0.08, 0.055, None, 8)
     _add_cylinder(verts, tris, None, 0.0, 0.0, 3.45, 3.55, 0.14, 0.18, None, 6)
     _add_cylinder(verts, tris, None, 0.0, 0.0, 3.98, 4.22, 0.24, 0.04, None, 6)
-    return {"collision": False, "color": LAMP_METAL, "vertices": verts, "triangles": tris}
+    return {
+        "collision": False, "color": LAMP_METAL, "vertices": verts, "triangles": tris,
+        "blocking_shapes": [_capsule(0.16, 4.0)],
+    }
 
 
 def street_lamp_glow():
@@ -106,21 +126,30 @@ def street_bench():
     _add_box(verts, tris, cols, 0.0, 0.65, 0.0, 0.44, 0.24, 0.06, LAMP_METAL)
     _add_box(verts, tris, cols, 0.0, 0.0, 0.42, 0.49, 0.26, 0.80, TIMBER)
     _add_box(verts, tris, cols, -0.22, 0.0, 0.56, 0.86, 0.05, 0.80, TIMBER)
-    return {"collision": False, "vertices": verts, "triangles": tris, "vertex_colors": cols}
+    return {
+        "collision": False, "vertices": verts, "triangles": tris, "vertex_colors": cols,
+        "blocking_shapes": [_box(0.27, 0.80, 0.0, 0.86, east=-0.005)],
+    }
 
 
 def street_planter():
     verts, tris, cols = [], [], []
     _add_cylinder(verts, tris, cols, 0.0, 0.0, 0.0, 0.46, 0.22, 0.28, TERRACOTTA, 8)
     _add_canopy_blob(verts, tris, cols, 0.0, 0.0, 0.66, 0.34, 0.34, 0.30, FOLIAGE_VARIANTS[0], 6)
-    return {"collision": False, "vertices": verts, "triangles": tris, "vertex_colors": cols}
+    return {
+        "collision": False, "vertices": verts, "triangles": tris, "vertex_colors": cols,
+        "blocking_shapes": [_capsule(0.30, 0.96)],
+    }
 
 
 def street_bollard():
     verts, tris = [], []
     _add_cylinder(verts, tris, None, 0.0, 0.0, 0.0, 0.82, 0.075, 0.06, None, 7)
     _add_cylinder(verts, tris, None, 0.0, 0.0, 0.82, 0.90, 0.08, 0.02, None, 7)
-    return {"collision": False, "color": LAMP_METAL, "vertices": verts, "triangles": tris}
+    return {
+        "collision": False, "color": LAMP_METAL, "vertices": verts, "triangles": tris,
+        "blocking_shapes": [_capsule(0.08, 0.90)],
+    }
 
 
 def stylized_tree(variant_index):
@@ -131,7 +160,10 @@ def stylized_tree(variant_index):
     _add_cylinder(verts, tris, cols, 0.0, 0.0, 0.0, trunk_h, 0.28, 0.18, TRUNK, 7)
     _add_canopy_blob(verts, tris, cols, 0.0, 0.0, trunk_h + canopy_r * 0.62, canopy_r, canopy_r * 0.95, canopy_r * 0.85, color, 6)
     _add_canopy_blob(verts, tris, cols, canopy_r * 0.42, canopy_r * 0.18, trunk_h + canopy_r * 0.42, canopy_r * 0.72, canopy_r * 0.72, canopy_r * 0.62, color, 6)
-    return {"collision": False, "vertices": verts, "triangles": tris, "vertex_colors": cols}
+    return {
+        "collision": False, "vertices": verts, "triangles": tris, "vertex_colors": cols,
+        "blocking_shapes": [_capsule(0.26, trunk_h)],
+    }
 
 
 def stylized_bush(variant_index):

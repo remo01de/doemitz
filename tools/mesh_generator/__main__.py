@@ -5,17 +5,18 @@ from collections import Counter
 from dataclasses import dataclass, field
 from hashlib import sha256
 import json
-from math import isfinite
+from math import hypot, isfinite
 from pathlib import Path
 import re
 
 from shapely import constrained_delaunay_triangles, orient_polygons, set_precision, union_all
-from shapely.geometry import LineString, Point, shape
+from shapely.geometry import LineString, Point, Polygon, shape
 from shapely.ops import nearest_points
+from shapely.ops import split as _split_polygon
 
 from tools.geo_import.export import geometry_parts, write_json
 from tools.geo_transform.terrain import ElevationModel
-from tools.mesh_generator.architecture import GABLE_STYLES, ROOF_STYLES, WALL_STYLES, add_stylized_building
+from tools.mesh_generator.architecture import GABLE_STYLES, ROOF_STYLES, WALL_STYLES, _add_triangle, add_stylized_building
 from tools.mesh_generator.bridges import build_bridges_mesh
 from tools.mesh_generator.citizens import build_citizens
 from tools.mesh_generator.city_map import render_city_map
@@ -521,6 +522,26 @@ def build(
         building_obstacles=building_union,
     )
 
+    # Portal ends that open into an OSM wall (Sandsteintor in the gate wall) get their facade in the wall plane
+    portal_cfgs = {}
+    wall_lines = [shape(wf["geometry"]) for wf in scene["layers"].get("walls", [])
+                  if wf["geometry"]["type"] == "LineString"]
+    for tunnel in road_network.tunnels:
+        pcfg = landmark_tunnel_portals.get(tunnel.road_id)
+        if pcfg is None:
+            continue
+        facade_lines = {}
+        for key, end in (("entry", tunnel.coords[0]), ("exit", tunnel.coords[-1])):
+            ep = Point(end)
+            near = [wl for wl in wall_lines if wl.distance(ep) < 1.5]
+            if not near:
+                continue
+            wl = min(near, key=lambda g: g.distance(ep))
+            s_w = wl.project(ep)
+            a = wl.interpolate(max(0.0, s_w - 2.0))
+            b = wl.interpolate(min(wl.length, s_w + 2.0))
+            facade_lines[key] = [[round(a.x, 4), round(a.y, 4)], [round(b.x, 4), round(b.y, 4)]]
+        portal_cfgs[tunnel.road_id] = {**pcfg, **({"facade_lines": facade_lines} if facade_lines else {})}
     bridges_mesh, bridges_report, bridge_footprints, tunnel_corridors, tunnel_portals_report = build_bridges_mesh(
         bridges=road_network.bridges,
         elevation=elevation,
@@ -531,7 +552,7 @@ def build(
         water_surfaces=water_surfaces,
         bridge_details_config=landmark_bridges,
         tunnels=road_network.tunnels,
-        tunnel_portals_config=landmark_tunnel_portals,
+        tunnel_portals_config={**landmark_tunnel_portals, **portal_cfgs},
     )
     bridge_exclusion_zone = (
         union_all(
@@ -585,9 +606,28 @@ def build(
             (e["point"], e["width"], ",".join(sorted(e["roads"])), e["approach"])
             for _, e in sorted(crossing_points.items())
         ]
+        # Gate forecourts: an OSM wall with both ends on the outline cuts off a small court (< 400 m2)
+        forecourts = []
+        for wf in scene["layers"].get("walls", []):
+            wl = shape(wf["geometry"])
+            if wl.geom_type != "LineString" or wl.buffer(0.01).within(ring.buffer(1.0)):
+                continue
+            ends = [Point(wl.coords[0]), Point(wl.coords[-1])]
+            if not all(ring.distance(e) < 0.5 for e in ends):
+                continue
+            wc = list(wl.coords)
+
+            def _ext(p, q):
+                d = hypot(p[0] - q[0], p[1] - q[1]) or 1.0
+                return (p[0] + (p[0] - q[0]) / d * 0.8, p[1] + (p[1] - q[1]) / d * 0.8)
+
+            cutter = LineString([_ext(wc[0], wc[1])] + wc + [_ext(wc[-1], wc[-2])])
+            for piece in getattr(_split_polygon(outline, cutter), "geoms", []):
+                if piece.area < 400.0:
+                    forecourts.append(piece)
         rep_f, profile = build_fortress_wall(
             meshes, outline, {**fcfg, "outline_id": outline_id}, elevation, water_surfaces, crossings,
-            road_z_fn=road_network.road_surface_z,
+            road_z_fn=road_network.road_surface_z, forecourts=forecourts,
         )
         fortress_reports.append(rep_f)
         fortress_profiles.append(profile)
@@ -606,30 +646,17 @@ def build(
             meshes, scene["layers"]["walls"], landmarks_config.get("walls") or {}, elevation, roads, road_width,
             road_network.road_surface_z, {t.road_id: t for t in road_network.tunnels if t.built},
             landmark_tunnel_portals, skip_ids=skip_wall_ids,
+            flat_zones=[z for prof in fortress_profiles for z in (prof.flat_zones or [])],
         )
         fortress_bands.extend(wall_bands)
-        # Gate forecourt: a retaining wall whose ends both sit on the escarp outline cuts off a small court on
-        # its low side; that court stays level at the wall foot (no rampart fill, no slanted terrain).
-        from shapely.ops import split as _split
-        for prof in fortress_profiles:
-            zones = []
-            for step in wall_steps:
-                ends = [Point(step.line.coords[0]), Point(step.line.coords[-1])]
-                if not all(prof.ring.distance(e) < 0.5 for e in ends):
-                    continue
-                pieces = _split(prof.outline, step.line)
-                for piece in getattr(pieces, "geoms", []):
-                    rp = piece.representative_point()
-                    if piece.area < 400.0 and step.side(rp.x, rp.y) < 0:
-                        # court level = wall foot at its opening (the gate), not at its ends on the moat slope
-                        if step.gaps:
-                            g0, g1 = step.gaps[0]
-                            s_mid = 0.5 * (g0 + g1)
-                            zc = float(sorted(step.base_z[abs(step.s_vals - s_mid) <= 4.0])[0]) if any(abs(step.s_vals - s_mid) <= 4.0) else float(sorted(step.base_z)[len(step.base_z) // 2])
-                        else:
-                            zc = float(sorted(step.base_z)[len(step.base_z) // 2])
-                        zones.append((piece, zc + 0.2))
-            prof.flat_zones = zones
+    # Gate forecourts (level courts from build_fortress_wall) are paved with cobbles like the real court
+    for prof in fortress_profiles:
+        for zone_poly, zone_z in prof.flat_zones or []:
+            court = zone_poly.buffer(-0.05, join_style="mitre")
+            for tri in orient_polygons(constrained_delaunay_triangles(court)).geoms:
+                a, b, c = list(tri.exterior.coords)[:3]
+                _add_triangle(meshes["Paving"], (a[0], a[1], zone_z + 0.03), (b[0], b[1], zone_z + 0.03),
+                              (c[0], c[1], zone_z + 0.03))
     if fortress_bands:
         bridge_exclusion_zone = union_all([bridge_exclusion_zone, *fortress_bands], grid_size=STREET_GRID_M)
 
@@ -659,6 +686,7 @@ def build(
             road_ground_z_fn=road_network.ground_elevation_at,
             bridge_polygons=bridge_footprints,
             tunnel_corridors=tunnel_corridors + [c for prof in fortress_profiles for c in (prof.corridors or [])],
+            portal_aprons=[(Polygon(a["polygon_m"]), a["z_m"]) for tp in tunnel_portals_report for a in tp.get("aprons", [])],
             fortress_profiles=fortress_profiles,
             wall_steps=wall_steps,
             interior_floors=[

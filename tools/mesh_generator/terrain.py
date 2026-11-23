@@ -360,6 +360,7 @@ def build_terrain_tiles(
     interior_floors: list[tuple[Polygon, float]] | None = None,
     fortress_profiles: list | None = None,
     wall_steps: list | None = None,
+    portal_aprons: list | None = None,
     tile_size_m: int = DEFAULT_TILE_SIZE_M,
     max_error_m: float = DEFAULT_MAX_ERROR_M,
     max_triangles: int = DEFAULT_MAX_TRIANGLES,
@@ -455,7 +456,8 @@ def build_terrain_tiles(
         sides = np.array([step.side(float(x), float(y)) for x, y in zip(e_coords[zxs], n_coords[zys])])
         in_gap = np.zeros(len(zys), dtype=bool)
         for g0, g1 in step.gaps:
-            in_gap |= (s_proj >= g0 - 1.0) & (s_proj <= g1 + 1.0)
+            # up to the gap edge: the wall end sits inside a portal block or is closed by an end cap
+            in_gap |= (s_proj >= g0) & (s_proj <= g1)
         cur = raw_z[zys, zxs]
         w_hi = np.clip((step.fill_band_m - dist) / max(step.fill_band_m - 1.5, 1e-6), 0.0, 1.0)
         hi = (sides > 0) & ~in_gap
@@ -464,6 +466,10 @@ def build_terrain_tiles(
         new[hi] = np.maximum(cur[hi], cur[hi] * (1.0 - w_hi[hi]) + top_v[hi] * w_hi[hi])
         new[lo] = np.minimum(cur[lo], base_v[lo])
         raw_z[zys, zxs] = new
+    # 0c. Level aprons in front of passage portals (terrain is only lowered, never raised)
+    for apron_poly, apron_z in portal_aprons or []:
+        amask = _rasterize_mask([apron_poly], e_coords, n_coords)
+        raw_z[amask] = np.minimum(raw_z[amask], apron_z)
     mesh_z = raw_z.copy()
     step_clip = [(step, prep(step.line), step.line.bounds) for step in (wall_steps or [])]
     fortress_clip = [

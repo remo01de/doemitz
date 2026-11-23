@@ -17,15 +17,18 @@ from shapely import orient_polygons
 from shapely.geometry import LineString, Point, Polygon
 
 from tools.mesh_generator.architecture import _add_box_on_wall, _add_quad, _add_triangle
+from tools.mesh_generator.solids import Profile, arch_curve, arched_face, beam, disc, frame_box, frame_point, orient, ring_quads
 
 
 FORTRESS_PALETTE = {
     "FortressWalls": (0.56, 0.23, 0.15),
     "FortressCoping": (0.60, 0.44, 0.36),
     "FortressDark": (0.05, 0.04, 0.04),
+    "FortressSandstone": (0.52, 0.33, 0.15),
+    "FortressSteel": (0.20, 0.21, 0.23),
 }
 FORTRESS_MATERIALS = {"FortressWalls": "WallsBrick", "FortressCoping": "StoneTrim"}
-FORTRESS_COLLISION_MESHES = {"FortressWalls", "FortressCoping"}
+FORTRESS_COLLISION_MESHES = {"FortressWalls", "FortressCoping", "FortressSandstone"}
 STATION_STEP_M = 2.0
 
 
@@ -86,68 +89,148 @@ def _quad_facing(mesh, quad, want_up=None, want_dir=None):
     _add_quad(mesh, *(quad if not flip else [quad[1], quad[0], quad[3], quad[2]]))
 
 
-def _add_gatehouse(walls, coping, roof, ring, length, pt, width, s_closed, top_closed, foot_closed,
-                   depth, cfg, road_z_fn, elevation):
-    """Brick gate front over a wall opening: lintel slab, side piers, stone archivolt and a small gable roof."""
+def _add_mesh_quads(mesh, quads):
+    for q in quads:
+        if len(q) == 3:
+            _add_triangle(mesh, *q)
+        else:
+            _add_quad(mesh, *q)
+
+
+def _add_gatehouse(meshes, ring, length, pt, s_closed, foot_closed, cfg, road_z_fn, elevation):
+    """
+    Brick gate front at the drawbridge (reference photos Torbau/Zugbruecke): a round arch between two piers with
+    oculi and light stone panels, a cambered brick attic with stone cornice and coping, a sandstone base down to
+    the moat floor and the two drawbridge beams with their chains. No roof: the gate front is an open portal.
+    """
+    walls, coping = meshes["FortressWalls"], meshes["FortressCoping"]
+    sand, steel = meshes["FortressSandstone"], meshes["FortressSteel"]
     s_c = ring.project(pt)
-    g0, g1 = s_c - width * 0.5, s_c + width * 0.5
-    p0, p1 = ring.interpolate(g0 % length), ring.interpolate(g1 % length)
-    tx, ty = p1.x - p0.x, p1.y - p0.y
+    pa, pb = ring.interpolate((s_c - 0.5) % length), ring.interpolate((s_c + 0.5) % length)
+    tx, ty = pb.x - pa.x, pb.y - pa.y
     tl = hypot(tx, ty) or 1.0
-    tx, ty = tx / tl, ty / tl
-    nx, ny = ty, -tx  # outward
+    t = (tx / tl, ty / tl)
+    n = (t[1], -t[0])  # outward (into the moat)
+    oc = ring.interpolate(s_c)
+    o = (oc.x, oc.y)
     road_z = road_z_fn(pt.x, pt.y) if road_z_fn else float(elevation.sample(pt.x, pt.y))
-    z_open = road_z + float(cfg.get("opening_height_m", 3.8))
-    crest = max(float(np.interp(g0, s_closed, top_closed)), float(np.interp(g1, s_closed, top_closed)))
-    z_top = max(crest + float(cfg.get("above_crest_m", 0.8)), z_open + 1.2)
-    gable_h = float(cfg.get("gable_height_m", 1.6))
-    pier = 0.6
-    front = 0.3
+    a = float(cfg.get("opening_width_m", 3.3)) * 0.5
+    crown = road_z + float(cfg.get("opening_height_m", 4.1))
+    spring = crown - a
+    pw = float(cfg.get("pier_width_m", 1.45))
+    front = float(cfg.get("front_m", 0.35))
+    back = -float(cfg.get("depth_m", 1.3)) + front
+    w2 = a + pw
+    z_e = road_z + float(cfg.get("attic_height_m", 5.0))
+    z_m = road_z + float(cfg.get("attic_crown_m", 5.7))
+    foot = min(float(np.interp((s_c + d) % length, s_closed, foot_closed)) for d in (-w2, 0.0, w2))
+    z_base = road_z - 0.35
+    prof = Profile([(-w2, z_e), (-w2 + 0.55, z_e), (-a * 0.7, z_e + 0.28), (-0.5, z_m),
+                    (0.5, z_m), (a * 0.7, z_e + 0.28), (w2 - 0.55, z_e), (w2, z_e)])
+    arch = arch_curve(a, spring, a, 12)
+    out3, in3 = (n[0], n[1], 0.0), (-n[0], -n[1], 0.0)
 
     def P(u, off, z):
-        return (p0.x + tx * u + nx * off, p0.y + ty * u + ny * off, z)
+        return frame_point(o, t, n, u, off, z)
 
-    span = tl
-    u0, u1 = -pier, span + pier
-    out = (nx, ny)
-    inn = (-nx, -ny)
-    # lintel slab over the opening (front, back, soffit)
-    _quad_facing(walls, [P(0, front, z_open), P(span, front, z_open), P(span, front, z_top), P(0, front, z_top)], want_dir=out)
-    _quad_facing(walls, [P(0, -depth, z_open), P(span, -depth, z_open), P(span, -depth, z_top), P(0, -depth, z_top)], want_dir=inn)
-    _quad_facing(walls, [P(0, front, z_open), P(span, front, z_open), P(span, -depth, z_open), P(0, -depth, z_open)], want_up=False)
-    # side piers from below the road to the top, projecting by `front`
-    z_low = road_z - 0.6
-    for a, b in ((u0, 0.0), (span, u1)):
-        _quad_facing(walls, [P(a, front, z_low), P(b, front, z_low), P(b, front, z_top), P(a, front, z_top)], want_dir=out)
-        _quad_facing(walls, [P(a, -depth, z_low), P(b, -depth, z_low), P(b, -depth, z_top), P(a, -depth, z_top)], want_dir=inn)
-        for u, d in ((a, (-tx, -ty)), (b, (tx, ty))):
-            _quad_facing(walls, [P(u, front, z_low), P(u, -depth, z_low), P(u, -depth, z_top), P(u, front, z_top)], want_dir=d)
-    # stone archivolt band and impost blocks
-    _quad_facing(coping, [P(-0.2, front + 0.06, z_open - 0.05), P(span + 0.2, front + 0.06, z_open - 0.05),
-                          P(span + 0.2, front + 0.06, z_open + 0.4), P(-0.2, front + 0.06, z_open + 0.4)], want_dir=out)
-    # gable (front and back triangles) and roof slopes
-    mid = span * 0.5
-    apex = z_top + gable_h
-    for off, d in ((front, out), (-depth, inn)):
-        a, b, c = P(u0, off, z_top), P(u1, off, z_top), P(mid, off, apex)
-        ux, uy, uz = b[0] - a[0], b[1] - a[1], b[2] - a[2]
-        vx, vy, vz = c[0] - a[0], c[1] - a[1], c[2] - a[2]
-        n_x, n_y = uy * vz - uz * vy, uz * vx - ux * vz
-        if n_x * d[0] + n_y * d[1] >= 0:
-            _add_triangle(walls, a, b, c)
-        else:
-            _add_triangle(walls, b, a, c)
-    for ue in (u0 - 0.25, u1 + 0.25):
-        _quad_facing(roof, [P(ue, front + 0.3, z_top - 0.12), P(mid, front + 0.3, apex + 0.12),
-                            P(mid, -depth - 0.3, apex + 0.12), P(ue, -depth - 0.3, z_top - 0.12)], want_up=True)
-    return {"opening_height_m": round(z_open - road_z, 2), "top_z_m": round(apex, 3)}
+    # brick front and back faces with the arched opening; the sandstone base carries the piers
+    _add_mesh_quads(walls, arched_face(o, t, n, front, -w2, w2, z_base, prof, arch, out3))
+    _add_mesh_quads(walls, arched_face(o, t, n, back, -w2, w2, z_base, prof, arch, in3))
+    for u_side, d in ((-w2, (-t[0], -t[1], 0.0)), (w2, (t[0], t[1], 0.0))):
+        _add_mesh_quads(walls, [orient([P(u_side, back, z_base), P(u_side, front, z_base),
+                                        P(u_side, front, z_e), P(u_side, back, z_e)], d)])
+    for u_jamb, d in ((-a, (t[0], t[1], 0.0)), (a, (-t[0], -t[1], 0.0))):
+        _add_mesh_quads(walls, [orient([P(u_jamb, back, road_z - 0.55), P(u_jamb, front, road_z - 0.55),
+                                        P(u_jamb, front, spring), P(u_jamb, back, spring)], d)])
+    for (ua, za), (ub, zb) in zip(arch, arch[1:]):
+        um, zm = 0.5 * (ua + ub), 0.5 * (za + zb)
+        toward = (-(t[0] * um), -(t[1] * um), spring - zm)
+        _add_mesh_quads(walls, [orient([P(ua, front, za), P(ub, front, zb), P(ub, back, zb), P(ua, back, za)], toward)])
+    pts = prof.points
+    cf, cb = front + 0.1, back - 0.1
+    for (ua, za), (ub, zb) in zip(pts, pts[1:]):
+        _add_mesh_quads(walls, [orient([P(ua, front, za), P(ub, front, zb), P(ub, back, zb), P(ua, back, za)], (0, 0, 1))])
+        # stone cornice band below the attic edge and a coping slab on top (both follow the cambered line)
+        z0, z1, zb0, zb1 = za - 0.42, za - 0.22, zb - 0.42, zb - 0.22
+        n0, n1 = front, front + 0.12
+        _add_mesh_quads(coping, [
+            orient([P(ua, n1, z0), P(ub, n1, zb0), P(ub, n1, zb1), P(ua, n1, z1)], out3),
+            orient([P(ua, n0, z1), P(ub, n0, zb1), P(ub, n1, zb1), P(ua, n1, z1)], (0, 0, 1)),
+            orient([P(ua, n0, z0), P(ub, n0, zb0), P(ub, n1, zb0), P(ua, n1, z0)], (0, 0, -1)),
+            orient([P(ua, cf, za + 0.14), P(ub, cf, zb + 0.14), P(ub, cb, zb + 0.14), P(ua, cb, za + 0.14)], (0, 0, 1)),
+            orient([P(ua, cf, za - 0.02), P(ub, cf, zb - 0.02), P(ub, cf, zb + 0.14), P(ua, cf, za + 0.14)], out3),
+            orient([P(ua, cb, za - 0.02), P(ub, cb, zb - 0.02), P(ub, cb, zb + 0.14), P(ua, cb, za + 0.14)], in3),
+        ])
+    for u_end, d in ((-w2 - 0.1, (-t[0], -t[1], 0.0)), (w2 + 0.1, (t[0], t[1], 0.0))):
+        _add_mesh_quads(coping, [orient([P(u_end, cb, z_e - 0.02), P(u_end, cf, z_e - 0.02),
+                                         P(u_end, cf, z_e + 0.14), P(u_end, cb, z_e + 0.14)], d)])
+    # brick archivolt ring proud of the front, stone keystone and impost blocks
+    ring_out = [(u * (a + 0.32) / a, spring + (z - spring) * (a + 0.32) / a) for u, z in arch]
+    nf = front + 0.06
+    for (ua, za), (ub, zb), (uc, zc), (ud, zd) in zip(arch, arch[1:], ring_out[1:], ring_out):
+        _add_mesh_quads(walls, [
+            orient([P(ua, nf, za), P(ub, nf, zb), P(uc, nf, zc), P(ud, nf, zd)], out3),
+            orient([P(ud, front, zd), P(uc, front, zc), P(uc, nf, zc), P(ud, nf, zd)],
+                   (t[0] * (ud + uc) * 0.5, t[1] * (ud + uc) * 0.5, 0.5 * (zd + zc) - spring)),
+        ])
+    _add_mesh_quads(coping, frame_box(o, t, n, -0.2, 0.2, front, front + 0.12, crown - 0.08, crown + 0.42))
+    for u0 in (-a - 0.3, a):
+        _add_mesh_quads(coping, frame_box(o, t, n, u0, u0 + 0.3, front, front + 0.09, spring - 0.22, spring))
+    # oculi and recessed light stone panels on the piers
+    for u_p in (-(a + pw * 0.5), a + pw * 0.5):
+        _add_mesh_quads(sand, disc(P(u_p, front + 0.02, road_z + 4.35), n, 0.30, 12))
+        _add_mesh_quads(walls, ring_quads(P(u_p, front + 0.05, road_z + 4.35), n, 0.30, 0.44, 12))
+        _add_mesh_quads(sand, frame_box(o, t, n, u_p - 0.26, u_p + 0.26, front, front + 0.03, road_z + 0.7, road_z + 2.35))
+    # sandstone base: piers down to the moat floor and a sill block under the bridge deck end
+    for u0, u1 in ((-w2 - 0.06, -a), (a, w2 + 0.06)):
+        _add_mesh_quads(sand, frame_box(o, t, n, u0, u1, back - 0.06, front + 0.06, foot, z_base))
+    _add_mesh_quads(sand, frame_box(o, t, n, -a, a, back - 0.06, front + 0.06, foot, road_z - 0.55))
+    # drawbridge beams and chains (steel), leaning from the piers over the bridge deck
+    for side in (-1.0, 1.0):
+        top_p = P(side * (a + 0.25), front + 0.08, road_z + 3.3)
+        low_p = P(side * (a - 0.12), front + 2.6, road_z + 1.05)
+        _add_mesh_quads(steel, beam(top_p, low_p, 0.14, 0.16))
+        _add_mesh_quads(steel, beam(low_p, P(side * (a + 0.36), front + 0.05, road_z + 4.05), 0.05, 0.05))
+    return {
+        "style": "brick_round_arch_oculi",
+        "opening_width_m": round(2 * a, 2),
+        "opening_height_m": round(crown - road_z, 2),
+        "width_m": round(2 * w2, 2),
+        "top_z_m": round(z_m + 0.14, 3),
+        "road_z_m": round(road_z, 3),
+    }
 
 
-def build_fortress_wall(meshes, outline: Polygon, cfg: dict, elevation, water_polygons, crossings, road_z_fn=None):
+def _forecourt_ranges(ring, length, forecourts, crossings, road_z_fn, elevation, parapet_h):
+    """Ring s-ranges bordering a gate forecourt: (s0, s1, court level, parapet top)."""
+    ranges = []
+    for poly in forecourts or []:
+        shared = ring.intersection(poly.buffer(0.05))
+        parts = [g for g in getattr(shared, "geoms", [shared]) if g.geom_type == "LineString" and g.length > 1.0]
+        if not parts:
+            continue
+        ss = sorted(ring.project(Point(c)) for g in parts for c in (g.coords[0], g.coords[-1]))
+        s0, s1 = ss[0], ss[-1]
+        if s1 - s0 > 0.5 * length:
+            continue
+        level = None
+        for pt, _, _, _ in crossings:
+            if s0 <= ring.project(pt) <= s1:
+                level = road_z_fn(pt.x, pt.y) if road_z_fn else float(elevation.sample(pt.x, pt.y))
+        if level is None:
+            c = poly.representative_point()
+            level = float(elevation.sample(c.x, c.y))
+        ranges.append((s0, s1, level, level + parapet_h, poly))
+    return ranges
+
+
+def build_fortress_wall(meshes, outline: Polygon, cfg: dict, elevation, water_polygons, crossings, road_z_fn=None,
+                        forecourts=None):
     """
     Add the escarp to meshes and return (report, profile). crossings: list of (Point, gap_width_m, label, approach)
     where approach is an optional (LineString, half_width_m) road segment inside the fortress that gets brick
-    cheek walls up to the next tunnel portal.
+    cheek walls up to the next tunnel portal. forecourts: small courts cut off inside the outline by a gate wall;
+    along them the escarp is a low, level loophole parapet on a sandstone base (reference photos Torvorhof).
     """
     outline = orient_polygons(outline)
     coords = list(outline.exterior.coords)
@@ -166,8 +249,24 @@ def build_fortress_wall(meshes, outline: Polygon, cfg: dict, elevation, water_po
     emb_max_edge = float(cfg.get("embrasure_max_edge_m", 25.0))
     emb_above_foot = float(cfg.get("embrasure_height_above_foot_m", 2.4))
     plinth_h = float(cfg.get("stone_plinth_height_m", 0.0))
+    plinth_scope = str(cfg.get("stone_plinth_scope", "all"))
     cheek_walls = bool(cfg.get("approach_cheek_walls", True))
     gatehouse = cfg.get("gatehouse") or {}
+    fc_cfg = cfg.get("forecourt_parapet") or {}
+    parapet_h = float(fc_cfg.get("height_m", 2.3))
+    parapet_t = float(fc_cfg.get("thickness_m", 0.6))
+    lh_spacing = float(fc_cfg.get("loophole_spacing_m", 1.5))
+    lh_z = float(fc_cfg.get("loophole_height_m", 1.2))
+    lh_w, lh_h = (float(v) for v in fc_cfg.get("loophole_size_m", [0.16, 0.32]))
+    fc_full = _forecourt_ranges(ring, length, forecourts, crossings, road_z_fn, elevation, parapet_h)
+    fc_ranges = [r[:4] for r in fc_full]
+    fc_breaks = sorted({b for s0, s1, _, _ in fc_ranges for b in (s0 - 0.02, s0 + 0.02, s1 - 0.02, s1 + 0.02)})
+
+    def fc_at(s):
+        for s0, s1, lvl, ptop in fc_ranges:
+            if s0 + 0.01 <= s <= s1 - 0.01:
+                return lvl, ptop
+        return None
 
     # Stations along the ring (every edge densified, corners kept)
     st_xy, st_s, st_edge = [], [], []
@@ -177,8 +276,8 @@ def build_fortress_wall(meshes, outline: Polygon, cfg: dict, elevation, water_po
         if seg < 1e-6:
             continue
         n = max(1, int(ceil(seg / STATION_STEP_M)))
-        for k in range(n):
-            t = k / n
+        ts = sorted({k / n for k in range(n)} | {(bs - cursor) / seg for bs in fc_breaks if cursor < bs < cursor + seg})
+        for t in ts:
             st_xy.append((a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t))
             st_s.append(cursor + seg * t)
             st_edge.append(idx)
@@ -206,6 +305,10 @@ def build_fortress_wall(meshes, outline: Polygon, cfg: dict, elevation, water_po
             foot[i] = float(np.min(elevation.sample_array(x - nx * outs, y - ny * outs))) - 0.3
     crest = _cyclic_moving_average(crest_raw, s_arr, length, smoothing)
     top = np.maximum(crest, foot + min_h)
+    for i, s_i in enumerate(s_arr):
+        hit = fc_at(float(s_i))
+        if hit is not None:
+            top[i] = hit[1]
 
     # Gaps at crossings
     gaps = []
@@ -260,8 +363,25 @@ def build_fortress_wall(meshes, outline: Polygon, cfg: dict, elevation, water_po
 
             # outer brick face
             _add_quad(walls, (*pa, za_f), (*pb, zb_f), (*pb, zb_t), (*pa, za_t))
+            fc = fc_at(c0 + 1e-3) if fc_at(c1 - 1e-3) is not None else None
+            if fc is not None:
+                # Forecourt parapet: level brick wall with inner face, flat stone coping and a sandstone base
+                lvl = fc[0]
+                qa, qb = off(pa, 0.05), off(pb, 0.05)
+                # sandstone base course about 1.3 m above the moat water, brick above (reference photo Torvorhof)
+                z_pl = min(lvl - 0.3, min(za_f, zb_f) + foot_below_water + 1.3)
+                _add_quad(meshes["FortressSandstone"], (*qa, za_f), (*qb, zb_f), (*qb, z_pl), (*qa, z_pl))
+                _add_quad(meshes["FortressSandstone"], (*qa, z_pl), (*qb, z_pl), (*pb, z_pl), (*pa, z_pl))
+                ia, ib = off(pa, -parapet_t), off(pb, -parapet_t)
+                _add_quad(walls, (*ib, lvl - 0.6), (*ia, lvl - 0.6), (*ia, za_t), (*ib, zb_t))
+                fa, fb = off(pa, 0.08), off(pb, 0.08)
+                ka, kb = off(pa, -parapet_t - 0.08), off(pb, -parapet_t - 0.08)
+                _add_quad(coping, (*fa, za_t - 0.02), (*fb, zb_t - 0.02), (*fb, zb_t + 0.12), (*fa, za_t + 0.12))
+                _add_quad(coping, (*fa, za_t + 0.12), (*fb, zb_t + 0.12), (*kb, zb_t + 0.12), (*ka, za_t + 0.12))
+                _add_quad(coping, (*kb, zb_t - 0.02), (*ka, za_t - 0.02), (*ka, za_t + 0.12), (*kb, zb_t + 0.12))
+                continue
             # grey stone plinth course from the foot to above the moat water (reference photo Zugbrücke)
-            if plinth_h > 0.0:
+            if plinth_h > 0.0 and plinth_scope == "all":
                 qa, qb = off(pa, 0.04), off(pb, 0.04)
                 za_p = min(za_t - 1.0, za_f + foot_below_water + plinth_h)
                 zb_p = min(zb_t - 1.0, zb_f + foot_below_water + plinth_h)
@@ -293,7 +413,7 @@ def build_fortress_wall(meshes, outline: Polygon, cfg: dict, elevation, water_po
         for k in range(count):
             u = seg * (k + 0.5) / count
             s_here = s_edge0 + u
-            if in_gap(s_here) or in_gap(s_here - 1.0) or in_gap(s_here + 1.0):
+            if in_gap(s_here) or in_gap(s_here - 1.0) or in_gap(s_here + 1.0) or fc_at(s_here) is not None:
                 continue
             z_f = float(np.interp(s_here, s_closed, foot_closed))
             z_t = float(np.interp(s_here, s_closed, top_closed))
@@ -301,6 +421,46 @@ def build_fortress_wall(meshes, outline: Polygon, cfg: dict, elevation, water_po
             if z0 + 0.6 > z_t - cordon_below - 0.3:
                 continue
             _add_box_on_wall(dark, a[0], a[1], tx, ty, nx, ny, u - 0.25, u + 0.25, z0, z0 + 0.6, 0.0, 0.015)
+
+    # Loopholes in the forecourt parapet (outside and court side) and the end faces of the tall escarp where it
+    # rises above the parapet at both ends of the forecourt
+    loopholes = 0
+    gate_s = [ring.project(pt) for pt, _, _, approach in crossings if approach is not None]
+    gate_half = (float(gatehouse.get("opening_width_m", 3.3)) * 0.5 + float(gatehouse.get("pier_width_m", 1.45))
+                 if gatehouse else 0.0)
+    for s0, s1, lvl, ptop in fc_ranges:
+        k = 0
+        s_l = s0 + 0.9
+        while s_l <= s1 - 0.9:
+            if not in_gap(s_l) and all(abs(s_l - g) > gate_half + 0.45 for g in gate_s):
+                p = ring.interpolate(s_l)
+                q = ring.interpolate(min(s_l + 0.05, length))
+                tx, ty = q.x - p.x, q.y - p.y
+                tl = hypot(tx, ty) or 1.0
+                tt = (tx / tl, ty / tl)
+                nn = (tt[1], -tt[0])
+                z0 = lvl + lh_z
+                _add_mesh_quads(dark, frame_box((p.x, p.y), tt, nn, -lh_w / 2, lh_w / 2, -0.01, 0.015, z0, z0 + lh_h,
+                                                faces={"side2"}))
+                _add_mesh_quads(dark, frame_box((p.x, p.y), tt, nn, -lh_w / 2, lh_w / 2, -parapet_t - 0.015,
+                                                -parapet_t + 0.01, z0, z0 + lh_h, faces={"side0"}))
+                loopholes += 1
+            k += 1
+            s_l = s0 + 0.9 + k * lh_spacing
+        for s_j, sign in ((s0, 1.0), (s1, -1.0)):
+            p = ring.interpolate(s_j % length)
+            q = ring.interpolate(min((s_j % length) + 0.05, length))
+            tx, ty = q.x - p.x, q.y - p.y
+            tl = hypot(tx, ty) or 1.0
+            tt = (tx / tl, ty / tl)
+            nn = (tt[1], -tt[0])
+            z_tall = float(np.interp(s_j - sign * 0.1, s_closed, top_closed)) + coping_h
+            if z_tall > ptop + 0.2:
+                _add_mesh_quads(walls, [orient([frame_point((p.x, p.y), tt, nn, 0.0, 0.06, ptop),
+                                                frame_point((p.x, p.y), tt, nn, 0.0, -coping_d, ptop),
+                                                frame_point((p.x, p.y), tt, nn, 0.0, -coping_d, z_tall),
+                                                frame_point((p.x, p.y), tt, nn, 0.0, 0.06, z_tall)],
+                                               (tt[0] * sign, tt[1] * sign, 0.0))])
 
     # End caps where the wall stops at an opening (faces point into the opening)
     for g0, g1, _, _ in gaps:
@@ -331,8 +491,7 @@ def build_fortress_wall(meshes, outline: Polygon, cfg: dict, elevation, water_po
         if approach is None:
             continue
         if gatehouse:
-            gh = _add_gatehouse(walls, coping, meshes.get("RoofsClay", coping), ring, length, pt, width, s_closed,
-                                top_closed, foot_closed, coping_d, gatehouse, road_z_fn, elevation)
+            gh = _add_gatehouse(meshes, ring, length, pt, s_closed, foot_closed, gatehouse, road_z_fn, elevation)
             gatehouse_report.append({"crossing": label, **gh})
         if not cheek_walls:
             continue
@@ -388,6 +547,13 @@ def build_fortress_wall(meshes, outline: Polygon, cfg: dict, elevation, water_po
         "gaps": [{"label": lbl, "width_m": round(w, 2), "s_m": round(0.5 * (g0 + g1), 2)} for g0, g1, lbl, w in gaps],
         "cheek_walls": cheek_report,
         "gatehouses": gatehouse_report,
+        "forecourt_parapets": [
+            {"s_m": [round(s0, 2), round(s1, 2)], "length_m": round(s1 - s0, 2), "court_z_m": round(lvl, 3),
+             "top_z_m": round(ptop, 3), "height_above_court_m": round(ptop - lvl, 2)}
+            for s0, s1, lvl, ptop in fc_ranges
+        ],
+        "forecourt_loopholes": loopholes,
+        "stone_plinth_scope": plinth_scope,
         "foot_z_m": [round(float(foot.min()), 3), round(float(foot.max()), 3)],
         "top_z_m": [round(float(top.min()), 3), round(float(top.max()), 3)],
         "height_m": [round(float(heights.min()), 3), round(float(heights.max()), 3)],
@@ -400,5 +566,7 @@ def build_fortress_wall(meshes, outline: Polygon, cfg: dict, elevation, water_po
         foot_z=foot_closed,
         gaps=[(g0, g1) for g0, g1, _, _ in gaps],
         corridors=corridors,
+        # level gate forecourt 10 cm under the bridge/road surface at the gate
+        flat_zones=[(r[4], r[2] - 0.1) for r in fc_full],
     )
     return report, profile

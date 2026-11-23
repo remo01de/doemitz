@@ -80,7 +80,7 @@ def _stations(line: LineString):
 
 
 def build_osm_walls(meshes, walls, details_by_id, elevation, roads, road_width_fn, road_z_fn,
-                    built_tunnels, tunnel_portals_cfg, skip_ids=()):
+                    built_tunnels, tunnel_portals_cfg, skip_ids=(), flat_zones=()):
     walls_mesh = meshes["FortressWalls"]
     coping = meshes["FortressCoping"]
     dark = meshes["FortressDark"]
@@ -126,6 +126,12 @@ def build_osm_walls(meshes, walls, details_by_id, elevation, roads, road_width_f
                 top = _smooth(high_max, s_vals, 6.0)
                 source = "assumed_terrain_step_crest"
             top = np.maximum(top, base + 1.0)
+            # a level court on the low side (gate forecourt): the wall face reaches down to the court floor
+            for zone_poly, zone_z in flat_zones:
+                zone_b = zone_poly.buffer(0.8)
+                for i, (p, n) in enumerate(zip(pts, normals)):
+                    if zone_b.contains(Point(p.x - high_sign * n[0] * 1.0, p.y - high_sign * n[1] * 1.0)):
+                        base[i] = min(base[i], zone_z - 0.1)
         else:
             h = h_tag if h_tag is not None else float(cfg.get("assumed_height_m", ASSUMED_FREE_HEIGHT_M))
             source = "osm_height" if h_tag is not None else "assumed_default_free_wall_height"
@@ -161,7 +167,9 @@ def build_osm_walls(meshes, walls, details_by_id, elevation, roads, road_width_f
                         if Point(end).distance(ip) < 5.0:
                             portal_near = tid
                 if portal_near:
-                    width = max(width, float(tunnel_portals_cfg.get(portal_near, {}).get("portal_wall_width_m", width)))
+                    # the wall ends 0.3 m inside the brick portal block on both sides (no grass strip beside it)
+                    pw = float(tunnel_portals_cfg.get(portal_near, {}).get("portal_wall_width_m", width + 0.6))
+                    width = max(width, pw - 0.6)
                 gaps.append([s_c - width * 0.5, s_c + width * 0.5, "crossing", None, road["id"]])
         for gate in feature.get("gates", []):
             gp = Point(gate["position_m"])

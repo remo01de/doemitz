@@ -19,6 +19,7 @@ param(
         'VerifyBridges.py',
         'VerifyInteriors.py',
         'VerifyFortressGate.py',
+        'VerifyPropCollision.py',
         'VerifySaveGame.py'
     )
 )
@@ -50,6 +51,7 @@ $expectedMarkers = @{
     'VerifyBridges.py'        = 'DOEMITZ_BRIDGES_PIE_OK:'
     'VerifyInteriors.py'      = 'DOEMITZ_INTERIORS_PIE_OK:'
     'VerifyFortressGate.py'   = 'DOEMITZ_FORTRESS_GATE_PIE_OK:'
+    'VerifyPropCollision.py'  = 'DOEMITZ_PROP_COLLISION_PIE_OK:'
     'VerifySaveGame.py'       = 'DOEMITZ_SAVEGAME_PIE_OK:'
 }
 

@@ -116,6 +116,6 @@ Alle Bilder entstehen mit `CaptureSprint13Screenshots.py` (1280×720, Editor-Spi
 ## Offen
 
 - Remote-Sicherung erledigt: Das Repository liegt seit Sprint 13 auf GitHub (`remo01de/doemitz`, öffentlich).
-- An der Festungsmauer fehlen noch Poternen und Zierformen des Sandsteintors; die Escarpenkrone folgt dem DGM und ist an Stellen mit niedrigem Wall nur 2,5 m hoch. Am Rand des Torvorhofs stehen kleine Rasenhügel.
+- An der Festungsmauer fehlen noch Poternen; die Escarpenkrone folgt dem DGM und ist an Stellen mit niedrigem Wall nur 2,5 m hoch. Torbau, Torvorhof, Holzbrücken und Sandsteintor sind in [Sprint 13.1](SPRINT_13_1.md) nach Fotos überarbeitet, dort sind auch die Rasenhügel am Torvorhof behoben.
 - Kasemattengänge in den Bastionen sind nicht begehbar (Report `tunnels_not_built`).
 - Bei den übrigen Gebäuden können vereinfachte Geländedreiecke am Hang weiterhin innerhalb des Grundrisses ansteigen. Das ist unsichtbar, solange die Gebäude geschlossen sind.

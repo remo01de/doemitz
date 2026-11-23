@@ -50,7 +50,10 @@ ALL_SHOTS = [
     ("22_festungsmauer_graben.png", ue_pos(-120.0, -110.0, 5.5), ue_pos(-150.0, -80.0, 3.5)),
     # Gorge wall of Bastion Drache from the courtyard, Sandsteintor from the gate forecourt
     ("23_kehlmauer_drache.png", ue_pos(-250.0, -27.0, 9.0), ue_pos(-273.0, -25.0, 9.5)),
-    ("24_sandsteintor.png", ue_pos(-167.6, -83.7, 4.9), ue_pos(-162.0, -79.4, 6.0)),
+    ("24_sandsteintor.png", ue_pos(-168.3, -84.2, 4.9), ue_pos(-162.6, -79.6, 7.0)),
+    # Sprint 13.1: gate front from the timber bridge and the forecourt parapet from across the moat
+    ("25_torbau_bruecke.png", ue_pos(-175.3, -92.6, 4.8), ue_pos(-169.0, -84.7, 5.6)),
+    ("26_torvorhof_graben.png", ue_pos(-181.0, -97.0, 5.2), ue_pos(-166.0, -84.5, 4.6)),
 ]
 # Interior views (day and night), computed from the generated package: camera just inside the door
 _project = Path(unreal.Paths.convert_relative_path_to_full(unreal.Paths.project_dir()))

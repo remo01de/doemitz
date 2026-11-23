@@ -281,6 +281,22 @@ def place(existing, name, actor_class, position, rotation=None):
     return actor
 
 
+def prop_collision_shape(shape):
+    """Prop collision primitive from local metres (east, north, up) to a mesh-space struct in centimetres."""
+    east, north, up = shape["center_m"]
+    result = unreal.DoemitzPropCollisionShape()
+    result.set_editor_property("center", unreal.Vector(north * 100.0, east * 100.0, up * 100.0))
+    if shape["kind"] == "capsule":
+        result.set_editor_property("kind", unreal.DoemitzPropCollisionKind.CAPSULE)
+        result.set_editor_property("radius", shape["radius_m"] * 100.0)
+        result.set_editor_property("half_height", shape["half_height_m"] * 100.0)
+    else:
+        he, hn, hu = shape["half_extent_m"]
+        result.set_editor_property("kind", unreal.DoemitzPropCollisionKind.BOX)
+        result.set_editor_property("half_extent", unreal.Vector(hn * 100.0, he * 100.0, hu * 100.0))
+    return result
+
+
 def place_instanced_props(existing, prop_instances):
     hism_class = unreal.load_class(None, "/Script/DoemitzLivingCity.DoemitzInstancedPropActor")
     if not hism_class:
@@ -314,21 +330,33 @@ def place_instanced_props(existing, prop_instances):
 
     active_labels = set()
     total_instances = 0
+    blocking_instances = 0
     for label, mesh_name, mesh_data, transforms in groups:
         if not transforms:
             continue
         active_labels.add(label)
         actor = place(existing, label, hism_class, unreal.Vector())
         hism_comp = actor.get_editor_property("hism_component")
-        hism_comp.set_static_mesh(static_mesh(mesh_name, mesh_data))
+        asset = static_mesh(mesh_name, mesh_data)
+        shapes = [prop_collision_shape(shape) for shape in mesh_data.get("blocking_shapes", [])]
+        if unreal.DoemitzInstancedPropActor.set_mesh_collision_shapes(asset, shapes) != len(shapes):
+            raise RuntimeError(f"Could not set {len(shapes)} collision shapes on {mesh_name}")
+        if not EDITOR.save_loaded_asset(asset):
+            raise RuntimeError(f"Could not save mesh collision of {mesh_name}")
+        hism_comp.set_static_mesh(asset)
         actor.set_instances(transforms)
+        actor.set_blocks_movement(bool(shapes))
         total_instances += len(transforms)
+        blocking_instances += len(transforms) if shapes else 0
 
     for label, actor in list(existing.items()):
         if label.startswith("Altstadt HISM ") and label not in active_labels:
             if not ACTORS.destroy_actor(actor):
                 raise RuntimeError(f"Could not remove obsolete HISM prop actor {label}")
-    unreal.log(f"DOEMITZ_HISM_IMPORT_OK: {len(active_labels)} HISM actors, {total_instances} instances")
+    unreal.log(
+        f"DOEMITZ_HISM_IMPORT_OK: {len(active_labels)} HISM actors, {total_instances} instances, "
+        f"{blocking_instances} blocking"
+    )
 
 
 def place_traffic_network(existing, road_graph, traffic_network, legacy_vehicle):
