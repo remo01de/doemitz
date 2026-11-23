@@ -69,7 +69,7 @@ Aufnahmen mit `CaptureSprint13Screenshots.py` unter `unreal/DoemitzLivingCity/Sa
 
 ## Offen
 
-- Der Festungsgraben ist im Spiel eine offene Wasserfläche. Auf den Fotos ist er weitgehend trocken, mit Gras, Schilf und Pfützen.
+- Der Festungsgraben bleibt nach Entscheidung des PO eine Wasserfläche: Der Wasserstand hängt stark von der Witterung ab, der trockene Graben auf den Fotos ist ein Momentzustand.
 - Die Bastionsflanken haben auf den Fotos eine gemauerte Brustwehr mit Pfeiler am Übergang zur Kurtine; das fehlt noch.
 - Zierformen am Sandsteintor (Kannelur, Löwenköpfe, Wappenrelief) sind nur als Blöcke angedeutet.
 - Büsche bleiben absichtlich durchlässig.
