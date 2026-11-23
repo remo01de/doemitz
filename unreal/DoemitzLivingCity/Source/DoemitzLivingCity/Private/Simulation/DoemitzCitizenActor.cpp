@@ -4,7 +4,7 @@
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
-#include "Simulation/DoemitzSimulationSubsystem.h"
+#include "Simulation/DoemitzCitizenSubsystem.h"
 
 ADoemitzCitizenActor::ADoemitzCitizenActor()
 {
@@ -66,7 +66,7 @@ void ADoemitzCitizenActor::SyncFromSimulation()
 	{
 		return;
 	}
-	if (const UDoemitzSimulationSubsystem* Subsystem = GetWorld()->GetSubsystem<UDoemitzSimulationSubsystem>())
+	if (const UDoemitzCitizenSubsystem* Subsystem = GetWorld()->GetSubsystem<UDoemitzCitizenSubsystem>())
 	{
 		FVector Location;
 		FRotator Rotation;

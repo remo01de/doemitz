@@ -33,7 +33,8 @@ def check(_delta_seconds):
         if world is None:
             return
         sub = unreal.DoemitzSimulationSubsystem.get(world)
-        if sub is None or sub.get_citizen_count() < 30:
+        cit = unreal.DoemitzCitizenSubsystem.get(world)
+        if sub is None or cit is None or cit.get_citizen_count() < 30:
             return
         cfgs = unreal.GameplayStatics.get_all_actors_of_class(world, cfg_class)
         if len(cfgs) != 1:
@@ -79,7 +80,7 @@ def check(_delta_seconds):
             # Anna's Sunday schedule has Shopping at place_kaufhaus at 600 -> must skip to next activity (place_amtsverwaltung).
             sub.set_day_number(7)
             sub.set_time_of_day_minutes(600.0)
-            sub.set_time_scale(60.0)
+            sub.set_time_scale(sub.get_base_time_scale())
             unreal.GameplayStatics.set_global_time_dilation(world, 2.0)
             if sub.is_place_open_now("place_kaufhaus"):
                 raise RuntimeError("expected place_kaufhaus to be closed on Sunday at 10:00")
@@ -89,7 +90,7 @@ def check(_delta_seconds):
             return
 
         if phase == "verify_closed_skip":
-            anna = get_state(sub, "citizen_anna_01")
+            anna = get_state(cit, "citizen_anna_01")
             target = str(anna.get_editor_property("target_place_id"))
             if target == "place_kaufhaus":
                 raise RuntimeError("Anna targeted closed shop place_kaufhaus on Sunday!")

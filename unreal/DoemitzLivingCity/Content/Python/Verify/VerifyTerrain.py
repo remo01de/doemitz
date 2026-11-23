@@ -82,8 +82,10 @@ def tick(_delta_seconds):
         if world is None:
             return
         sub = unreal.DoemitzSimulationSubsystem.get(world)
+        cit = unreal.DoemitzCitizenSubsystem.get(world)
+        trf = unreal.DoemitzTrafficSubsystem.get(world)
         pawn = unreal.GameplayStatics.get_player_pawn(world, 0)
-        if sub is None or pawn is None or sub.get_citizen_count() == 0:
+        if sub is None or cit is None or trf is None or pawn is None or cit.get_citizen_count() == 0:
             return
 
         if phase == "init":
@@ -126,9 +128,9 @@ def tick(_delta_seconds):
                         best_seg_slope = sl
                         best_seg_s = (cum + seg_m * 0.5) * 100.0
                 cum += seg_m
-            sub.set_vehicle_edge_position_for_test(car.get_vehicle_id(), edge_id, best_seg_s, 400.0)
+            trf.set_vehicle_edge_position_for_test(car.get_vehicle_id(), edge_id, best_seg_s, 400.0)
             car.sync_from_simulation()
-            vstate = get_vstate(sub, car.get_vehicle_id())
+            vstate = get_vstate(trf, car.get_vehicle_id())
             vloc = car.get_actor_location()
             vrot = car.get_actor_rotation()
             vehicle_checked_pitch = abs(vrot.pitch)
@@ -147,22 +149,22 @@ def tick(_delta_seconds):
                 )
 
             # 3. Verify off-pool citizen (no active actor) appears at real terrain height when brought into LOD
-            sub.set_citizen_lod_radius_cm(1200.0)
+            cit.set_citizen_lod_radius_cm(1200.0)
             far_cid = None
-            for cid in sub.get_all_citizen_ids():
-                if not sub.is_citizen_high_detail(cid):
+            for cid in cit.get_all_citizen_ids():
+                if not cit.is_citizen_high_detail(cid):
                     far_cid = cid
                     break
             if far_cid is None:
                 raise RuntimeError("Could not find off-pool citizen for terrain height check")
             offpool_citizen_id = str(far_cid)
-            sim_loc = get_cstate(sub, far_cid).get_editor_property("world_location")
+            sim_loc = get_cstate(cit, far_cid).get_editor_property("world_location")
             cit_gz = trace_ground_z(world, sim_loc.x, sim_loc.y, ignore)
             if cit_gz is None:
                 raise RuntimeError(f"Ground trace under off-pool citizen {far_cid} missed")
             # Now expand LOD radius so this citizen acquires a pooled Actor and check its Z
-            sub.set_citizen_lod_radius_cm(120000.0)
-            act_res = sub.get_citizen_actor_location(far_cid)
+            cit.set_citizen_lod_radius_cm(120000.0)
+            act_res = cit.get_citizen_actor_location(far_cid)
             has_act, act_loc = act_res if isinstance(act_res, tuple) else (True, act_res)
             if not has_act:
                 raise RuntimeError(f"Off-pool citizen {far_cid} did not acquire an actor after expanding LOD radius")
@@ -171,7 +173,7 @@ def tick(_delta_seconds):
                 raise RuntimeError(
                     f"Off-pool citizen {far_cid} spawned off terrain: actor_z={act_loc.z:.1f} vs ground_z={cit_gz:.1f}"
                 )
-            sub.set_citizen_lod_radius_cm(15000.0)
+            cit.set_citizen_lod_radius_cm(15000.0)
 
             # 4. Walk player on Goethestrasse, then up the real OSM Festungswall ramp (osm:way:416326354: 3.61m -> 7.22m!)
             p0 = pawn.get_actor_location()

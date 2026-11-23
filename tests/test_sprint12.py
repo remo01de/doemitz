@@ -109,7 +109,7 @@ class Sprint12Test(unittest.TestCase):
     def test_lod2_matching_above_threshold_and_no_double_assignment(self):
         threshold = float(self.pkg["lod2"]["overlap_threshold"])
         items = self.pkg["buildings"]["items"]
-        self.assertEqual(len(items), 782)  # Sprint 14: 645 Altstadt buildings + 137 up to the harbour
+        self.assertEqual(len(items), 808)  # Sprint 15: 645 Altstadt + 137 Sprint 14 + 26 Sprint 15 east extension
 
         seen_lod2_ids = set()
         valid_sources = {"lod2", "osm_height", "osm_levels", "reference_photo_estimate", "assumed_default"}

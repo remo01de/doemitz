@@ -3,7 +3,7 @@
   "pilot_road_id": "osm:way:25642325",
   "clock": {
     "start_minute": 470,
-    "time_scale": 60.0
+    "time_scale": 20.0
   },
   "population": {
     "target_count": 30,

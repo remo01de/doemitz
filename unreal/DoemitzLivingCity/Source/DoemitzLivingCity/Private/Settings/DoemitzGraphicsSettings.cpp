@@ -7,6 +7,7 @@
 #include "EngineUtils.h"
 #include "GameFramework/GameUserSettings.h"
 #include "HAL/IConsoleManager.h"
+#include "World/DoemitzDayNightController.h"
 
 namespace
 {
@@ -14,7 +15,7 @@ namespace
 	{
 		if (IConsoleVariable* Var = IConsoleManager::Get().FindConsoleVariable(Name))
 		{
-			Var->Set(Value, ECVF_SetByScalability);
+			Var->Set(Value, ECVF_SetByGameSetting);
 		}
 	}
 
@@ -22,7 +23,7 @@ namespace
 	{
 		if (IConsoleVariable* Var = IConsoleManager::Get().FindConsoleVariable(Name))
 		{
-			Var->Set(Value, ECVF_SetByScalability);
+			Var->Set(Value, ECVF_SetByGameSetting);
 		}
 	}
 }
@@ -127,18 +128,28 @@ void UDoemitzGraphicsSettings::ApplyProfile(const FString& InProfileName, UWorld
 		SetCVarInt(TEXT("r.AntiAliasingMethod"), 1); // FXAA instead of TSR
 		SetCVarFloat(TEXT("r.ScreenPercentage"), 100.0f);
 
-		// Reduce street light count and attenuation radius for integrated GPU budget
+		// Reduce ONLY street light count and attenuation radius for integrated GPU budget;
+		// interior ceiling lights stay always visible at their configured brightness/radius.
 		if (World)
 		{
+			TArray<APointLight*> StreetLights;
+			for (TActorIterator<ADoemitzDayNightController> It(World); It; ++It)
+			{
+				if (const ADoemitzDayNightController* Controller = *It)
+				{
+					for (const TObjectPtr<APointLight>& Lamp : Controller->GetStreetLights())
+					{
+						if (APointLight* Light = Lamp.Get())
+						{
+							StreetLights.AddUnique(Light);
+						}
+					}
+				}
+			}
 			int32 LightIndex = 0;
 			int32 ActiveLights = 0;
-			for (TActorIterator<APointLight> It(World); It; ++It)
+			for (APointLight* Light : StreetLights)
 			{
-				APointLight* Light = *It;
-				if (!Light)
-				{
-					continue;
-				}
 				if (UPointLightComponent* Comp = Light->FindComponentByClass<UPointLightComponent>())
 				{
 					Comp->SetCastShadows(false);
@@ -159,7 +170,7 @@ void UDoemitzGraphicsSettings::ApplyProfile(const FString& InProfileName, UWorld
 					++LightIndex;
 				}
 			}
-			UE_LOG(LogTemp, Display, TEXT("DoemitzLow profile applied: %d/%d street point lights kept active"), ActiveLights, LightIndex);
+			UE_LOG(LogTemp, Display, TEXT("DoemitzLow profile applied: %d/%d street point lights kept active (interior lights untouched)"), ActiveLights, LightIndex);
 		}
 		else
 		{
@@ -185,14 +196,23 @@ void UDoemitzGraphicsSettings::ApplyProfile(const FString& InProfileName, UWorld
 
 		if (World)
 		{
-			int32 LightIndex = 0;
-			for (TActorIterator<APointLight> It(World); It; ++It)
+			TArray<APointLight*> StreetLights;
+			for (TActorIterator<ADoemitzDayNightController> It(World); It; ++It)
 			{
-				APointLight* Light = *It;
-				if (!Light)
+				if (const ADoemitzDayNightController* Controller = *It)
 				{
-					continue;
+					for (const TObjectPtr<APointLight>& Lamp : Controller->GetStreetLights())
+					{
+						if (APointLight* Light = Lamp.Get())
+						{
+							StreetLights.AddUnique(Light);
+						}
+					}
 				}
+			}
+			int32 LightIndex = 0;
+			for (APointLight* Light : StreetLights)
+			{
 				if (UPointLightComponent* Comp = Light->FindComponentByClass<UPointLightComponent>())
 				{
 					Comp->SetVisibility(true);
@@ -203,7 +223,7 @@ void UDoemitzGraphicsSettings::ApplyProfile(const FString& InProfileName, UWorld
 					++LightIndex;
 				}
 			}
-			UE_LOG(LogTemp, Display, TEXT("DoemitzHigh profile applied: %d street point lights active"), LightIndex);
+			UE_LOG(LogTemp, Display, TEXT("DoemitzHigh profile applied: %d street point lights active (interior lights untouched)"), LightIndex);
 		}
 		else
 		{

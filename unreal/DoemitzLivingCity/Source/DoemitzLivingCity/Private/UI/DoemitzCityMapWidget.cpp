@@ -14,8 +14,11 @@
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
 #include "Rendering/DrawElements.h"
+#include "Simulation/DoemitzCitizenSubsystem.h"
 #include "Simulation/DoemitzSimulationSubsystem.h"
 #include "Styling/CoreStyle.h"
+#include "Tasks/DoemitzTaskSubsystem.h"
+#include "Traffic/DoemitzTrafficSubsystem.h"
 #include "UI/DoemitzUiText.h"
 
 namespace
@@ -157,9 +160,11 @@ void UDoemitzCityMapWidget::RefreshMapData()
 		}
 	}
 
-	CachedCitizenCount = Subsystem->GetCitizenCount();
-	CachedVehicleCount = Subsystem->GetVehicleCount();
-	CachedParkingCount = Subsystem->GetParkingLotCount();
+	const UDoemitzCitizenSubsystem* Citizens = UDoemitzCitizenSubsystem::Get(this);
+	const UDoemitzTrafficSubsystem* Traffic = UDoemitzTrafficSubsystem::Get(this);
+	CachedCitizenCount = Citizens ? Citizens->GetCitizenCount() : 0;
+	CachedVehicleCount = Traffic ? Traffic->GetVehicleCount() : 0;
+	CachedParkingCount = Traffic ? Traffic->GetParkingLotCount() : 0;
 
 	int32 NonHomePlaces = 0;
 	for (const FDoemitzPlaceDefinition& Place : Subsystem->GetAllPlaceDefinitions())
@@ -174,7 +179,7 @@ void UDoemitzCityMapWidget::RefreshMapData()
 	if (HeaderText)
 	{
 		HeaderText->SetText(FText::FromString(FString::Printf(
-			TEXT("Stadtkarte \u2013 D\u00f6mitz Altstadt  |  Zoom %.0f%%  |  Mausrad: Zoom, Ziehen: Verschieben  |  Gr\u00fcn: Offen  Rot: Geschlossen  Gelb: Einwohner (%d)  Cyan: Autos (%d)  Blau: Parken (%d)"),
+			TEXT("Stadtkarte \u2013 D\u00f6mitz  |  Zoom %.0f%%  |  Mausrad: Zoom, Ziehen: Verschieben  |  Gr\u00fcn: Offen  Rot: Geschlossen  Gelb: Einwohner (%d)  Cyan: Autos (%d)  Blau: Parken (%d)"),
 			ZoomLevel * 100.0f,
 			CachedCitizenCount,
 			CachedVehicleCount,
@@ -225,8 +230,9 @@ FVector2D UDoemitzCityMapWidget::GetPlayerNormalizedPosition() const
 bool UDoemitzCityMapWidget::GetCitizenNormalizedPosition(FName CitizenId, FVector2D& OutNormPos) const
 {
 	const UDoemitzSimulationSubsystem* Subsystem = UDoemitzSimulationSubsystem::Get(this);
+	const UDoemitzCitizenSubsystem* Citizens = UDoemitzCitizenSubsystem::Get(this);
 	FDoemitzCitizenState State;
-	if (!Subsystem || !Subsystem->GetCitizenState(CitizenId, State))
+	if (!Subsystem || !Citizens || !Citizens->GetCitizenState(CitizenId, State))
 	{
 		return false;
 	}
@@ -313,26 +319,33 @@ int32 UDoemitzCityMapWidget::NativePaint(
 			FLinearColor(0.16f, 0.24f, 0.14f, 1.0f));
 	}
 
+	const UDoemitzCitizenSubsystem* Citizens = UDoemitzCitizenSubsystem::Get(this);
+	const UDoemitzTrafficSubsystem* Traffic = UDoemitzTrafficSubsystem::Get(this);
+	const UDoemitzTaskSubsystem* Tasks = UDoemitzTaskSubsystem::Get(this);
+
 	// 2. Parking lots (blue square with "P")
 	++MaxLayer;
 	const FSlateFontInfo SmallFont = FCoreStyle::GetDefaultFontStyle("Bold", 8);
-	for (FName LotId : Subsystem->GetAllParkingLotIds())
+	if (Traffic)
 	{
-		FDoemitzParkingLotState Lot;
-		if (!Subsystem->GetParkingLotState(LotId, Lot))
+		for (FName LotId : Traffic->GetAllParkingLotIds())
 		{
-			continue;
+			FDoemitzParkingLotState Lot;
+			if (!Traffic->GetParkingLotState(LotId, Lot))
+			{
+				continue;
+			}
+			const FVector2D Pt = NormToLocal(Subsystem->ProjectWorldToNormalizedMap(Lot.Location), MapOrigin, MapSize);
+			DrawFilledSquare(OutDrawElements, MaxLayer, AllottedGeometry, Pt, 6.0f, FLinearColor(0.14f, 0.42f, 0.85f, 0.95f));
+			FSlateDrawElement::MakeText(
+				OutDrawElements,
+				MaxLayer + 1,
+				AllottedGeometry.ToPaintGeometry(FVector2f(12.0f, 12.0f), FSlateLayoutTransform(FVector2f(Pt.X - 3.5f, Pt.Y - 5.5f))),
+				TEXT("P"),
+				SmallFont,
+				ESlateDrawEffect::None,
+				FLinearColor::White);
 		}
-		const FVector2D Pt = NormToLocal(Subsystem->ProjectWorldToNormalizedMap(Lot.Location), MapOrigin, MapSize);
-		DrawFilledSquare(OutDrawElements, MaxLayer, AllottedGeometry, Pt, 6.0f, FLinearColor(0.14f, 0.42f, 0.85f, 0.95f));
-		FSlateDrawElement::MakeText(
-			OutDrawElements,
-			MaxLayer + 1,
-			AllottedGeometry.ToPaintGeometry(FVector2f(12.0f, 12.0f), FSlateLayoutTransform(FVector2f(Pt.X - 3.5f, Pt.Y - 5.5f))),
-			TEXT("P"),
-			SmallFont,
-			ESlateDrawEffect::None,
-			FLinearColor::White);
 	}
 
 	// 3. Places (colored by opening status: green = open, red = closed)
@@ -353,45 +366,51 @@ int32 UDoemitzCityMapWidget::NativePaint(
 		DrawFilledSquare(OutDrawElements, MaxLayer + 1, AllottedGeometry, Pt, 3.2f, Color);
 	}
 
-	// 4. All 30 citizens (purely from simulation state, including off-pool citizens without Actors!)
+	// 4. All citizens (purely from simulation state, including off-pool citizens without Actors!)
 	MaxLayer += 2;
-	for (FName CitizenId : Subsystem->GetAllCitizenIds())
+	if (Citizens)
 	{
-		FDoemitzCitizenState Cit;
-		if (!Subsystem->GetCitizenState(CitizenId, Cit))
+		for (FName CitizenId : Citizens->GetAllCitizenIds())
 		{
-			continue;
+			FDoemitzCitizenState Cit;
+			if (!Citizens->GetCitizenState(CitizenId, Cit))
+			{
+				continue;
+			}
+			const FVector2D Pt = NormToLocal(Subsystem->ProjectWorldToNormalizedMap(Cit.WorldLocation), MapOrigin, MapSize);
+			FDoemitzTaskInstance Offered;
+			const bool bHasOffer = Tasks && Tasks->GetTaskOfferedByCitizen(CitizenId, Offered);
+			const FLinearColor CitColor = bHasOffer
+				? FLinearColor(1.0f, 0.78f, 0.12f, 1.0f)
+				: FLinearColor(0.95f, 0.88f, 0.42f, 0.90f);
+			DrawFilledSquare(OutDrawElements, MaxLayer, AllottedGeometry, Pt, bHasOffer ? 4.2f : 2.8f, CitColor);
 		}
-		const FVector2D Pt = NormToLocal(Subsystem->ProjectWorldToNormalizedMap(Cit.WorldLocation), MapOrigin, MapSize);
-		FDoemitzTaskInstance Offered;
-		const bool bHasOffer = Subsystem->GetTaskOfferedByCitizen(CitizenId, Offered);
-		const FLinearColor CitColor = bHasOffer
-			? FLinearColor(1.0f, 0.78f, 0.12f, 1.0f)
-			: FLinearColor(0.95f, 0.88f, 0.42f, 0.90f);
-		DrawFilledSquare(OutDrawElements, MaxLayer, AllottedGeometry, Pt, bHasOffer ? 4.2f : 2.8f, CitColor);
 	}
 
-	// 5. All 8 vehicles (cyan when driving, muted blue-gray when parked)
+	// 5. All vehicles (cyan when driving, muted blue-gray when parked)
 	++MaxLayer;
-	for (FName VehicleId : Subsystem->GetAllVehicleIds())
+	if (Traffic)
 	{
-		FDoemitzVehicleState Veh;
-		if (!Subsystem->GetVehicleState(VehicleId, Veh))
+		for (FName VehicleId : Traffic->GetAllVehicleIds())
 		{
-			continue;
+			FDoemitzVehicleState Veh;
+			if (!Traffic->GetVehicleState(VehicleId, Veh))
+			{
+				continue;
+			}
+			const FVector2D Pt = NormToLocal(Subsystem->ProjectWorldToNormalizedMap(Veh.WorldLocation), MapOrigin, MapSize);
+			const FLinearColor VehColor = (Veh.Phase == EDoemitzVehiclePhase::Parked)
+				? FLinearColor(0.45f, 0.65f, 0.78f, 0.85f)
+				: FLinearColor(0.22f, 0.92f, 0.98f, 0.98f);
+			DrawFilledSquare(OutDrawElements, MaxLayer, AllottedGeometry, Pt, 3.5f, VehColor);
 		}
-		const FVector2D Pt = NormToLocal(Subsystem->ProjectWorldToNormalizedMap(Veh.WorldLocation), MapOrigin, MapSize);
-		const FLinearColor VehColor = (Veh.Phase == EDoemitzVehiclePhase::Parked)
-			? FLinearColor(0.45f, 0.65f, 0.78f, 0.85f)
-			: FLinearColor(0.22f, 0.92f, 0.98f, 0.98f);
-		DrawFilledSquare(OutDrawElements, MaxLayer, AllottedGeometry, Pt, 3.5f, VehColor);
 	}
 
 	// 6. Active task target marker (bright golden diamond + crosshair)
 	++MaxLayer;
 	FVector TaskTargetLoc;
 	FName TaskPlaceId, TaskCitizenId;
-	if (Subsystem->GetActiveTaskTargetLocation(TaskTargetLoc, TaskPlaceId, TaskCitizenId))
+	if (Tasks && Tasks->GetActiveTaskTargetLocation(TaskTargetLoc, TaskPlaceId, TaskCitizenId))
 	{
 		const FVector2D Pt = NormToLocal(Subsystem->ProjectWorldToNormalizedMap(TaskTargetLoc), MapOrigin, MapSize);
 		const TArray<FVector2D> Diamond = {
@@ -547,45 +566,55 @@ void UDoemitzCityMapWidget::UpdateHoverAtLocalPosition(const FVector2D& LocalPos
 		}
 	}
 
-	for (FName LotId : Subsystem->GetAllParkingLotIds())
+	const UDoemitzTrafficSubsystem* Traffic = UDoemitzTrafficSubsystem::Get(this);
+	const UDoemitzCitizenSubsystem* Citizens = UDoemitzCitizenSubsystem::Get(this);
+	const UDoemitzTaskSubsystem* Tasks = UDoemitzTaskSubsystem::Get(this);
+
+	if (Traffic)
 	{
-		FDoemitzParkingLotState Lot;
-		if (!Subsystem->GetParkingLotState(LotId, Lot))
+		for (FName LotId : Traffic->GetAllParkingLotIds())
 		{
-			continue;
-		}
-		const FVector2D Pt = NormToLocal(Subsystem->ProjectWorldToNormalizedMap(Lot.Location), MapOrigin, MapSize);
-		const double D = FVector2D::Distance(LocalPos, Pt);
-		if (D < BestDist)
-		{
-			BestDist = D;
-			BestText = FText::FromString(FString::Printf(
-				TEXT("%s  \u00b7  %d/%d Pl\u00e4tze belegt"),
-				*Lot.DisplayName,
-				Lot.OccupiedCount,
-				Lot.Capacity));
+			FDoemitzParkingLotState Lot;
+			if (!Traffic->GetParkingLotState(LotId, Lot))
+			{
+				continue;
+			}
+			const FVector2D Pt = NormToLocal(Subsystem->ProjectWorldToNormalizedMap(Lot.Location), MapOrigin, MapSize);
+			const double D = FVector2D::Distance(LocalPos, Pt);
+			if (D < BestDist)
+			{
+				BestDist = D;
+				BestText = FText::FromString(FString::Printf(
+					TEXT("%s  \u00b7  %d/%d Pl\u00e4tze belegt"),
+					*Lot.DisplayName,
+					Lot.OccupiedCount,
+					Lot.Capacity));
+			}
 		}
 	}
 
-	for (FName CitizenId : Subsystem->GetAllCitizenIds())
+	if (Citizens)
 	{
-		FDoemitzCitizenState Cit;
-		if (!Subsystem->GetCitizenState(CitizenId, Cit))
+		for (FName CitizenId : Citizens->GetAllCitizenIds())
 		{
-			continue;
-		}
-		const FVector2D Pt = NormToLocal(Subsystem->ProjectWorldToNormalizedMap(Cit.WorldLocation), MapOrigin, MapSize);
-		const double D = FVector2D::Distance(LocalPos, Pt);
-		if (D < BestDist)
-		{
-			BestDist = D;
-			FDoemitzTaskInstance Offered;
-			const bool bOffer = Subsystem->GetTaskOfferedByCitizen(CitizenId, Offered);
-			BestText = FText::FromString(FString::Printf(
-				TEXT("%s  \u00b7  %s%s"),
-				*Cit.DisplayName,
-				*FDoemitzUiText::FormatCitizenActivity(Cit.CurrentActivity).ToString(),
-				bOffer ? TEXT("  \u00b7  Aufgabe verf\u00fcgbar") : TEXT("")));
+			FDoemitzCitizenState Cit;
+			if (!Citizens->GetCitizenState(CitizenId, Cit))
+			{
+				continue;
+			}
+			const FVector2D Pt = NormToLocal(Subsystem->ProjectWorldToNormalizedMap(Cit.WorldLocation), MapOrigin, MapSize);
+			const double D = FVector2D::Distance(LocalPos, Pt);
+			if (D < BestDist)
+			{
+				BestDist = D;
+				FDoemitzTaskInstance Offered;
+				const bool bOffer = Tasks && Tasks->GetTaskOfferedByCitizen(CitizenId, Offered);
+				BestText = FText::FromString(FString::Printf(
+					TEXT("%s  \u00b7  %s%s"),
+					*Cit.DisplayName,
+					*FDoemitzUiText::FormatCitizenActivity(Cit.CurrentActivity).ToString(),
+					bOffer ? TEXT("  \u00b7  Aufgabe verf\u00fcgbar") : TEXT("")));
+			}
 		}
 	}
 

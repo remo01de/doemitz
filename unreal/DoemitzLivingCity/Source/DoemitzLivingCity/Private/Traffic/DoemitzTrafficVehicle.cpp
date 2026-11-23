@@ -4,7 +4,7 @@
 #include "Components/BoxComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/World.h"
-#include "Simulation/DoemitzSimulationSubsystem.h"
+#include "Traffic/DoemitzTrafficSubsystem.h"
 
 bool FDoemitzVehicleMotion::Initialize(const TArray<FVector>& Route, double StartDistance)
 {
@@ -71,7 +71,7 @@ void ADoemitzTrafficVehicle::BeginPlay()
 {
 	Super::BeginPlay();
 
-	if (const UDoemitzSimulationSubsystem* Subsystem = UDoemitzSimulationSubsystem::Get(this))
+	if (const UDoemitzTrafficSubsystem* Subsystem = UDoemitzTrafficSubsystem::Get(this))
 	{
 		FDoemitzVehicleState State;
 		if (!VehicleId.IsNone() && Subsystem->GetVehicleState(VehicleId, State))
@@ -100,7 +100,7 @@ double ADoemitzTrafficVehicle::GetDistanceAlongRoute() const
 {
 	if (bDrivenBySubsystem)
 	{
-		if (const UDoemitzSimulationSubsystem* Subsystem = UDoemitzSimulationSubsystem::Get(this))
+		if (const UDoemitzTrafficSubsystem* Subsystem = UDoemitzTrafficSubsystem::Get(this))
 		{
 			FDoemitzVehicleState State;
 			if (Subsystem->GetVehicleState(VehicleId, State))
@@ -114,7 +114,7 @@ double ADoemitzTrafficVehicle::GetDistanceAlongRoute() const
 
 void ADoemitzTrafficVehicle::SyncFromSimulation()
 {
-	if (const UDoemitzSimulationSubsystem* Subsystem = UDoemitzSimulationSubsystem::Get(this))
+	if (const UDoemitzTrafficSubsystem* Subsystem = UDoemitzTrafficSubsystem::Get(this))
 	{
 		FDoemitzVehicleState State;
 		if (!VehicleId.IsNone() && Subsystem->GetVehicleState(VehicleId, State))
@@ -129,7 +129,7 @@ void ADoemitzTrafficVehicle::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 
-	if (const UDoemitzSimulationSubsystem* Subsystem = UDoemitzSimulationSubsystem::Get(this))
+	if (const UDoemitzTrafficSubsystem* Subsystem = UDoemitzTrafficSubsystem::Get(this))
 	{
 		FDoemitzVehicleState State;
 		if (!VehicleId.IsNone() && Subsystem->GetVehicleState(VehicleId, State))

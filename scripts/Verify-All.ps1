@@ -21,7 +21,8 @@ param(
         'VerifyFortressGate.py',
         'VerifyPropCollision.py',
         'VerifyStreaming.py',
-        'VerifySaveGame.py'
+        'VerifySaveGame.py',
+        'VerifySprint15.py'
     )
 )
 
@@ -55,6 +56,7 @@ $expectedMarkers = @{
     'VerifyPropCollision.py'  = 'DOEMITZ_PROP_COLLISION_PIE_OK:'
     'VerifyStreaming.py'      = 'DOEMITZ_STREAMING_PIE_OK:'
     'VerifySaveGame.py'       = 'DOEMITZ_SAVEGAME_PIE_OK:'
+    'VerifySprint15.py'       = 'DOEMITZ_SPRINT15_PIE_OK:'
 }
 
 $results = @()
@@ -65,6 +67,7 @@ foreach ($scriptName in $Scripts) {
     }
     $stem = [System.IO.Path]::GetFileNameWithoutExtension($scriptName)
     $logPath = Join-Path $logDir ("{0}.log" -f $stem)
+    Remove-Item -LiteralPath $logPath -Force -ErrorAction SilentlyContinue
     $argsList = @(
         ('"{0}"' -f $project)
         ('-ExecutePythonScript="{0}"' -f $scriptPath)

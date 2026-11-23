@@ -191,6 +191,9 @@ def material(name, color):
         emissive.set_editor_property("constant", unreal.LinearColor(*emissive_color, 1))
         unreal.MaterialEditingLibrary.connect_material_property(emissive, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
 
+    if name.startswith("Prop"):
+        asset.set_editor_property("used_with_instanced_static_meshes", True)
+
     unreal.MaterialEditingLibrary.recompile_material(asset)
     if not EDITOR.save_loaded_asset(asset):
         raise RuntimeError(f"Could not save material {path}")

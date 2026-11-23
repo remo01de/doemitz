@@ -1,10 +1,13 @@
 #include "Interaction/DoemitzInteractionComponent.h"
 
 #include "Blueprint/UserWidget.h"
+#include "Economy/DoemitzEconomySubsystem.h"
 #include "Engine/World.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
+#include "Simulation/DoemitzCitizenSubsystem.h"
 #include "Simulation/DoemitzSimulationSubsystem.h"
+#include "Tasks/DoemitzTaskSubsystem.h"
 #include "UI/DoemitzCitizenDialogWidget.h"
 #include "UI/DoemitzPlaceMenuWidget.h"
 #include "UI/DoemitzTaskBoardWidget.h"
@@ -38,7 +41,10 @@ void UDoemitzInteractionComponent::RefreshNearestEntrance()
 	}
 
 	UDoemitzSimulationSubsystem* Subsystem = World->GetSubsystem<UDoemitzSimulationSubsystem>();
-	if (!Subsystem || Subsystem->IsWorkingShift())
+	UDoemitzEconomySubsystem* Economy = World->GetSubsystem<UDoemitzEconomySubsystem>();
+	UDoemitzCitizenSubsystem* Citizens = World->GetSubsystem<UDoemitzCitizenSubsystem>();
+	UDoemitzTaskSubsystem* Tasks = World->GetSubsystem<UDoemitzTaskSubsystem>();
+	if (!Subsystem || (Economy && Economy->IsWorkingShift()))
 	{
 		return;
 	}
@@ -51,7 +57,7 @@ void UDoemitzInteractionComponent::RefreshNearestEntrance()
 
 	FDoemitzCitizenState Citizen;
 	double CitizenDistCm = InteractionRadiusCm + 1.0;
-	const bool bHasCitizen = Subsystem->FindNearestCitizen(QueryLoc, InteractionRadiusCm, Citizen, CitizenDistCm);
+	const bool bHasCitizen = Citizens && Citizens->FindNearestCitizen(QueryLoc, InteractionRadiusCm, Citizen, CitizenDistCm);
 
 	FName BoardInteriorId;
 	double BoardDistCm = InteractionRadiusCm + 1.0;
@@ -66,7 +72,8 @@ void UDoemitzInteractionComponent::RefreshNearestEntrance()
 	if (bHasBoard && (!bHasPlace || BoardDistCm < PlaceDistCm) && (!bHasCitizen || BoardDistCm < CitizenDistCm))
 	{
 		NearestNoticeBoardInteriorId = BoardInteriorId;
-		CurrentPromptText = FDoemitzUiText::FormatNoticeBoardPrompt(Subsystem->GetTasksByStatus(EDoemitzTaskStatus::Available).Num());
+		const int32 AvailableCount = Tasks ? Tasks->GetTasksByStatus(EDoemitzTaskStatus::Available).Num() : 0;
+		CurrentPromptText = FDoemitzUiText::FormatNoticeBoardPrompt(AvailableCount);
 		return;
 	}
 	if (!bHasPlace && !bHasCitizen)
@@ -79,10 +86,11 @@ void UDoemitzInteractionComponent::RefreshNearestEntrance()
 	{
 		NearestCitizenId = Citizen.CitizenId;
 		FDoemitzTaskInstance Offered;
-		const bool bHasOffer = Subsystem->GetTaskOfferedByCitizen(Citizen.CitizenId, Offered);
+		const bool bHasOffer = Tasks && Tasks->GetTaskOfferedByCitizen(Citizen.CitizenId, Offered);
 		FDoemitzTaskInstance ActiveFetch;
-		const bool bCanCompleteFetch = Subsystem->GetActiveFetchTaskForCitizen(Citizen.CitizenId, ActiveFetch) &&
-			Subsystem->GetInventoryQuantity(ActiveFetch.RequestedItemId) >= 1;
+		const bool bCanCompleteFetch = Tasks && Economy &&
+			Tasks->GetActiveFetchTaskForCitizen(Citizen.CitizenId, ActiveFetch) &&
+			Economy->GetInventoryQuantity(ActiveFetch.RequestedItemId) >= 1;
 		CurrentPromptText = FDoemitzUiText::FormatCitizenPrompt(Citizen, bHasOffer, bCanCompleteFetch);
 		return;
 	}
@@ -145,7 +153,10 @@ bool UDoemitzInteractionComponent::TryInteract()
 			return false;
 		}
 		ActiveDialogCitizenId = NearestCitizenId;
-		Subsystem->SetCitizenDialogPaused(ActiveDialogCitizenId, true);
+		if (UDoemitzCitizenSubsystem* Citizens = World->GetSubsystem<UDoemitzCitizenSubsystem>())
+		{
+			Citizens->SetCitizenDialogPaused(ActiveDialogCitizenId, true);
+		}
 		ActiveCitizenDialogWidget->OnCloseRequested.BindUObject(this, &UDoemitzInteractionComponent::CloseMenu);
 		ActiveCitizenDialogWidget->OpenForCitizen(ActiveDialogCitizenId);
 		ActiveCitizenDialogWidget->AddToViewport(20);
@@ -207,9 +218,9 @@ void UDoemitzInteractionComponent::CloseMenu()
 	{
 		if (UWorld* World = GetWorld())
 		{
-			if (UDoemitzSimulationSubsystem* Subsystem = World->GetSubsystem<UDoemitzSimulationSubsystem>())
+			if (UDoemitzCitizenSubsystem* Citizens = World->GetSubsystem<UDoemitzCitizenSubsystem>())
 			{
-				Subsystem->SetCitizenDialogPaused(ActiveDialogCitizenId, false);
+				Citizens->SetCitizenDialogPaused(ActiveDialogCitizenId, false);
 			}
 		}
 		ActiveDialogCitizenId = NAME_None;

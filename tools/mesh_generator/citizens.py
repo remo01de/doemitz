@@ -1,6 +1,6 @@
 """Compile deterministic citizen places, opening hours, weekly schedules, and pedestrian routes from OSM data."""
 
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, deque
 from hashlib import sha256
 import heapq
 from math import ceil, hypot
@@ -75,7 +75,7 @@ def _offset_point(line, distance_m, lateral_m):
 
 
 def _classify_poi(props: dict) -> str | None:
-    if props.get("shop") not in (None, "", "no"):
+    if props.get("shop") not in (None, "", "no", "vacant"):
         return "shop"
     if props.get("office") not in (None, "", "no"):
         return "work"
@@ -103,8 +103,9 @@ def _poi_display_name(props: dict, kind: str, fallback_id: str) -> str:
     return f"{kind.title()} ({fallback_id.rsplit(':', 1)[-1]})"
 
 
-def _build_pedestrian_graph(roads_by_id: dict, crossings: list[dict] | None):
-    """Build an undirected walkable road graph (nodes, adjacency) for multi-street Altstadt routing."""
+def _build_pedestrian_graph(roads_by_id: dict, crossings: list[dict] | None, walkable_tunnel_ids: set[str] | None = None):
+    """Build an undirected walkable road graph (nodes, adjacency, main component) for multi-street routing."""
+    walkable_tunnels = walkable_tunnel_ids or set()
     nodes: dict[tuple[float, float], int] = {}
     coords_by_idx: list[tuple[float, float]] = []
     adj: dict[int, list[tuple[int, float]]] = defaultdict(list)
@@ -118,10 +119,10 @@ def _build_pedestrian_graph(roads_by_id: dict, crossings: list[dict] | None):
             coords_by_idx.append(key)
         return idx
 
-    road_lines: list[tuple[str, LineString, float]] = []
+    road_lines: list[tuple[str, LineString, float, list[int]]] = []
     for road_id in sorted(roads_by_id):
         road, width_m = roads_by_id[road_id]
-        if road["properties"].get("tunnel", "no") != "no":
+        if road["properties"].get("tunnel", "no") != "no" and road_id not in walkable_tunnels:
             continue
         geom = shape(road["geometry"])
         lines = [geom] if geom.geom_type == "LineString" else list(geom.geoms) if geom.geom_type == "MultiLineString" else []
@@ -129,16 +130,19 @@ def _build_pedestrian_graph(roads_by_id: dict, crossings: list[dict] | None):
             pts = list(line.coords)
             if len(pts) < 2:
                 continue
-            road_lines.append((road_id, line, width_m))
+            line_nodes: list[int] = []
             for a, b in zip(pts, pts[1:]):
                 u = get_node(a[0], a[1])
                 v = get_node(b[0], b[1])
+                line_nodes.append(u)
+                line_nodes.append(v)
                 if u == v:
                     continue
                 d = hypot(b[0] - a[0], b[1] - a[1])
                 if d > 1e-4:
                     adj[u].append((v, d))
                     adj[v].append((u, d))
+            road_lines.append((road_id, line, width_m, line_nodes))
 
     # Connect nearby crossing nodes into the pedestrian graph so routes can snap through them cleanly.
     crossing_nodes: list[tuple[str, int, tuple[float, float]]] = []
@@ -160,24 +164,45 @@ def _build_pedestrian_graph(roads_by_id: dict, crossings: list[dict] | None):
                 adj[c_idx].append((n_idx, dist_m))
                 adj[n_idx].append((c_idx, dist_m))
 
-    return coords_by_idx, adj, road_lines, crossing_nodes
+    # Identify largest connected component so boundary stubs never isolate places or trigger straight-line water jumps.
+    visited: set[int] = set()
+    main_component: set[int] = set()
+    for start in range(len(coords_by_idx)):
+        if start in visited:
+            continue
+        comp: set[int] = set()
+        queue = deque([start])
+        visited.add(start)
+        while queue:
+            u = queue.popleft()
+            comp.add(u)
+            for v, _ in adj.get(u, ()):
+                if v not in visited:
+                    visited.add(v)
+                    queue.append(v)
+        if len(comp) > len(main_component):
+            main_component = comp
+
+    return coords_by_idx, adj, road_lines, crossing_nodes, main_component
 
 
-def _nearest_graph_node(pt: Point, coords_by_idx: list[tuple[float, float]]) -> int:
+def _nearest_graph_node(pt: Point, coords_by_idx: list[tuple[float, float]], allowed_nodes: set[int] | None = None) -> int:
     best_idx = 0
     best_d = float("inf")
     px, py = pt.x, pt.y
-    for idx, (nx, ny) in enumerate(coords_by_idx):
+    indices = allowed_nodes if allowed_nodes else range(len(coords_by_idx))
+    for idx in indices:
+        nx, ny = coords_by_idx[idx]
         d = hypot(nx - px, ny - py)
-        if d < best_d:
+        if d < best_d or (d == best_d and idx < best_idx):
             best_d = d
             best_idx = idx
     return best_idx
 
 
-def _dijkstra_path(start_idx: int, end_idx: int, adj: dict[int, list[tuple[int, float]]]) -> list[int]:
+def _dijkstra_path(start_idx: int, end_idx: int, adj: dict[int, list[tuple[int, float]]]) -> tuple[list[int], bool]:
     if start_idx == end_idx:
-        return [start_idx]
+        return [start_idx], True
     dist_map: dict[int, float] = {start_idx: 0.0}
     prev: dict[int, int] = {}
     heap: list[tuple[float, int]] = [(0.0, start_idx)]
@@ -194,14 +219,14 @@ def _dijkstra_path(start_idx: int, end_idx: int, adj: dict[int, list[tuple[int, 
                 prev[v] = u
                 heapq.heappush(heap, (nd, v))
     if end_idx not in prev:
-        return [start_idx, end_idx]
+        return [start_idx, end_idx], False
     path = [end_idx]
     cur = end_idx
     while cur != start_idx:
         cur = prev[cur]
         path.append(cur)
     path.reverse()
-    return path
+    return path, True
 
 
 def _nearest_crossing(pt: Point, crossing_pts: list[tuple[str, Point]], max_dist_m: float) -> tuple[str, Point] | None:
@@ -283,12 +308,13 @@ def _pilot_route_points(
 def _graph_route_points(
     start_place, end_place, coords_by_idx, adj, sidewalk_area,
     road_elevation_m, sidewalk_elevation_m, obstacles, crossing_pts,
+    main_component: set[int] | None = None,
 ):
     start_pt = Point(start_place["access_m"][0], start_place["access_m"][1])
     end_pt = Point(end_place["access_m"][0], end_place["access_m"][1])
-    start_node = _nearest_graph_node(start_pt, coords_by_idx)
-    end_node = _nearest_graph_node(end_pt, coords_by_idx)
-    node_path = _dijkstra_path(start_node, end_node, adj)
+    start_node = _nearest_graph_node(start_pt, coords_by_idx, main_component)
+    end_node = _nearest_graph_node(end_pt, coords_by_idx, main_component)
+    node_path, connected = _dijkstra_path(start_node, end_node, adj)
 
     raw_pts = [start_pt] + [Point(coords_by_idx[idx]) for idx in node_path] + [end_pt]
     # Check if any crossing lies near the middle of the path (or near start/end road transitions)
@@ -325,7 +351,7 @@ def _graph_route_points(
                         pt = sw_pt
             if not obstacles.is_empty and obstacles.contains(pt):
                 _, safe = nearest_points(pt, sidewalk_area if not sidewalk_area.is_empty else LineString([p0, p1]))
-                if not obstacles.contains(safe):
+                if pt.distance(safe) <= 3.0 and not obstacles.contains(safe):
                     pt = safe
             z = (
                 _eval_z(sidewalk_elevation_m, pt.x, pt.y)
@@ -338,7 +364,39 @@ def _graph_route_points(
 
     if end_place["access_m"] != points[-1]:
         points.append(end_place["access_m"])
-    return points, uses_crossing
+    return points, uses_crossing, connected
+
+
+def _pick_weighted_place(
+    seed: int,
+    citizen_id: str,
+    salt: str,
+    origin_xy: tuple[float, float],
+    candidate_ids: list[str],
+    places_by_id: dict,
+    scale_m: float = 240.0,
+) -> str:
+    """Deterministically select a candidate place weighted toward shorter daily distances."""
+    if len(candidate_ids) == 1:
+        return candidate_ids[0]
+    ox, oy = origin_xy
+    weights: list[float] = []
+    total = 0.0
+    for pid in candidate_ids:
+        pos = places_by_id[pid]["access_m"]
+        d = hypot(pos[0] - ox, pos[1] - oy)
+        w = 1.0 / (1.0 + (d / scale_m) ** 2)
+        weights.append(w)
+        total += w
+    if total <= 1e-12:
+        return candidate_ids[_det_int(seed, citizen_id, salt) % len(candidate_ids)]
+    target = ((_det_int(seed, citizen_id, salt) % 100000) / 100000.0) * total
+    acc = 0.0
+    for pid, w in zip(candidate_ids, weights):
+        acc += w
+        if target <= acc:
+            return pid
+    return candidate_ids[-1]
 
 
 def _validate_schedule(citizen_id: str, schedule: list[dict], places_by_id: dict) -> list[dict]:
@@ -368,11 +426,12 @@ def _validate_schedule(citizen_id: str, schedule: list[dict], places_by_id: dict
 def build_citizens(
     config, roads, buildings, sidewalks, obstacles, road_elevation_m, sidewalk_elevation_m,
     pois=None, crossings=None, entrances=None, landmark_entrances=None, interior_entrances=None,
+    walkable_tunnel_ids=None,
 ):
     """Validate citizen manifest, expand population from OSM POIs/buildings, and compile routes."""
     clock = config.get("clock", {})
     start_minute = float(clock.get("start_minute", 470))
-    time_scale = float(clock.get("time_scale", 60.0))
+    time_scale = float(clock.get("time_scale", 20.0))
     if not 0.0 <= start_minute < 1440.0 or not 0.0 < time_scale <= 3600.0:
         raise ValueError("invalid citizen simulation clock configuration")
 
@@ -386,11 +445,15 @@ def build_citizens(
     sidewalk_interior = union_all([polygon.buffer(-0.35) for polygon in sidewalks]) if sidewalks else union_all([])
     walkable_access = sidewalk_interior if not sidewalk_interior.is_empty else sidewalk_union
 
-    all_road_union = union_all([
-        shape(road["geometry"])
-        for road, _ in roads.values()
-        if road["properties"].get("tunnel", "no") == "no"
-    ])
+    walkable_tunnels = set(walkable_tunnel_ids or ())
+    coords_by_idx, adj, ped_road_lines, _, main_component = _build_pedestrian_graph(
+        roads, crossings, walkable_tunnel_ids=walkable_tunnels,
+    )
+    main_road_geoms = [
+        line for _, line, _, lnodes in ped_road_lines
+        if not main_component or any(n in main_component for n in lnodes)
+    ]
+    all_road_union = union_all(main_road_geoms) if main_road_geoms else road_line
 
     buildings_by_id = {feature["id"]: shape(feature["geometry"]) for feature in buildings}
     building_features_by_id = {feature["id"]: feature for feature in buildings}
@@ -703,9 +766,17 @@ def build_citizens(
                     bname = bprops.get("name") or f"Wohnhaus {home_bid.rsplit(':', 1)[-1]}"
                     register_place(home_place_id, bname, home_bid, "home", buildings_by_id[home_bid], on_pilot=False)
 
-                work_id = work_poi_ids[_det_int(pop_seed, cid, "work") % len(work_poi_ids)]
-                shop_id = shop_poi_ids[_det_int(pop_seed, cid, "shop") % len(shop_poi_ids)]
-                stroll_id = stroll_poi_ids[_det_int(pop_seed, cid, "stroll") % len(stroll_poi_ids)]
+                home_xy = (
+                    places_by_id[home_place_id]["access_m"][0],
+                    places_by_id[home_place_id]["access_m"][1],
+                )
+                work_id = _pick_weighted_place(pop_seed, cid, "work", home_xy, work_poi_ids, places_by_id, scale_m=260.0)
+                work_xy = (
+                    places_by_id[work_id]["access_m"][0],
+                    places_by_id[work_id]["access_m"][1],
+                )
+                shop_id = _pick_weighted_place(pop_seed, cid, "shop", work_xy, shop_poi_ids, places_by_id, scale_m=220.0)
+                stroll_id = _pick_weighted_place(pop_seed, cid, "stroll", home_xy, stroll_poi_ids, places_by_id, scale_m=320.0)
 
                 # Stagger start times deterministically so the town comes alive organically
                 morning_offset = (_det_int(pop_seed, cid, "morning") % 12) * 5  # 0..55 min
@@ -793,7 +864,6 @@ def build_citizens(
         })
 
     # 6. Compile pedestrian routes (pilot sidewalk routing + multi-street Altstadt graph + crossing awareness).
-    coords_by_idx, adj, _, _ = _build_pedestrian_graph(roads, crossings)
     crossing_pts = [
         (c["id"], Point(float(c["position_m"][0]), float(c["position_m"][1])))
         for c in sorted(crossings or [], key=lambda item: item["id"])
@@ -801,6 +871,7 @@ def build_citizens(
     lateral_offset_m = pilot_width_m / 2.0 + 0.8
     routes_out = []
     routes_using_crossings = 0
+    disconnected_route_count = 0
     for start_id, end_id in sorted(needed_pairs):
         sp = places_by_id[start_id]
         ep = places_by_id[end_id]
@@ -809,11 +880,15 @@ def build_citizens(
                 sp, ep, road_line, lateral_offset_m, walkable_access,
                 road_elevation_m, sidewalk_elevation_m, obstacles, crossing_pts,
             )
+            connected = True
         else:
-            pts, used_crossing = _graph_route_points(
+            pts, used_crossing, connected = _graph_route_points(
                 sp, ep, coords_by_idx, adj, walkable_access,
                 road_elevation_m, sidewalk_elevation_m, obstacles, crossing_pts,
+                main_component=main_component,
             )
+        if not connected:
+            disconnected_route_count += 1
         if used_crossing:
             routes_using_crossings += 1
         routes_out.append({
@@ -835,6 +910,10 @@ def build_citizens(
         "entrance_sources": dict(sorted(entrance_sources.items())),
         "osm_entrances_report": osm_entrances_report,
         "routes_using_crossings": routes_using_crossings,
+        "disconnected_route_count": disconnected_route_count,
+        "pedestrian_graph_nodes": len(coords_by_idx),
+        "pedestrian_main_component_nodes": len(main_component),
+        "walkable_tunnel_ids": sorted(walkable_tunnels),
         "places": [
             {k: v for k, v in place.items() if k not in {"along_m", "side", "on_pilot"}}
             for place in places_out

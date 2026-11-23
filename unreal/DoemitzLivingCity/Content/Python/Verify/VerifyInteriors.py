@@ -64,15 +64,33 @@ def tick(_dt):
         if world is None:
             return
         sub = unreal.DoemitzSimulationSubsystem.get(world)
+        cit = unreal.DoemitzCitizenSubsystem.get(world)
+        econ = unreal.DoemitzEconomySubsystem.get(world)
+        tsk = unreal.DoemitzTaskSubsystem.get(world)
+        save = unreal.DoemitzSaveSubsystem.get(world)
         pawn = unreal.GameplayStatics.get_player_pawn(world, 0)
         cfgs = unreal.GameplayStatics.get_all_actors_of_class(world, cfg_class)
-        if sub is None or pawn is None or len(cfgs) != 1 or sub.get_citizen_count() == 0:
+        if sub is None or cit is None or econ is None or tsk is None or save is None or pawn is None or len(cfgs) != 1 or cit.get_citizen_count() == 0:
             return
         interaction = pawn.get_interaction_component()
 
         if state == "init":
             if sub.get_interior_count() != 3:
                 raise RuntimeError(f"expected 3 interiors, got {sub.get_interior_count()}")
+            # Sprint 15 M4: DoemitzLow must NEVER hide interior ceiling lights (only street lamps are throttled).
+            interior_lights = [
+                act for act in unreal.GameplayStatics.get_all_actors_of_class(world, unreal.PointLight)
+                if act.get_actor_label().startswith("Altstadt InteriorLight ")
+            ]
+            if len(interior_lights) < 18:
+                raise RuntimeError(f"expected >=18 interior ceiling lights, found {len(interior_lights)}")
+            hidden_lights = [
+                act.get_actor_label() for act in interior_lights
+                if act.get_editor_property("hidden") or not act.get_component_by_class(unreal.PointLightComponent).is_visible()
+            ]
+            if hidden_lights:
+                raise RuntimeError(f"DoemitzLow hid interior lights: {hidden_lights[:5]}")
+            results["interior_lights_visible"] = len(interior_lights)
             sub.set_day_number(1)
             sub.set_time_of_day_minutes(600.0)  # Monday 10:00, Apotheke open
             sub.set_time_scale(0.0)
@@ -121,11 +139,11 @@ def tick(_dt):
                 raise RuntimeError(f"counter prompt missing: place={interaction.get_nearest_place_id()}")
             if not interaction.try_interact() or not interaction.is_menu_open():
                 raise RuntimeError("place menu did not open at the counter")
-            money_before = sub.get_player_money_cents()
-            if not sub.buy_item(APOTHEKE, "item_pflaster", 1):
+            money_before = econ.get_player_money_cents()
+            if not econ.buy_item(APOTHEKE, "item_pflaster", 1):
                 raise RuntimeError("buying at the Apotheke counter failed")
             interaction.close_menu()
-            results["bought_cents"] = money_before - sub.get_player_money_cents()
+            results["bought_cents"] = money_before - econ.get_player_money_cents()
             results["walk_s"] = round(monotonic() - walk_start, 1)
             state = "closed_door"
             ticks = 0
@@ -182,7 +200,7 @@ def tick(_dt):
             task_id = widget.get_offer_task_id(0)
             if not widget.accept_offer_at_index(0):
                 raise RuntimeError("accepting the first offer failed")
-            task = sub.get_task_by_id(task_id)
+            task = tsk.get_task_by_id(task_id)
             if task is None or task.get_editor_property("status") != unreal.DoemitzTaskStatus.ACTIVE:
                 raise RuntimeError("accepted board task is not active")
             interaction.close_menu()
@@ -198,14 +216,14 @@ def tick(_dt):
             placed = [("citizen_bernd_02", work), ("citizen_clara_03", work), ("citizen_anna_01", shop),
                       ("citizen_dieter_04", shop), ("altstadt_citizen_10", shop), ("altstadt_citizen_16", shop)]
             for cid, act in placed:
-                if not sub.set_citizen_at_place_for_test(cid, KAUFHAUS, act):
+                if not cit.set_citizen_at_place_for_test(cid, KAUFHAUS, act):
                     raise RuntimeError(f"cannot place {cid}")
             it = interior(sub, KAUFHAUS)
             iid = str(it.get_editor_property("interior_id"))
             inside = []
             seen = set()
             for cid, _ in placed:
-                res = sub.get_citizen_presentation_transform(cid)
+                res = cit.get_citizen_presentation_transform(cid)
                 if res is None:
                     raise RuntimeError(f"no presentation transform for {cid}")
                 loc = res[0]
@@ -228,19 +246,19 @@ def tick(_dt):
             pawn.set_actor_location(room_pt, False, True)
             ctx["save_pt"] = room_pt
             ctx["kaufhaus"] = it
-            if not sub.save_city_state(SLOT):
+            if not save.save_city_state(SLOT):
                 raise RuntimeError("save inside the Kaufhaus failed")
             pawn.set_actor_location(room_pt + unreal.Vector(0, 0, 900.0), False, True)
             state = "load"
             return
 
         if state == "load":
-            if not sub.load_city_state(SLOT):
+            if not save.load_city_state(SLOT):
                 raise RuntimeError("load failed")
             it = ctx["kaufhaus"]
             loc = pawn.get_actor_location()
-            if str(sub.get_last_loaded_player_interior_id()) != str(it.get_editor_property("interior_id")):
-                raise RuntimeError(f"saved interior id not restored: {sub.get_last_loaded_player_interior_id()}")
+            if str(save.get_last_loaded_player_interior_id()) != str(it.get_editor_property("interior_id")):
+                raise RuntimeError(f"saved interior id not restored: {save.get_last_loaded_player_interior_id()}")
             if v2(loc, ctx["save_pt"]) > 5.0 or abs((loc.z - 92.0) - it.get_editor_property("floor_z")) > 15.0:
                 raise RuntimeError(f"player not restored on the Kaufhaus floor: {loc}, floor {it.get_editor_property('floor_z')}")
             results["load_z_above_floor_cm"] = round(loc.z - it.get_editor_property("floor_z"), 1)

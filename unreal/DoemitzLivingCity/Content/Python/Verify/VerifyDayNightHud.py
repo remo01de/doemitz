@@ -31,7 +31,8 @@ def check(_delta_seconds):
         if world is None:
             return
         sub = unreal.DoemitzSimulationSubsystem.get(world)
-        if sub is None or sub.get_citizen_count() == 0:
+        cit = unreal.DoemitzCitizenSubsystem.get(world)
+        if sub is None or cit is None or cit.get_citizen_count() == 0:
             return
 
         dns = unreal.GameplayStatics.get_all_actors_of_class(world, dn_class)
@@ -58,7 +59,7 @@ def check(_delta_seconds):
 
         if not noon_day or noon_elev < 55.0 or noon_intensity < 3.0 or noon_lamps > 1.0:
             raise RuntimeError(f"unexpected noon lighting: elev={noon_elev}, intensity={noon_intensity}, lamps={noon_lamps}")
-        expected_citizens = f"{sub.get_citizen_count()} Einwohner"
+        expected_citizens = f"{cit.get_citizen_count()} Einwohner"
         if "12:00" not in noon_clock or "Mo, Tag 1" not in noon_clock or expected_citizens not in noon_status or "Grafik:" not in noon_status:
             raise RuntimeError(f"unexpected noon HUD: {noon_clock!r} / {noon_status!r}")
 

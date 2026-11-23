@@ -45,7 +45,7 @@ def check(_delta_seconds):
         world = editor.get_game_world()
         if world is None:
             return
-        sub = unreal.DoemitzSimulationSubsystem.get(world)
+        sub = unreal.DoemitzTrafficSubsystem.get(world)
         if sub is None or sub.get_vehicle_count() == 0:
             return
         actors = unreal.GameplayStatics.get_all_actors_of_class(world, vehicle_class)

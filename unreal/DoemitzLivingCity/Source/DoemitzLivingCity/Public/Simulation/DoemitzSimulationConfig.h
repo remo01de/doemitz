@@ -2,7 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
-#include "Simulation/DoemitzSimulationSubsystem.h"
+#include "Simulation/DoemitzSimulationTypes.h"
 #include "DoemitzSimulationConfig.generated.h"
 
 class UDoemitzCityMapWidget;
@@ -61,7 +61,7 @@ private:
 	double StartMinute = 470.0;
 
 	UPROPERTY(EditInstanceOnly, Category = "Simulation")
-	double TimeScale = 60.0;
+	double TimeScale = 20.0;
 
 	UPROPERTY(EditInstanceOnly, Category = "Simulation")
 	TArray<FDoemitzPlaceDefinition> Places;
@@ -120,5 +120,5 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UDoemitzTaskJournalWidget> TaskJournalWidget;
 
-	double PreviousActiveTimeScale = 60.0;
+	double PreviousActiveTimeScale = 20.0;
 };

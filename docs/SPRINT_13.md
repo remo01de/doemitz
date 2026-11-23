@@ -1,6 +1,6 @@
 # Sprint 13 · Festungstor, Sichtfehler und erste Innenräume
 
-Stand: Umgesetzt und geprüft, noch nicht committet.
+Stand: Umgesetzt, geprüft und committet.
 
 ## Ausgangslage nach Sprint 12
 

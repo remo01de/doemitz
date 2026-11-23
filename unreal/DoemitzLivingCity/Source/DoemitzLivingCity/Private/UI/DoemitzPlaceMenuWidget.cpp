@@ -10,7 +10,9 @@
 #include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
 #include "Components/VerticalBoxSlot.h"
+#include "Economy/DoemitzEconomySubsystem.h"
 #include "Simulation/DoemitzSimulationSubsystem.h"
+#include "Tasks/DoemitzTaskSubsystem.h"
 #include "UI/DoemitzUiText.h"
 
 void UDoemitzShopActionHandler::HandleBuyClicked()
@@ -118,6 +120,8 @@ void UDoemitzPlaceMenuWidget::OpenForPlace(FName InPlaceId)
 void UDoemitzPlaceMenuWidget::RefreshContents()
 {
 	UDoemitzSimulationSubsystem* Subsystem = UDoemitzSimulationSubsystem::Get(this);
+	UDoemitzEconomySubsystem* Economy = UDoemitzEconomySubsystem::Get(this);
+	UDoemitzTaskSubsystem* Tasks = UDoemitzTaskSubsystem::Get(this);
 	if (!Subsystem || CurrentPlaceId.IsNone() || !WidgetTree)
 	{
 		return;
@@ -139,13 +143,16 @@ void UDoemitzPlaceMenuWidget::RefreshContents()
 		SubHeaderText->SetText(FText::FromString(FString::Printf(
 			TEXT("%s  |  Konto: %s"),
 			*StatusTxt.ToString(),
-			*FDoemitzUiText::FormatCentsEur(Subsystem->GetPlayerMoneyCents()).ToString())));
+			*FDoemitzUiText::FormatCentsEur(Economy ? Economy->GetPlayerMoneyCents() : 0).ToString())));
 	}
 	if (RevenueText)
 	{
 		int64 DailyCents = 0;
 		int64 WeeklyCents = 0;
-		Subsystem->GetPlaceRevenue(CurrentPlaceId, DailyCents, WeeklyCents);
+		if (Economy)
+		{
+			Economy->GetPlaceRevenue(CurrentPlaceId, DailyCents, WeeklyCents);
+		}
 		RevenueText->SetText(FText::FromString(FString::Printf(
 			TEXT("Tagesumsatz: %s  |  Wochenumsatz: %s"),
 			*FDoemitzUiText::FormatCentsEur(DailyCents).ToString(),
@@ -159,7 +166,7 @@ void UDoemitzPlaceMenuWidget::RefreshContents()
 		TaskBox->ClearChildren();
 		FDoemitzTaskInstance ErrandTask;
 		bool bIsDelivery = false;
-		if (Subsystem->GetActiveErrandForPlace(CurrentPlaceId, ErrandTask, bIsDelivery))
+		if (Tasks && Tasks->GetActiveErrandForPlace(CurrentPlaceId, ErrandTask, bIsDelivery))
 		{
 			ActiveErrandTaskId = ErrandTask.TaskId;
 			bActiveErrandIsDelivery = bIsDelivery;
@@ -196,7 +203,7 @@ void UDoemitzPlaceMenuWidget::RefreshContents()
 	if (ItemsBox)
 	{
 		ItemsBox->ClearChildren();
-		const TArray<FDoemitzItemDefinition> Items = Subsystem->GetItemsForPlace(CurrentPlaceId);
+		const TArray<FDoemitzItemDefinition> Items = Economy ? Economy->GetItemsForPlace(CurrentPlaceId) : TArray<FDoemitzItemDefinition>();
 		if (!Items.IsEmpty())
 		{
 			UTextBlock* SectionLbl = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
@@ -215,7 +222,7 @@ void UDoemitzPlaceMenuWidget::RefreshContents()
 					RowSlot->SetPadding(FMargin(0.0f, 3.0f));
 				}
 
-				const int32 Owned = Subsystem->GetInventoryQuantity(Item.ItemId);
+				const int32 Owned = Economy ? Economy->GetInventoryQuantity(Item.ItemId) : 0;
 				UTextBlock* Info = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
 				Info->SetText(FText::FromString(FString::Printf(
 					TEXT("%s  \u2013  %s  (Inventar: %d)"),
@@ -261,7 +268,7 @@ void UDoemitzPlaceMenuWidget::RefreshContents()
 	{
 		JobBox->ClearChildren();
 		FDoemitzJobDefinition Job;
-		if (Subsystem->GetJobForPlace(CurrentPlaceId, Job))
+		if (Economy && Economy->GetJobForPlace(CurrentPlaceId, Job))
 		{
 			UTextBlock* JobHeader = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
 			JobHeader->SetText(FText::FromString(FString::Printf(
@@ -279,7 +286,7 @@ void UDoemitzPlaceMenuWidget::RefreshContents()
 				JSlot->SetPadding(FMargin(0.0f, 6.0f, 0.0f, 6.0f));
 			}
 
-			if (Subsystem->GetActiveJobId() != Job.JobId)
+			if (Economy->GetActiveJobId() != Job.JobId)
 			{
 				UButton* AcceptBtn = WidgetTree->ConstructWidget<UButton>(UButton::StaticClass());
 				AcceptBtn->OnClicked.AddDynamic(this, &UDoemitzPlaceMenuWidget::HandleAcceptJobClicked);
@@ -291,7 +298,7 @@ void UDoemitzPlaceMenuWidget::RefreshContents()
 			}
 			else
 			{
-				const FDoemitzShiftAvailability Avail = Subsystem->CheckWorkShiftAvailability(CurrentPlaceId);
+				const FDoemitzShiftAvailability Avail = Economy->CheckWorkShiftAvailability(CurrentPlaceId);
 				UButton* ShiftBtn = WidgetTree->ConstructWidget<UButton>(UButton::StaticClass());
 				ShiftBtn->SetIsEnabled(Avail.bCanStart);
 				ShiftBtn->OnClicked.AddDynamic(this, &UDoemitzPlaceMenuWidget::HandleStartShiftClicked);
@@ -311,27 +318,27 @@ void UDoemitzPlaceMenuWidget::RefreshContents()
 
 void UDoemitzPlaceMenuWidget::HandleBuyItem(FName ItemId)
 {
-	if (UDoemitzSimulationSubsystem* Subsystem = UDoemitzSimulationSubsystem::Get(this))
+	if (UDoemitzEconomySubsystem* Economy = UDoemitzEconomySubsystem::Get(this))
 	{
-		Subsystem->BuyItem(CurrentPlaceId, ItemId, 1);
+		Economy->BuyItem(CurrentPlaceId, ItemId, 1);
 		RefreshContents();
 	}
 }
 
 void UDoemitzPlaceMenuWidget::HandleAcceptJobClicked()
 {
-	if (UDoemitzSimulationSubsystem* Subsystem = UDoemitzSimulationSubsystem::Get(this))
+	if (UDoemitzEconomySubsystem* Economy = UDoemitzEconomySubsystem::Get(this))
 	{
-		Subsystem->AcceptJob(CurrentPlaceId);
+		Economy->AcceptJob(CurrentPlaceId);
 		RefreshContents();
 	}
 }
 
 void UDoemitzPlaceMenuWidget::HandleStartShiftClicked()
 {
-	if (UDoemitzSimulationSubsystem* Subsystem = UDoemitzSimulationSubsystem::Get(this))
+	if (UDoemitzEconomySubsystem* Economy = UDoemitzEconomySubsystem::Get(this))
 	{
-		if (Subsystem->StartWorkShift(CurrentPlaceId))
+		if (Economy->StartWorkShift(CurrentPlaceId))
 		{
 			HandleCloseClicked();
 		}
@@ -344,17 +351,17 @@ void UDoemitzPlaceMenuWidget::HandleStartShiftClicked()
 
 void UDoemitzPlaceMenuWidget::HandleErrandActionClicked()
 {
-	if (UDoemitzSimulationSubsystem* Subsystem = UDoemitzSimulationSubsystem::Get(this))
+	if (UDoemitzTaskSubsystem* Tasks = UDoemitzTaskSubsystem::Get(this))
 	{
 		if (!ActiveErrandTaskId.IsNone())
 		{
 			if (bActiveErrandIsDelivery)
 			{
-				Subsystem->DeliverTaskParcel(ActiveErrandTaskId);
+				Tasks->DeliverTaskParcel(ActiveErrandTaskId);
 			}
 			else
 			{
-				Subsystem->PickupTaskParcel(ActiveErrandTaskId);
+				Tasks->PickupTaskParcel(ActiveErrandTaskId);
 			}
 			RefreshContents();
 		}

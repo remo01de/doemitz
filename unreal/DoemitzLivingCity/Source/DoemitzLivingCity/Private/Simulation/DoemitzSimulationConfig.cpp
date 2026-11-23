@@ -2,12 +2,18 @@
 
 #include "Blueprint/UserWidget.h"
 #include "Character/DoemitzCharacter.h"
+#include "Economy/DoemitzEconomySubsystem.h"
 #include "Engine/Texture2D.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "InputCoreTypes.h"
 #include "Interaction/DoemitzInteractionComponent.h"
 #include "Settings/DoemitzGraphicsSettings.h"
+#include "Simulation/DoemitzCitizenSubsystem.h"
+#include "Simulation/DoemitzSaveSubsystem.h"
+#include "Simulation/DoemitzSimulationSubsystem.h"
+#include "Tasks/DoemitzTaskSubsystem.h"
+#include "Traffic/DoemitzTrafficSubsystem.h"
 #include "UI/DoemitzCityMapWidget.h"
 #include "UI/DoemitzClockWidget.h"
 #include "UI/DoemitzTaskJournalWidget.h"
@@ -21,18 +27,35 @@ ADoemitzSimulationConfig::ADoemitzSimulationConfig()
 void ADoemitzSimulationConfig::BeginPlay()
 {
 	Super::BeginPlay();
-	PreviousActiveTimeScale = FMath::Max(1.0, TimeScale);
-	if (UDoemitzSimulationSubsystem* Subsystem = GetWorld()->GetSubsystem<UDoemitzSimulationSubsystem>())
+	const double ConfiguredBaseScale = FMath::Max(1.0, TimeScale);
+	PreviousActiveTimeScale = ConfiguredBaseScale;
+	if (UWorld* World = GetWorld())
 	{
-		Subsystem->ConfigureSimulation(StartMinute, TimeScale, Places, Routes, Citizens);
-		Subsystem->ConfigureEconomy(EconomyData);
-		Subsystem->ConfigureTasks(TaskData);
-		Subsystem->ConfigureCityMap(CityMapTexture, CityMapBounds);
-		Subsystem->ConfigureInteriors(Interiors);
-		Subsystem->ConfigureCitizenPool(CitizenMeshVariants, CitizenLodRadiusCm);
+		if (UDoemitzSimulationSubsystem* Sim = World->GetSubsystem<UDoemitzSimulationSubsystem>())
+		{
+			Sim->ConfigureCoreSimulation(StartMinute, ConfiguredBaseScale, Places);
+			Sim->ConfigureCityMap(CityMapTexture, CityMapBounds);
+			Sim->ConfigureInteriors(Interiors);
+		}
+		if (UDoemitzEconomySubsystem* Economy = World->GetSubsystem<UDoemitzEconomySubsystem>())
+		{
+			Economy->ConfigureEconomy(EconomyData);
+		}
+		if (UDoemitzCitizenSubsystem* CitizenSub = World->GetSubsystem<UDoemitzCitizenSubsystem>())
+		{
+			CitizenSub->ConfigureCitizens(Routes, Citizens);
+			CitizenSub->ConfigureCitizenPool(CitizenMeshVariants, CitizenLodRadiusCm);
+		}
+		if (UDoemitzTaskSubsystem* Tasks = World->GetSubsystem<UDoemitzTaskSubsystem>())
+		{
+			Tasks->ConfigureTasks(TaskData);
+		}
 		if (!RoadEdges.IsEmpty() && !Vehicles.IsEmpty())
 		{
-			Subsystem->ConfigureTrafficNetwork(TrafficSeed, RoadEdges, Vehicles, Crossings, ParkingLots);
+			if (UDoemitzTrafficSubsystem* Traffic = World->GetSubsystem<UDoemitzTrafficSubsystem>())
+			{
+				Traffic->ConfigureTrafficNetwork(TrafficSeed, RoadEdges, Vehicles, Crossings, ParkingLots);
+			}
 		}
 	}
 	TryAttachClockHud();
@@ -271,7 +294,10 @@ void ADoemitzSimulationConfig::HandleHotkeys()
 	}
 	else if (PC->WasInputKeyJustPressed(EKeys::F5))
 	{
-		Subsystem->SaveCityState();
+		if (UDoemitzSaveSubsystem* SaveSub = World->GetSubsystem<UDoemitzSaveSubsystem>())
+		{
+			SaveSub->SaveCityState();
+		}
 	}
 	else if (PC->WasInputKeyJustPressed(EKeys::F7))
 	{
@@ -286,7 +312,8 @@ void ADoemitzSimulationConfig::HandleHotkeys()
 	}
 	else if (PC->WasInputKeyJustPressed(EKeys::F9))
 	{
-		if (!Subsystem->LoadCityState())
+		UDoemitzSaveSubsystem* SaveSub = World->GetSubsystem<UDoemitzSaveSubsystem>();
+		if (!SaveSub || !SaveSub->LoadCityState())
 		{
 			FDoemitzNotificationEvent Ev;
 			Ev.Code = EDoemitzNotificationCode::NoSaveFound;
@@ -295,8 +322,9 @@ void ADoemitzSimulationConfig::HandleHotkeys()
 	}
 	else if (PC->WasInputKeyJustPressed(EKeys::One))
 	{
-		PreviousActiveTimeScale = 60.0;
-		Subsystem->SetTimeScale(60.0);
+		const double TargetScale = Subsystem->GetBaseTimeScale();
+		PreviousActiveTimeScale = TargetScale;
+		Subsystem->SetTimeScale(TargetScale);
 		FDoemitzNotificationEvent Ev;
 		Ev.Code = EDoemitzNotificationCode::TimeScaleChanged;
 		Ev.ParameterKey = TEXT("1x");
@@ -304,8 +332,9 @@ void ADoemitzSimulationConfig::HandleHotkeys()
 	}
 	else if (PC->WasInputKeyJustPressed(EKeys::Two))
 	{
-		PreviousActiveTimeScale = 300.0;
-		Subsystem->SetTimeScale(300.0);
+		const double TargetScale = Subsystem->GetBaseTimeScale() * 5.0;
+		PreviousActiveTimeScale = TargetScale;
+		Subsystem->SetTimeScale(TargetScale);
 		FDoemitzNotificationEvent Ev;
 		Ev.Code = EDoemitzNotificationCode::TimeScaleChanged;
 		Ev.ParameterKey = TEXT("5x");
@@ -313,8 +342,9 @@ void ADoemitzSimulationConfig::HandleHotkeys()
 	}
 	else if (PC->WasInputKeyJustPressed(EKeys::Three))
 	{
-		PreviousActiveTimeScale = 900.0;
-		Subsystem->SetTimeScale(900.0);
+		const double TargetScale = Subsystem->GetBaseTimeScale() * 15.0;
+		PreviousActiveTimeScale = TargetScale;
+		Subsystem->SetTimeScale(TargetScale);
 		FDoemitzNotificationEvent Ev;
 		Ev.Code = EDoemitzNotificationCode::TimeScaleChanged;
 		Ev.ParameterKey = TEXT("15x");
@@ -331,7 +361,7 @@ void ADoemitzSimulationConfig::HandleHotkeys()
 		}
 		else
 		{
-			Subsystem->SetTimeScale(FMath::Max(60.0, PreviousActiveTimeScale));
+			Subsystem->SetTimeScale(FMath::Max(Subsystem->GetBaseTimeScale(), PreviousActiveTimeScale));
 			Ev.Code = EDoemitzNotificationCode::TimeResumed;
 		}
 		Subsystem->PushNotificationEvent(Ev);

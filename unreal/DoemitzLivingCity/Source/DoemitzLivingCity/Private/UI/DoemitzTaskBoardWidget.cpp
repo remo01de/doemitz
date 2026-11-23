@@ -11,6 +11,7 @@
 #include "Components/VerticalBox.h"
 #include "Components/VerticalBoxSlot.h"
 #include "Simulation/DoemitzSimulationSubsystem.h"
+#include "Tasks/DoemitzTaskSubsystem.h"
 #include "UI/DoemitzUiText.h"
 
 TSharedRef<SWidget> UDoemitzTaskBoardWidget::RebuildWidget()
@@ -88,12 +89,13 @@ FString UDoemitzTaskBoardWidget::GetSummaryTextString() const
 void UDoemitzTaskBoardWidget::RefreshContents()
 {
 	const UDoemitzSimulationSubsystem* Subsystem = UDoemitzSimulationSubsystem::Get(this);
+	const UDoemitzTaskSubsystem* Tasks = UDoemitzTaskSubsystem::Get(this);
 	OfferedTaskIds.Reset();
-	if (!Subsystem)
+	if (!Subsystem || !Tasks)
 	{
 		return;
 	}
-	const TArray<FDoemitzTaskInstance> Offers = Subsystem->GetTasksByStatus(EDoemitzTaskStatus::Available);
+	const TArray<FDoemitzTaskInstance> Offers = Tasks->GetTasksByStatus(EDoemitzTaskStatus::Available);
 	for (const FDoemitzTaskInstance& Task : Offers)
 	{
 		if (OfferedTaskIds.Num() >= MaxRows)
@@ -136,7 +138,7 @@ void UDoemitzTaskBoardWidget::RefreshContents()
 	for (int32 Row = 0; Row < OfferedTaskIds.Num(); ++Row)
 	{
 		FDoemitzTaskInstance Task;
-		if (!Subsystem->GetTaskById(OfferedTaskIds[Row], Task))
+		if (!Tasks->GetTaskById(OfferedTaskIds[Row], Task))
 		{
 			continue;
 		}
@@ -177,12 +179,12 @@ void UDoemitzTaskBoardWidget::RefreshContents()
 
 bool UDoemitzTaskBoardWidget::AcceptOfferAtIndex(int32 Index)
 {
-	UDoemitzSimulationSubsystem* Subsystem = UDoemitzSimulationSubsystem::Get(this);
-	if (!Subsystem || !OfferedTaskIds.IsValidIndex(Index))
+	UDoemitzTaskSubsystem* Tasks = UDoemitzTaskSubsystem::Get(this);
+	if (!Tasks || !OfferedTaskIds.IsValidIndex(Index))
 	{
 		return false;
 	}
-	const bool bAccepted = Subsystem->AcceptTask(OfferedTaskIds[Index]);
+	const bool bAccepted = Tasks->AcceptTask(OfferedTaskIds[Index]);
 	RefreshContents();
 	return bAccepted;
 }

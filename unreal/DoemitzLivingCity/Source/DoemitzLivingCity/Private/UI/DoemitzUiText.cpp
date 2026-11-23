@@ -1,5 +1,9 @@
 #include "UI/DoemitzUiText.h"
 
+#include "Economy/DoemitzEconomySubsystem.h"
+#include "Simulation/DoemitzCitizenSubsystem.h"
+#include "Tasks/DoemitzTaskSubsystem.h"
+
 FText FDoemitzUiText::FormatCentsEur(int64 AmountCents)
 {
 	const bool bNegative = AmountCents < 0;
@@ -174,11 +178,15 @@ FText FDoemitzUiText::FormatTaskGoal(const FDoemitzTaskInstance& Task, const UDo
 		return FText::FromString(FString::Printf(TEXT("Abgeben (%s): %s"), *Task.ParcelName, *PlaceName));
 	}
 
+	const UDoemitzEconomySubsystem* Economy = UDoemitzEconomySubsystem::Get(Subsystem);
+	const UDoemitzCitizenSubsystem* Citizens = UDoemitzCitizenSubsystem::Get(Subsystem);
+
 	FDoemitzItemDefinition Item;
-	const FString ItemName = Subsystem->GetItemDefinition(Task.RequestedItemId, Item)
+	const FString ItemName = (Economy && Economy->GetItemDefinition(Task.RequestedItemId, Item))
 		? Item.DisplayName
 		: Task.RequestedItemId.ToString();
-	if (Subsystem->GetInventoryQuantity(Task.RequestedItemId) < 1)
+	const int32 OwnedQty = Economy ? Economy->GetInventoryQuantity(Task.RequestedItemId) : 0;
+	if (OwnedQty < 1)
 	{
 		FDoemitzPlaceDefinition Shop;
 		const FString ShopName = Subsystem->GetPlaceDefinition(Task.PreferredShopPlaceId, Shop)
@@ -187,7 +195,7 @@ FText FDoemitzUiText::FormatTaskGoal(const FDoemitzTaskInstance& Task, const UDo
 		return FText::FromString(FString::Printf(TEXT("Kaufen: %s (%s)"), *ItemName, *ShopName));
 	}
 	FDoemitzCitizenState Cit;
-	const FString CitName = Subsystem->GetCitizenState(Task.GiverCitizenId, Cit)
+	const FString CitName = (Citizens && Citizens->GetCitizenState(Task.GiverCitizenId, Cit))
 		? Cit.DisplayName
 		: Task.GiverCitizenId.ToString();
 	return FText::FromString(FString::Printf(TEXT("%s zu %s bringen"), *ItemName, *CitName));
@@ -218,6 +226,9 @@ FText FDoemitzUiText::FormatNotification(const FDoemitzNotificationEvent& Event,
 		return FText::GetEmpty();
 	}
 
+	const UDoemitzEconomySubsystem* Economy = Subsystem ? UDoemitzEconomySubsystem::Get(Subsystem) : nullptr;
+	const UDoemitzTaskSubsystem* Tasks = Subsystem ? UDoemitzTaskSubsystem::Get(Subsystem) : nullptr;
+
 	auto GetPlaceName = [Subsystem](FName PlaceId) -> FString {
 		FDoemitzPlaceDefinition Place;
 		if (Subsystem && Subsystem->GetPlaceDefinition(PlaceId, Place))
@@ -226,25 +237,25 @@ FText FDoemitzUiText::FormatNotification(const FDoemitzNotificationEvent& Event,
 		}
 		return PlaceId.ToString();
 	};
-	auto GetItemName = [Subsystem](FName ItemId) -> FString {
+	auto GetItemName = [Economy](FName ItemId) -> FString {
 		FDoemitzItemDefinition Item;
-		if (Subsystem && Subsystem->GetItemDefinition(ItemId, Item))
+		if (Economy && Economy->GetItemDefinition(ItemId, Item))
 		{
 			return Item.DisplayName;
 		}
 		return ItemId.ToString();
 	};
-	auto GetJobTitle = [Subsystem](FName JobId) -> FString {
+	auto GetJobTitle = [Economy](FName JobId) -> FString {
 		FDoemitzJobDefinition Job;
-		if (Subsystem && Subsystem->GetJobDefinition(JobId, Job))
+		if (Economy && Economy->GetJobDefinition(JobId, Job))
 		{
 			return Job.Title;
 		}
 		return JobId.ToString();
 	};
-	auto GetTaskTitle = [Subsystem](FName TaskId) -> FString {
+	auto GetTaskTitle = [Tasks](FName TaskId) -> FString {
 		FDoemitzTaskInstance Task;
-		if (Subsystem && Subsystem->GetTaskById(TaskId, Task))
+		if (Tasks && Tasks->GetTaskById(TaskId, Task))
 		{
 			return Task.Title;
 		}
@@ -339,7 +350,7 @@ FText FDoemitzUiText::FormatNotification(const FDoemitzNotificationEvent& Event,
 
 FText FDoemitzUiText::GetMapAttributionText()
 {
-	return FText::FromString(TEXT("Kartendaten \u00a9 OpenStreetMap contributors, ODbL 1.0  |  H\u00f6hendaten \u00a9 GeoBasis-DE/M-V 2025"));
+	return FText::FromString(TEXT("Kartendaten \u00a9 OpenStreetMap contributors, ODbL 1.0  |  Geobasisdaten (DGM1/LoD2) \u00a9 GeoBasis-DE/M-V 2025/2026"));
 }
 
 FText FDoemitzUiText::FormatNoticeBoardPrompt(int32 AvailableTaskCount)

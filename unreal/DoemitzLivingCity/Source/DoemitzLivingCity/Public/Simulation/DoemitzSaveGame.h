@@ -3,7 +3,7 @@
 #include "CoreMinimal.h"
 #include "Economy/DoemitzEconomyDataAsset.h"
 #include "GameFramework/SaveGame.h"
-#include "Simulation/DoemitzSimulationSubsystem.h"
+#include "Simulation/DoemitzSimulationTypes.h"
 #include "Tasks/DoemitzTaskDataAsset.h"
 #include "DoemitzSaveGame.generated.h"
 
@@ -125,7 +125,7 @@ public:
 	double TimeOfDayMinutes = 470.0;
 
 	UPROPERTY(BlueprintReadWrite, Category = "SaveGame")
-	double TimeScale = 60.0;
+	double TimeScale = 20.0;
 
 	UPROPERTY()
 	bool bHasPlayerTransform = false;

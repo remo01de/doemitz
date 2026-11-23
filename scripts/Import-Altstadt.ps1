@@ -20,6 +20,7 @@ try {
         throw 'Mesh generation failed.'
     }
 
+    Remove-Item -LiteralPath $log -Force -ErrorAction SilentlyContinue
     $editorArguments = @(
         ('"{0}"' -f $project)
         '-run=pythonscript'

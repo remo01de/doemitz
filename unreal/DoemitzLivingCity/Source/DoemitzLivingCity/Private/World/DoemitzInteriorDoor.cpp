@@ -2,6 +2,7 @@
 
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "Economy/DoemitzEconomySubsystem.h"
 #include "Engine/World.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
@@ -49,9 +50,12 @@ bool ADoemitzInteriorDoor::WantsOpen() const
 	{
 		return true;
 	}
-	if (Subsystem->IsWorkingShift())
+	if (const UDoemitzEconomySubsystem* Economy = World->GetSubsystem<UDoemitzEconomySubsystem>())
 	{
-		return false;
+		if (Economy->IsWorkingShift())
+		{
+			return false;
+		}
 	}
 	// Leaving is always possible; entering only while the place is open.
 	const FVector Offset = PawnLoc - DoorCenter;

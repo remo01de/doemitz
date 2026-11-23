@@ -15,7 +15,7 @@ import traceback
 import unreal
 
 
-OUT_DIR = Path(unreal.Paths.convert_relative_path_to_full(unreal.Paths.project_saved_dir())) / "Screenshots" / "Sprint13"
+OUT_DIR = Path(unreal.Paths.convert_relative_path_to_full(unreal.Paths.project_saved_dir())) / "Screenshots" / os.environ.get("DOEMITZ_OUT_SUBDIR", "Sprint13")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -61,6 +61,8 @@ ALL_SHOTS = [
     ("30_speicher.png", ue_pos(650.0, -520.0, 3.0), ue_pos(712.0, -566.0, 14.0)),
     ("31_hafen_steg.png", ue_pos(652.0, -458.0, 1.2), ue_pos(615.0, -490.0, 0.0)),
     ("32_weg_altstadt_hafen.png", ue_pos(420.0, -300.0, 8.0), ue_pos(640.0, -470.0, 2.0)),
+    # Sprint 15: South marina quay landing + dual sloped gangways with handrails
+    ("33_hafen_gangway.png", ue_pos(634.0, -533.0, 4.5), ue_pos(637.0, -548.5, 0.5)),
 ]
 # Interior views (day and night), computed from the generated package: camera just inside the door
 _project = Path(unreal.Paths.convert_relative_path_to_full(unreal.Paths.project_dir()))

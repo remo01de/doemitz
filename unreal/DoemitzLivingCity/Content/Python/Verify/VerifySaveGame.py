@@ -46,8 +46,13 @@ def check(_delta_seconds):
         if world is None:
             return
         sub = unreal.DoemitzSimulationSubsystem.get(world)
+        cit = unreal.DoemitzCitizenSubsystem.get(world)
+        trf = unreal.DoemitzTrafficSubsystem.get(world)
+        econ = unreal.DoemitzEconomySubsystem.get(world)
+        tsk = unreal.DoemitzTaskSubsystem.get(world)
+        save = unreal.DoemitzSaveSubsystem.get(world)
         pawn = unreal.GameplayStatics.get_player_pawn(world, 0)
-        if sub is None or sub.get_citizen_count() == 0 or pawn is None:
+        if sub is None or cit is None or trf is None or econ is None or tsk is None or save is None or cit.get_citizen_count() == 0 or pawn is None:
             return
         vehicles = unreal.GameplayStatics.get_all_actors_of_class(world, vehicle_class)
         dns = unreal.GameplayStatics.get_all_actors_of_class(world, dn_class)
@@ -58,13 +63,13 @@ def check(_delta_seconds):
 
         if phase == "prepare":
             sub.set_time_of_day_minutes(475.0)
-            sub.set_time_scale(300.0)
+            sub.set_time_scale(sub.get_base_time_scale() * 5.0)
             unreal.GameplayStatics.set_global_time_dilation(world, 4.0)
             phase = "wait_commute"
             return
 
         if phase == "wait_commute":
-            anna = get_state(sub, "citizen_anna_01")
+            anna = get_state(cit, "citizen_anna_01")
             if not anna.get_editor_property("is_moving") or anna.get_editor_property("route_progress_cm") < 200.0:
                 return
 
@@ -74,54 +79,54 @@ def check(_delta_seconds):
             saved_anna_loc = anna.get_editor_property("world_location")
             saved_anna_moving = anna.get_editor_property("is_moving")
 
-            # Perform economy & task actions before saving v5
+            # Perform economy & task actions before saving v7
             sub.set_time_of_day_minutes(600.0)
             saved_min = sub.get_time_of_day_minutes()
-            if not sub.buy_item("poi:osm:node:1794647095", "item_pflaster", 1):
+            if not econ.buy_item("poi:osm:node:1794647095", "item_pflaster", 1):
                 raise RuntimeError("pre-save BuyItem failed")
-            if not sub.accept_job("place_kaufhaus"):
+            if not econ.accept_job("place_kaufhaus"):
                 raise RuntimeError("pre-save AcceptJob failed")
 
-            avail_tasks = sub.get_tasks_by_status(unreal.DoemitzTaskStatus.AVAILABLE)
+            avail_tasks = tsk.get_tasks_by_status(unreal.DoemitzTaskStatus.AVAILABLE)
             if len(avail_tasks) < 2:
                 raise RuntimeError(f"expected >=2 available tasks, got {len(avail_tasks)}")
             accepted_task_id = str(avail_tasks[0].get_editor_property("task_id"))
-            if not sub.accept_task(accepted_task_id):
+            if not tsk.accept_task(accepted_task_id):
                 raise RuntimeError(f"AcceptTask({accepted_task_id}) failed")
 
-            saved_money = sub.get_player_money_cents()
-            saved_qty = sub.get_inventory_quantity("item_pflaster")
-            saved_job = str(sub.get_active_job_id())
-            saved_rev_daily, _ = sub.get_place_revenue("poi:osm:node:1794647095")
-            saved_active_count = len(sub.get_tasks_by_status(unreal.DoemitzTaskStatus.ACTIVE))
+            saved_money = econ.get_player_money_cents()
+            saved_qty = econ.get_inventory_quantity("item_pflaster")
+            saved_job = str(econ.get_active_job_id())
+            saved_rev_daily, _ = econ.get_place_revenue("poi:osm:node:1794647095")
+            saved_active_count = len(tsk.get_tasks_by_status(unreal.DoemitzTaskStatus.ACTIVE))
 
-            if not sub.save_city_state(slot_name):
+            if not save.save_city_state(slot_name):
                 raise RuntimeError("SaveCityState returned False")
-            if not sub.does_save_exist(slot_name):
+            if not save.does_save_exist(slot_name):
                 raise RuntimeError("Save slot does not exist after SaveCityState")
 
             # Mutate world, economy, and task state heavily before loading back
             sub.set_time_of_day_minutes(1430.0)  # Expires active task -> MISSED
-            if len(sub.get_tasks_by_status(unreal.DoemitzTaskStatus.ACTIVE)) != 0:
+            if len(tsk.get_tasks_by_status(unreal.DoemitzTaskStatus.ACTIVE)) != 0:
                 raise RuntimeError("expected active task to expire when mutating time to 23:50")
             sub.set_time_of_day_minutes(15.0)
-            sub.set_player_money_cents_for_test(99999)
+            econ.set_player_money_cents_for_test(99999)
             dn.update_lighting_from_simulation()
             if dn.is_daytime():
                 raise RuntimeError("expected night lighting after mutating time to 00:15")
             pawn.set_actor_location(saved_player_loc + unreal.Vector(800.0, 0.0, 0.0), False, True)
-            sub.set_vehicle_edge_position_for_test("altstadt_vehicle_01", "edge:osm:way:157877527:0:0:fwd", 1234.0, 0.0)
+            trf.set_vehicle_edge_position_for_test("altstadt_vehicle_01", "edge:osm:way:157877527:0:0:fwd", 1234.0, 0.0)
 
-            if not sub.load_city_state(slot_name):
+            if not save.load_city_state(slot_name):
                 raise RuntimeError("LoadCityState returned False")
 
             restored_min = sub.get_time_of_day_minutes()
             restored_player = pawn.get_actor_location()
             restored_car_dist = car.get_distance_along_route()
-            restored_anna = get_state(sub, "citizen_anna_01")
+            restored_anna = get_state(cit, "citizen_anna_01")
             restored_anna_loc = restored_anna.get_editor_property("world_location")
-            restored_rev_daily, _ = sub.get_place_revenue("poi:osm:node:1794647095")
-            restored_active = sub.get_tasks_by_status(unreal.DoemitzTaskStatus.ACTIVE)
+            restored_rev_daily, _ = econ.get_place_revenue("poi:osm:node:1794647095")
+            restored_active = tsk.get_tasks_by_status(unreal.DoemitzTaskStatus.ACTIVE)
 
             if abs(restored_min - saved_min) > 0.5:
                 raise RuntimeError(f"restored time mismatch: {restored_min} vs {saved_min}")
@@ -135,16 +140,16 @@ def check(_delta_seconds):
                 raise RuntimeError("citizen moving state was not restored")
             if (restored_anna_loc - saved_anna_loc).length() > 5.0:
                 raise RuntimeError("citizen location was not restored")
-            if sub.get_player_money_cents() != saved_money:
-                raise RuntimeError(f"money mismatch: {sub.get_player_money_cents()} vs {saved_money}")
-            if sub.get_inventory_quantity("item_pflaster") != saved_qty:
+            if econ.get_player_money_cents() != saved_money:
+                raise RuntimeError(f"money mismatch: {econ.get_player_money_cents()} vs {saved_money}")
+            if econ.get_inventory_quantity("item_pflaster") != saved_qty:
                 raise RuntimeError("inventory quantity was not restored")
-            if str(sub.get_active_job_id()) != saved_job:
+            if str(econ.get_active_job_id()) != saved_job:
                 raise RuntimeError("active job was not restored")
             if restored_rev_daily != saved_rev_daily:
                 raise RuntimeError(f"place revenue mismatch: {restored_rev_daily} vs {saved_rev_daily}")
             if len(restored_active) != saved_active_count or str(restored_active[0].get_editor_property("task_id")) != accepted_task_id:
-                raise RuntimeError("active task was not restored from SaveGame v5")
+                raise RuntimeError("active task was not restored from SaveGame v7")
 
             # Verify SaveSchemaVersion 4 -> 5 migration (vehicles Driving, 0 tasks, economy preserved)
             v4_slot = "DoemitzVerifyV4Migration"
@@ -154,20 +159,20 @@ def check(_delta_seconds):
             v4_save.set_editor_property("day_of_week", 2)
             v4_save.set_editor_property("calendar_week", 1)
             v4_save.set_editor_property("time_of_day_minutes", 600.0)
-            v4_save.set_editor_property("time_scale", 60.0)
+            v4_save.set_editor_property("time_scale", 20.0)
             v4_save.set_editor_property("player_money_cents", 18800)
             if not unreal.GameplayStatics.save_game_to_slot(v4_save, v4_slot, 0):
                 raise RuntimeError("failed to write synthetic v4 save")
-            if not sub.load_city_state(v4_slot):
+            if not save.load_city_state(v4_slot):
                 raise RuntimeError("LoadCityState failed to migrate SaveSchemaVersion 4")
             if sub.get_day_number() != 3 or sub.get_day_of_week() != 2:
                 raise RuntimeError(f"v4 migration did not restore day/dow: {sub.get_day_number()}/{sub.get_day_of_week()}")
-            if sub.get_player_money_cents() != 18800:
-                raise RuntimeError(f"v4 migration did not preserve money: {sub.get_player_money_cents()}")
-            if len(sub.get_all_tasks()) != 0:
-                raise RuntimeError(f"v4 migration expected 0 tasks, got {len(sub.get_all_tasks())}")
-            for vid in sub.get_all_vehicle_ids():
-                vst = get_vstate(sub, vid)
+            if econ.get_player_money_cents() != 18800:
+                raise RuntimeError(f"v4 migration did not preserve money: {econ.get_player_money_cents()}")
+            if len(tsk.get_all_tasks()) != 0:
+                raise RuntimeError(f"v4 migration expected 0 tasks, got {len(tsk.get_all_tasks())}")
+            for vid in trf.get_all_vehicle_ids():
+                vst = get_vstate(trf, vid)
                 if vst.get_editor_property("phase") != unreal.DoemitzVehiclePhase.DRIVING:
                     raise RuntimeError(f"v4 migration expected vehicle {vid} in DRIVING phase")
             unreal.GameplayStatics.delete_game_in_slot(v4_slot, 0)
@@ -175,9 +180,9 @@ def check(_delta_seconds):
             # Verify SaveSchemaVersion 5 -> 6 terrain height migration (flat Z -> downward trace onto DGM1)
             v5_slot = "DoemitzVerifyV5Migration"
             pawn.set_actor_location(unreal.Vector(saved_player_loc.x, saved_player_loc.y, 96.0), False, True)
-            sub.set_citizen_position_for_test("citizen_anna_01", unreal.Vector(saved_anna_loc.x, saved_anna_loc.y, 20.0))
-            sub.set_player_money_cents_for_test(21500)
-            if not sub.save_city_state(v5_slot):
+            cit.set_citizen_position_for_test("citizen_anna_01", unreal.Vector(saved_anna_loc.x, saved_anna_loc.y, 20.0))
+            econ.set_player_money_cents_for_test(21500)
+            if not save.save_city_state(v5_slot):
                 raise RuntimeError("failed to capture baseline save for v5 migration")
             v5_save = unreal.GameplayStatics.load_game_from_slot(v5_slot, 0)
             v5_save.set_editor_property("save_schema_version", 5)
@@ -185,12 +190,12 @@ def check(_delta_seconds):
             if not unreal.GameplayStatics.save_game_to_slot(v5_save, v5_slot, 0):
                 raise RuntimeError("failed to write downgraded v5 save")
 
-            if not sub.load_city_state(v5_slot):
+            if not save.load_city_state(v5_slot):
                 raise RuntimeError("LoadCityState failed to migrate SaveSchemaVersion 5")
-            if sub.get_day_number() != 4 or sub.get_player_money_cents() != 21500:
-                raise RuntimeError(f"v5 migration state mismatch: day={sub.get_day_number()}, money={sub.get_player_money_cents()}")
+            if sub.get_day_number() != 4 or econ.get_player_money_cents() != 21500:
+                raise RuntimeError(f"v5 migration state mismatch: day={sub.get_day_number()}, money={econ.get_player_money_cents()}")
             mig_player_z = pawn.get_actor_location().z
-            mig_anna_z = get_state(sub, "citizen_anna_01").get_editor_property("world_location").z
+            mig_anna_z = get_state(cit, "citizen_anna_01").get_editor_property("world_location").z
             # On real DGM1 terrain, Goethestrasse/Rathausplatz is ~470-490 cm above local origin (far above flat 20/96 cm)
             if abs(mig_player_z - saved_player_loc.z) > 45.0:
                 raise RuntimeError(
@@ -205,23 +210,23 @@ def check(_delta_seconds):
             # Sprint 13: SaveSchemaVersion 6 -> 7 (no interior) and a v7 save whose interior no longer exists
             v6_slot = "DoemitzVerifyV6Migration"
             pawn.set_actor_location(saved_player_loc, False, True)
-            if not sub.save_city_state(v6_slot):
+            if not save.save_city_state(v6_slot):
                 raise RuntimeError("failed to capture baseline save for v6 migration")
             v6_save = unreal.GameplayStatics.load_game_from_slot(v6_slot, 0)
             v6_save.set_editor_property("save_schema_version", 6)
             if not unreal.GameplayStatics.save_game_to_slot(v6_save, v6_slot, 0):
                 raise RuntimeError("failed to write downgraded v6 save")
-            if not sub.load_city_state(v6_slot):
+            if not save.load_city_state(v6_slot):
                 raise RuntimeError("LoadCityState failed to migrate SaveSchemaVersion 6")
-            if str(sub.get_last_loaded_player_interior_id()) != "None":
-                raise RuntimeError(f"v6 save must load without interior, got {sub.get_last_loaded_player_interior_id()}")
+            if str(save.get_last_loaded_player_interior_id()) != "None":
+                raise RuntimeError(f"v6 save must load without interior, got {save.get_last_loaded_player_interior_id()}")
             if abs(pawn.get_actor_location().z - saved_player_loc.z) > 45.0:
                 raise RuntimeError("v6->v7 player height changed unexpectedly")
             gone = unreal.GameplayStatics.load_game_from_slot(v6_slot, 0)
             gone.set_editor_property("save_schema_version", 7)
             gone.set_editor_property("player_interior_id", "interior:removed_room")
             gone.set_editor_property("player_interior_place_id", "poi:osm:node:1794647095")
-            if not unreal.GameplayStatics.save_game_to_slot(gone, v6_slot, 0) or not sub.load_city_state(v6_slot):
+            if not unreal.GameplayStatics.save_game_to_slot(gone, v6_slot, 0) or not save.load_city_state(v6_slot):
                 raise RuntimeError("failed to load v7 save with a removed interior")
             apo_ent = sub.get_place_definition("poi:osm:node:1794647095").get_editor_property("entrance_location")
             gone_loc = pawn.get_actor_location()

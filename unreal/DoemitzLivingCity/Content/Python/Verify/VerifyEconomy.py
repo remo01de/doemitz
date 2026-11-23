@@ -32,9 +32,11 @@ def check(_delta_seconds):
         if world is None:
             return
         sub = unreal.DoemitzSimulationSubsystem.get(world)
+        cit = unreal.DoemitzCitizenSubsystem.get(world)
+        econ = unreal.DoemitzEconomySubsystem.get(world)
         pawn = unreal.GameplayStatics.get_player_pawn(world, 0)
         cfgs = unreal.GameplayStatics.get_all_actors_of_class(world, cfg_class)
-        if sub is None or sub.get_citizen_count() == 0 or pawn is None or len(cfgs) != 1:
+        if sub is None or cit is None or econ is None or cit.get_citizen_count() == 0 or pawn is None or len(cfgs) != 1:
             return
         widget = cfgs[0].get_clock_widget()
         if widget is None:
@@ -42,7 +44,7 @@ def check(_delta_seconds):
 
         if phase == "test_shop_and_start_shift":
             # 1. Starting balance from Data Asset (125,00 EUR = 12500 ct)
-            start_money = sub.get_player_money_cents()
+            start_money = econ.get_player_money_cents()
             if start_money != 12500:
                 raise RuntimeError(f"expected starting balance 12500 ct, got {start_money}")
             widget.refresh_display()
@@ -53,23 +55,23 @@ def check(_delta_seconds):
             # 2. Buy Pflasterset (395 ct) at Fritz-Reuter-Apotheke on Monday 10:00
             sub.set_day_number(1)
             sub.set_time_of_day_minutes(600.0)
-            if not sub.buy_item(APOTHEKE_ID, "item_pflaster", 1):
+            if not econ.buy_item(APOTHEKE_ID, "item_pflaster", 1):
                 raise RuntimeError("BuyItem(item_pflaster) unexpectedly failed")
-            if sub.get_player_money_cents() != 12105:
-                raise RuntimeError(f"expected 12105 ct after purchase, got {sub.get_player_money_cents()}")
-            if sub.get_inventory_quantity("item_pflaster") != 1:
-                raise RuntimeError(f"expected inventory qty 1, got {sub.get_inventory_quantity('item_pflaster')}")
-            if sub.get_ledger_count() != 1:
-                raise RuntimeError(f"expected 1 ledger entry, got {sub.get_ledger_count()}")
-            ap_daily, ap_weekly = sub.get_place_revenue(APOTHEKE_ID)
+            if econ.get_player_money_cents() != 12105:
+                raise RuntimeError(f"expected 12105 ct after purchase, got {econ.get_player_money_cents()}")
+            if econ.get_inventory_quantity("item_pflaster") != 1:
+                raise RuntimeError(f"expected inventory qty 1, got {econ.get_inventory_quantity('item_pflaster')}")
+            if econ.get_ledger_count() != 1:
+                raise RuntimeError(f"expected 1 ledger entry, got {econ.get_ledger_count()}")
+            ap_daily, ap_weekly = econ.get_place_revenue(APOTHEKE_ID)
             if ap_daily != 395 or ap_weekly != 395:
                 raise RuntimeError(f"expected Apotheke revenue 395/395, got {ap_daily}/{ap_weekly}")
 
             # 3. Buy without sufficient funds must fail cleanly
-            sub.set_player_money_cents_for_test(100)
-            if sub.buy_item(APOTHEKE_ID, "item_pflaster", 1):
+            econ.set_player_money_cents_for_test(100)
+            if econ.buy_item(APOTHEKE_ID, "item_pflaster", 1):
                 raise RuntimeError("BuyItem should fail with insufficient funds")
-            if sub.get_player_money_cents() != 100 or sub.get_inventory_quantity("item_pflaster") != 1:
+            if econ.get_player_money_cents() != 100 or econ.get_inventory_quantity("item_pflaster") != 1:
                 raise RuntimeError("failed purchase mutated money or inventory")
             widget.refresh_display()
             notice_text = widget.get_notice_text_string()
@@ -77,47 +79,48 @@ def check(_delta_seconds):
                 raise RuntimeError(f"expected insufficient funds UI notice with umlaut, got {notice_text!r}")
 
             # 4. Accept job at Kaufhaus (09:00-13:00, 1450 ct/h) and start 1 hour late (10:00 -> 3h = 4350 ct)
-            if not sub.accept_job(KAUFHAUS_ID):
+            if not econ.accept_job(KAUFHAUS_ID):
                 raise RuntimeError("AcceptJob at Kaufhaus failed")
-            if str(sub.get_active_job_id()) != "job_kaufhaus_verkauf":
-                raise RuntimeError(f"unexpected active job: {sub.get_active_job_id()}")
+            if str(econ.get_active_job_id()) != "job_kaufhaus_verkauf":
+                raise RuntimeError(f"unexpected active job: {econ.get_active_job_id()}")
 
-            pre_shift_money = sub.get_player_money_cents()
+            pre_shift_money = econ.get_player_money_cents()
             expected_wage = 4350  # 3 hours * 1450 ct/h (proportional reduction for 1h lateness)
-            if not sub.start_work_shift(KAUFHAUS_ID):
+            if not econ.start_work_shift(KAUFHAUS_ID):
                 raise RuntimeError("StartWorkShift at Kaufhaus failed")
-            if not sub.is_working_shift():
+            if not econ.is_working_shift():
                 raise RuntimeError("expected IsWorkingShift() == True")
-            if abs(sub.get_time_scale() - 900.0) > 1.0:
-                raise RuntimeError(f"expected 15x (900.0) time scale during shift, got {sub.get_time_scale()}")
+            expected_shift_scale = sub.get_base_time_scale() * 15.0
+            if abs(sub.get_time_scale() - expected_shift_scale) > 1.0:
+                raise RuntimeError(
+                    f"expected 15x ({expected_shift_scale:.1f}) time scale during shift, got {sub.get_time_scale()}"
+                )
             if not pawn.get_editor_property("hidden"):
                 raise RuntimeError("expected player pawn to be hidden during work shift")
 
-            # Fast-forward PIE to complete the shift (10:00 -> 13:00 = 180 sim minutes; at 15x = 12s -> 1.5s at 8x dilation)
+            # Fast-forward PIE to complete the shift (10:00 -> 13:00 = 180 sim minutes; at 15x = 36s -> 4.5s at 8x dilation)
             unreal.GameplayStatics.set_global_time_dilation(world, 8.0)
             phase = "wait_shift_end"
             return
 
         if phase == "wait_shift_end":
-            if sub.is_working_shift():
+            if econ.is_working_shift():
                 return
             if pawn.get_editor_property("hidden"):
                 raise RuntimeError("player pawn remained hidden after shift ended")
-            post_money = sub.get_player_money_cents()
+            post_money = econ.get_player_money_cents()
             if post_money != pre_shift_money + expected_wage:
                 raise RuntimeError(f"expected {pre_shift_money + expected_wage} ct after shift, got {post_money}")
 
-            # Now verify citizen shopping revenue at normal 1x clock (12:30 -> Anna/Dieter arrive at Kaufhaus and shop)
+            # Verify citizen shopping revenue at true 1x BaseTimeScale (20.0, no Sprint 14 half-speed hack!)
             sub.set_time_of_day_minutes(750.0)
-            # Anna walks 127 m (94 s) from the Amtsverwaltung; at 1x (60) that is 94 game minutes, longer than her
-            # 60 min shopping slot. Half speed lets her arrive inside the slot (Sprint 14: no other Kaufhaus shopper).
-            sub.set_time_scale(30.0)
+            sub.set_time_scale(sub.get_base_time_scale())
             unreal.GameplayStatics.set_global_time_dilation(world, 8.0)
             phase = "wait_citizen_revenue"
             return
 
         if phase == "wait_citizen_revenue":
-            kh_daily, kh_weekly = sub.get_place_revenue(KAUFHAUS_ID)
+            kh_daily, kh_weekly = econ.get_place_revenue(KAUFHAUS_ID)
             if kh_daily <= 0:
                 return
             if kh_weekly < kh_daily:
@@ -125,8 +128,8 @@ def check(_delta_seconds):
 
             finish(
                 f"DOEMITZ_ECONOMY_PIE_OK: purchase -395ct & insufficient funds verified, "
-                f"late shift paid +{expected_wage}ct (total={sub.get_player_money_cents()}ct), "
-                f"Kaufhaus citizen revenue daily={kh_daily}ct weekly={kh_weekly}ct",
+                f"late shift paid +{expected_wage}ct (total={econ.get_player_money_cents()}ct), "
+                f"Kaufhaus citizen revenue at true 1x ({sub.get_base_time_scale():.0f}) daily={kh_daily}ct weekly={kh_weekly}ct",
                 True,
             )
             phase = "done"

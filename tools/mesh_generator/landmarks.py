@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from math import cos, floor, hypot, pi, sin
+from math import cos, floor, hypot, pi, radians, sin
 
-from shapely.geometry import Polygon
+from shapely.geometry import Point, Polygon
 
 from tools.mesh_generator.architecture import _add_box_on_wall, _add_quad, _add_roof_with_shape, _add_triangle
 
@@ -592,8 +592,18 @@ def _build_speicher(meshes, polygon: Polygon, base_m: float, max_ground_m: float
     usable = (base_m + eave_height_m) - plinth_top
     floors = max(3, int(round(usable / float(cfg.get("storey_height_m", 3.2)))))
     floor_h = usable / floors
+    # Determine actual roof ridge unit vector so only true gable walls (perpendicular to ridge on roof_poly)
+    # get loading hatches and hoist beams — never stepped side/stair-tower segments.
+    if ridge_direction_deg is not None:
+        rx, ry = cos(radians(float(ridge_direction_deg))), sin(radians(float(ridge_direction_deg)))
+    else:
+        mrr_coords = list(roof_poly.minimum_rotated_rectangle.exterior.coords)[:4]
+        e0 = hypot(mrr_coords[1][0] - mrr_coords[0][0], mrr_coords[1][1] - mrr_coords[0][1])
+        e1 = hypot(mrr_coords[2][0] - mrr_coords[1][0], mrr_coords[2][1] - mrr_coords[1][1])
+        ra, rb = (mrr_coords[0], mrr_coords[1]) if e0 >= e1 else (mrr_coords[1], mrr_coords[2])
+        rl = max(hypot(rb[0] - ra[0], rb[1] - ra[1]), 0.1)
+        rx, ry = (rb[0] - ra[0]) / rl, (rb[1] - ra[1]) / rl
     ring = list(polygon.exterior.coords)
-    longest = max(hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(ring, ring[1:]))
     for start, end in zip(ring, ring[1:]):
         dx, dy = end[0] - start[0], end[1] - start[1]
         length = hypot(dx, dy)
@@ -601,7 +611,12 @@ def _build_speicher(meshes, polygon: Polygon, base_m: float, max_ground_m: float
             continue
         tx, ty = dx / length, dy / length
         nx, ny = ty, -tx
-        gable_side = length < 0.6 * longest
+        mid = Point((start[0] + end[0]) * 0.5, (start[1] + end[1]) * 0.5)
+        gable_side = (
+            abs(tx * rx + ty * ry) < 0.35
+            and roof_poly.exterior.distance(mid) <= 0.35
+            and length >= 6.0
+        )
         for fl in range(1, floors):
             z_belt = plinth_top + fl * floor_h
             _add_box_on_wall(stone_mesh, start[0], start[1], tx, ty, nx, ny, 0.0, length, z_belt - 0.08, z_belt + 0.04, 0.0, 0.06)

@@ -18,8 +18,8 @@ def finish(message, success):
     unreal.EditorPythonScripting.set_keep_python_script_alive(False)
 
 
-def get_state(sub, cid):
-    res = sub.get_citizen_state(cid)
+def get_state(cit, cid):
+    res = cit.get_citizen_state(cid)
     return res[1] if isinstance(res, tuple) else res
 
 
@@ -34,33 +34,34 @@ def check(_delta_seconds):
         if world is None:
             return
         sub = unreal.DoemitzSimulationSubsystem.get(world)
-        if sub is None or sub.get_citizen_count() == 0:
+        cit = unreal.DoemitzCitizenSubsystem.get(world)
+        if sub is None or cit is None or cit.get_citizen_count() == 0:
             return
 
         if phase == "init":
-            count = sub.get_citizen_count()
+            count = cit.get_citizen_count()
             if count < 30:
                 raise RuntimeError(f"expected at least 30 simulated citizens, got {count}")
-            ids = {str(cid) for cid in sub.get_all_citizen_ids()}
+            ids = {str(cid) for cid in cit.get_all_citizen_ids()}
             for legacy in ("citizen_anna_01", "citizen_bernd_02", "citizen_clara_03", "citizen_dieter_04"):
                 if legacy not in ids:
                     raise RuntimeError(f"missing legacy citizen {legacy}")
-            # Trigger Anna's 07:55 commute and Bernd's 08:00 commute quickly.
+            # Trigger Anna's 07:55 commute and Bernd's 08:00 commute quickly (5x relative to BaseTimeScale).
             sub.set_time_of_day_minutes(475.0)
-            sub.set_time_scale(300.0)
+            sub.set_time_scale(sub.get_base_time_scale() * 5.0)
             unreal.GameplayStatics.set_global_time_dilation(world, 8.0)
             phase = "simulate"
             return
 
         if phase == "simulate":
-            anna = get_state(sub, "citizen_anna_01")
-            bernd = get_state(sub, "citizen_bernd_02")
+            anna = get_state(cit, "citizen_anna_01")
+            bernd = get_state(cit, "citizen_bernd_02")
             if anna is None or bernd is None:
                 raise RuntimeError("failed to query citizen states")
 
             if anna.get_editor_property("is_moving"):
                 anna_moved = True
-                actor_loc = sub.get_citizen_actor_location("citizen_anna_01")
+                actor_loc = cit.get_citizen_actor_location("citizen_anna_01")
                 if actor_loc is not None:
                     sim_loc = anna.get_editor_property("world_location")
                     if (sim_loc - actor_loc).length() > 50.0:
@@ -82,9 +83,9 @@ def check(_delta_seconds):
 
             if anna_done and bernd_done:
                 finish(
-                    f"DOEMITZ_CITIZENS_PIE_OK: {sub.get_citizen_count()} citizens simulated, "
+                    f"DOEMITZ_CITIZENS_PIE_OK: {cit.get_citizen_count()} citizens simulated, "
                     f"Anna commuted to place_amtsverwaltung, Bernd commuted to place_kaufhaus "
-                    f"(active actors={sub.get_active_citizen_actor_count()})",
+                    f"(active actors={cit.get_active_citizen_actor_count()})",
                     True,
                 )
     except Exception:

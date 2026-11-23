@@ -43,7 +43,7 @@ def check(_delta_seconds):
         world = editor.get_game_world()
         if world is None:
             return
-        sub = unreal.DoemitzSimulationSubsystem.get(world)
+        sub = unreal.DoemitzTrafficSubsystem.get(world)
         if sub is None or sub.get_vehicle_count() < 8:
             return
 

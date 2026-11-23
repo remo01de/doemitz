@@ -67,6 +67,6 @@ Aufnahmen mit `CaptureSprint13Screenshots.py` unter `unreal/DoemitzLivingCity/Sa
 
 - HLOD für entfernte Zellen und ein kleinerer Laderadius (nötig bei weiterem Wachstum).
 - Am neuen Ostrand (bei der Schleuse) endet die Welt sichtbar; ein Abschluss (Gelände-Schürze oder Horizontkulisse) fehlt.
-- Annas Einkaufsfenster (60 Spielminuten) ist kürzer als ihr Weg vom Amt zum Kaufhaus bei 1x (94 Spielminuten); das war schon vor Sprint 14 so und fiel nur nicht auf, weil zwei andere Einwohner im Kaufhaus einkauften.
+- ~~Annas Einkaufsfenster (60 Spielminuten) ist kürzer als ihr Weg vom Amt zum Kaufhaus bei 1x (94 Spielminuten)~~ → In [Sprint 15](SPRINT_15.md) durch die Hybrid-Zeitskala (`BaseTimeScale = 20.0`) und entfernungsgewichtete Ortszuordnung gelöst (`VerifyEconomy.py` läuft wieder mit echtem `1x`).
 - Schleusenbetrieb, Schiffs- und Fährverkehr, Innenräume am Hafen.
 - Die offenen Punkte der Festung aus Sprint 13.1 bleiben offen.

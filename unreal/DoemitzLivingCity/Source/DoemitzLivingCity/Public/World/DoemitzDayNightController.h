@@ -32,6 +32,8 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Environment")
 	float GetActiveStreetLightIntensity() const { return CurrentStreetLightIntensity; }
 
+	const TArray<TObjectPtr<APointLight>>& GetStreetLights() const { return StreetLights; }
+
 protected:
 	virtual void BeginPlay() override;
 

@@ -158,7 +158,7 @@ void UDoemitzBenchmarkSubsystem::BuildBenchmarkRoute()
 	if (RouteName.Equals(TEXT("hafen"), ESearchCase::IgnoreCase))
 	{
 		// Sprint 14: Rathausplatz -> Elbstrasse -> harbour access road -> Schleuse Doemitz (shortest path in the
-		// road graph, sampled every ~45 m, 1195 m)
+		// road graph, sampled every ~45 m, 1092 m)
 		RoutePoints = {
 			FVector(-21959.3, -8109.0, 180.0), FVector(-20879.2, -5421.8, 180.0), FVector(-21548.4, -2155.1, 180.0),
 			FVector(-18352.5, 1143.3, 180.0), FVector(-15015.5, 4305.9, 180.0), FVector(-13196.9, 7617.7, 180.0),

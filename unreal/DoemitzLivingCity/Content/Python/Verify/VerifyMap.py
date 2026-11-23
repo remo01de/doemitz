@@ -40,9 +40,10 @@ def check(_delta_seconds):
         if world is None:
             return
         sub = unreal.DoemitzSimulationSubsystem.get(world)
+        cit = unreal.DoemitzCitizenSubsystem.get(world)
         pawn = unreal.GameplayStatics.get_player_pawn(world, 0)
         cfgs = unreal.GameplayStatics.get_all_actors_of_class(world, cfg_class)
-        if sub is None or sub.get_citizen_count() < 30 or pawn is None or len(cfgs) != 1:
+        if sub is None or cit is None or cit.get_citizen_count() < 30 or pawn is None or len(cfgs) != 1:
             return
         cfg = cfgs[0]
 
@@ -55,15 +56,15 @@ def check(_delta_seconds):
             raise RuntimeError(f"unexpected map texture dimensions: {bounds}")
 
         # Shrink LOD radius to 15 m so distant citizens have NO active Actor
-        sub.set_citizen_lod_radius_cm(1500.0)
+        cit.set_citizen_lod_radius_cm(1500.0)
         far_cid = None
-        for cid in sub.get_all_citizen_ids():
-            if not sub.is_citizen_high_detail(cid):
+        for cid in cit.get_all_citizen_ids():
+            if not cit.is_citizen_high_detail(cid):
                 far_cid = cid
                 break
         if far_cid is None:
             raise RuntimeError("could not find a citizen without an active Actor for off-pool map marker test")
-        actor_loc_res = sub.get_citizen_actor_location(far_cid)
+        actor_loc_res = cit.get_citizen_actor_location(far_cid)
         has_actor = actor_loc_res[0] if isinstance(actor_loc_res, tuple) else bool(actor_loc_res)
         if has_actor:
             raise RuntimeError(f"expected citizen {far_cid} to have no active Actor")
@@ -77,10 +78,10 @@ def check(_delta_seconds):
             raise RuntimeError("GetCityMapWidget() returned None")
         map_widget.refresh_map_data()
 
-        # Verify mandatory OSM and GeoBasis-DE/M-V attribution text
+        # Verify mandatory OSM and GeoBasis-DE/M-V 2025/2026 attribution text
         attr = map_widget.get_attribution_text_string()
-        if "OpenStreetMap" not in attr or "\u00a9 GeoBasis-DE/M-V" not in attr:
-            raise RuntimeError(f"unexpected map attribution (missing OSM or GeoBasis): {attr!r}")
+        if "OpenStreetMap" not in attr or "\u00a9 GeoBasis-DE/M-V 2025/2026" not in attr:
+            raise RuntimeError(f"unexpected map attribution (missing OSM or GeoBasis 2025/2026): {attr!r}")
 
         # Verify marker counts come from simulation state
         if map_widget.get_citizen_marker_count() != 30:
@@ -102,7 +103,7 @@ def check(_delta_seconds):
             raise RuntimeError(f"player UV out of map bounds: {actual_player_uv}")
 
         # Verify off-pool citizen (no Actor!) marker normalized position matches simulation state
-        far_state = get_state(sub, far_cid)
+        far_state = get_state(cit, far_cid)
         expected_far_uv = sub.project_world_to_normalized_map(far_state.get_editor_property("world_location"))
         far_res = map_widget.get_citizen_normalized_position(far_cid)
         far_ok, actual_far_uv = far_res if isinstance(far_res, tuple) else (True, far_res)

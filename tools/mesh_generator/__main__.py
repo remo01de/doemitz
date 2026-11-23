@@ -896,14 +896,46 @@ def build(
     }
     citizens = None
     if citizens_config:
+        walkable_tunnel_ids = set((landmarks_config or {}).get("tunnel_portals", {}).keys())
+        pedestrian_obstacles = obstacles
+        if bridge_footprints:
+            pedestrian_obstacles = obstacles.difference(union_all(bridge_footprints, grid_size=STREET_GRID_M))
+        built_tunnel_polylines = [
+            (
+                LineString([(p[0], p[1]) for p in tp["polyline_3d_m"]]),
+                tp["polyline_3d_m"],
+            )
+            for tp in tunnel_portals_report
+            if len(tp.get("polyline_3d_m") or []) >= 2
+        ]
+        if built_tunnel_polylines and callable(road_z_resolver):
+            def _ped_road_z(x: float, y: float, _base_fn=road_z_resolver, _tunnels=built_tunnel_polylines) -> float:
+                pt_xy = Point(x, y)
+                for t_line, t_pts in _tunnels:
+                    if t_line.distance(pt_xy) <= 2.2:
+                        proj = t_line.project(pt_xy)
+                        cum = 0.0
+                        for a, b in zip(t_pts, t_pts[1:]):
+                            seg = hypot(b[0] - a[0], b[1] - a[1])
+                            if seg <= 1e-6:
+                                continue
+                            if proj <= cum + seg or b is t_pts[-1]:
+                                frac = max(0.0, min(1.0, (proj - cum) / seg))
+                                return a[2] + (b[2] - a[2]) * frac + ROAD_ELEVATION_M
+                            cum += seg
+                return _base_fn(x, y)
+            pedestrian_road_z = _ped_road_z
+        else:
+            pedestrian_road_z = road_z_resolver
         citizens = build_citizens(
             citizens_config, roads_by_id, scene["layers"]["buildings"], sidewalks,
-            obstacles, road_z_resolver, sidewalk_z_resolver,
+            pedestrian_obstacles, pedestrian_road_z, sidewalk_z_resolver,
             pois=scene["layers"].get("pois"),
             crossings=road_graph.get("crossings"),
             entrances=scene.get("entrances"),
             landmark_entrances=landmark_entrances,
             interior_entrances=interior_entrances,
+            walkable_tunnel_ids=walkable_tunnel_ids,
         )
     economy = None
     if economy_config and citizens:

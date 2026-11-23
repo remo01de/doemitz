@@ -31,9 +31,10 @@ def check(_delta_seconds):
         if world is None:
             return
         sub = unreal.DoemitzSimulationSubsystem.get(world)
+        cit = unreal.DoemitzCitizenSubsystem.get(world)
         pawn = unreal.GameplayStatics.get_player_pawn(world, 0)
         cfgs = unreal.GameplayStatics.get_all_actors_of_class(world, cfg_class)
-        if sub is None or sub.get_citizen_count() == 0 or pawn is None or len(cfgs) != 1:
+        if sub is None or cit is None or cit.get_citizen_count() == 0 or pawn is None or len(cfgs) != 1:
             return
         widget = cfgs[0].get_clock_widget()
         if widget is None:

@@ -23,7 +23,7 @@ class Sprint14Test(unittest.TestCase):
         cls.pkg = json.loads((PROCESSED_DIR / "unreal-city-meshes.json").read_text(encoding="utf-8"))
 
     def test_area_reaches_harbour_and_lock_with_unchanged_origin(self):
-        self.assertEqual(self.config["bounds_lonlat"], [11.2428, 53.1372, 11.2607, 53.1455])
+        self.assertEqual(self.config["bounds_lonlat"], [11.2428, 53.1372, 11.2630, 53.1455])
         self.assertEqual(self.config["origin_lonlat"], [11.2487, 53.14265], "origin must stay for saves and coordinates")
         self.assertAlmostEqual(self.config["dgm"]["reference_elevation_m"], REF_NHN)
         boundary = shape(self.scene["terrain"]["boundary"])
@@ -94,7 +94,7 @@ class Sprint14Test(unittest.TestCase):
         cells = self.pkg["cells"]
         self.assertEqual(cells["cell_size_m"], 256.0)
         self.assertGreaterEqual(cells["loading_range_m"], 512.0)
-        self.assertEqual(cells["grid"], [5, 4])
+        self.assertEqual(cells["grid"], [6, 4])
         names = set(self.pkg["meshes"])
         self.assertTrue(any(n.startswith("WallsBrick__c") for n in names))
         self.assertIn("WallsBrick__lm", names, "landmark walls (church, fortress buildings, Speicher) stay loaded")

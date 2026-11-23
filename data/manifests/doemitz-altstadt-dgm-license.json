@@ -14,6 +14,6 @@
   "reference_elevation_m": 13.001,
   "reference_elevation_source": "dgm1_at_local_origin",
   "status": "imported",
-  "checked_at": "2026-11-21",
-  "notes": "Amtliche Lizenz aus den ISO-Metadaten (CSW-ID a78b6941-7aae-4b2f-9951-89c362e3e79e): Creative Commons Namensnennung – 4.0 International (CC BY 4.0). Freie kommerzielle und nicht-kommerzielle Nutzung sowie Bearbeitung bei sichtbarem Quellenvermerk '© GeoBasis-DE/M-V 2025' zulässig. Rohkachel dgm1_33_248_5894_2_xyz.zip lokal in data/raw/doemitz-altstadt/dgm1/ gespeichert."
+  "checked_at": "2026-11-23",
+  "notes": "Amtliche Lizenz aus den ISO-Metadaten (CSW-ID a78b6941-7aae-4b2f-9951-89c362e3e79e): Creative Commons Namensnennung – 4.0 International (CC BY 4.0). Freie kommerzielle und nicht-kommerzielle Nutzung sowie Bearbeitung bei sichtbarem Quellenvermerk '© GeoBasis-DE/M-V 2025' zulässig. Rohkacheln dgm1_33_248_5894_2_xyz.zip und dgm1_33_250_5894_2_xyz.zip (Sprint 15 Ost-Erweiterung) lokal in data/raw/doemitz-altstadt/dgm1/ gespeichert."
 }

@@ -47,20 +47,22 @@ def check(_delta_seconds):
         if world is None:
             return
         sub = unreal.DoemitzSimulationSubsystem.get(world)
-        if sub is None or sub.get_vehicle_count() == 0 or sub.get_crossing_count() == 0:
+        cit = unreal.DoemitzCitizenSubsystem.get(world)
+        trf = unreal.DoemitzTrafficSubsystem.get(world)
+        if sub is None or cit is None or trf is None or trf.get_vehicle_count() == 0 or trf.get_crossing_count() == 0:
             return
 
         if phase == "setup":
-            loc = sub.get_crossing_location(CROSSING_ID)
+            loc = trf.get_crossing_location(CROSSING_ID)
             if loc is None:
                 raise RuntimeError(f"crossing {CROSSING_ID} not found in subsystem")
             crossing_loc = loc
             # Pause citizen schedule movement via test placement right on the zebra crossing
-            sub.set_time_scale(60.0)
+            sub.set_time_scale(sub.get_base_time_scale())
             unreal.GameplayStatics.set_global_time_dilation(world, 1.0)
-            if not sub.set_citizen_position_for_test("citizen_anna_01", crossing_loc):
+            if not cit.set_citizen_position_for_test("citizen_anna_01", crossing_loc):
                 raise RuntimeError("failed to place citizen_anna_01 on crossing")
-            if not sub.set_vehicle_edge_position_for_test("altstadt_vehicle_01", CROSSING_EDGE, APPROACH_DIST_CM, 400.0):
+            if not trf.set_vehicle_edge_position_for_test("altstadt_vehicle_01", CROSSING_EDGE, APPROACH_DIST_CM, 400.0):
                 raise RuntimeError("failed to place altstadt_vehicle_01 approaching crossing")
             ticks = 0
             phase = "verify_stop"
@@ -68,13 +70,13 @@ def check(_delta_seconds):
 
         if phase == "verify_stop":
             ticks += 1
-            sub.set_citizen_position_for_test("citizen_anna_01", crossing_loc)
-            st = get_vstate(sub, "altstadt_vehicle_01")
+            cit.set_citizen_position_for_test("citizen_anna_01", crossing_loc)
+            st = get_vstate(trf, "altstadt_vehicle_01")
             yielding = bool(st.get_editor_property("yielding_for_crossing"))
             speed = float(st.get_editor_property("current_speed_cm_per_second"))
             if yielding and speed < 50.0:
                 # Clear the crossing and confirm the vehicle resumes driving
-                sub.set_citizen_position_for_test("citizen_anna_01", crossing_loc + unreal.Vector(2000.0, 2000.0, 0.0))
+                cit.set_citizen_position_for_test("citizen_anna_01", crossing_loc + unreal.Vector(2000.0, 2000.0, 0.0))
                 ticks = 0
                 phase = "verify_resume"
                 return
@@ -86,12 +88,12 @@ def check(_delta_seconds):
 
         if phase == "verify_resume":
             ticks += 1
-            st = get_vstate(sub, "altstadt_vehicle_01")
+            st = get_vstate(trf, "altstadt_vehicle_01")
             yielding = bool(st.get_editor_property("yielding_for_crossing"))
             speed = float(st.get_editor_property("current_speed_cm_per_second"))
             if not yielding and speed > 100.0:
                 finish(
-                    f"DOEMITZ_CROSSING_PIE_OK: {sub.get_crossing_count()} crossings loaded, "
+                    f"DOEMITZ_CROSSING_PIE_OK: {trf.get_crossing_count()} crossings loaded, "
                     f"altstadt_vehicle_01 stopped at zebra crossing {CROSSING_ID} for citizen_anna_01 and resumed (speed={speed:.1f} cm/s)",
                     True,
                 )

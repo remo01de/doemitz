@@ -98,8 +98,11 @@ def tick(_delta_seconds):
         if world is None:
             return
         sub = unreal.DoemitzSimulationSubsystem.get(world)
+        cit = unreal.DoemitzCitizenSubsystem.get(world)
+        trf = unreal.DoemitzTrafficSubsystem.get(world)
+        save = unreal.DoemitzSaveSubsystem.get(world)
         pawn = unreal.GameplayStatics.get_player_pawn(world, 0)
-        if sub is None or pawn is None or sub.get_citizen_count() == 0:
+        if sub is None or cit is None or trf is None or save is None or pawn is None or cit.get_citizen_count() == 0:
             return
 
         if phase == "init":
@@ -128,7 +131,7 @@ def tick(_delta_seconds):
             stein_len_cm = stein_edge["length_m"] * 100.0
             for step in range(9):
                 d_cm = min(stein_len_cm - 25.0, max(25.0, (step / 8.0) * stein_len_cm))
-                sub.set_vehicle_edge_position_for_test(car.get_vehicle_id(), stein_edge["id"], d_cm, 400.0)
+                trf.set_vehicle_edge_position_for_test(car.get_vehicle_id(), stein_edge["id"], d_cm, 400.0)
                 car.sync_from_simulation()
                 vloc = car.get_actor_location()
                 exp_z = linear_bridge_z_cm(steinbruecke, vloc.x, vloc.y)
@@ -161,8 +164,8 @@ def tick(_delta_seconds):
                     raise RuntimeError(
                         f"Fläutendörper Steg height deviation {dev:.2f}cm at t={t:.2f}: hit={gz:.1f} vs linear={exp_z:.1f}"
                     )
-                sub.set_citizen_position_for_test("citizen_anna_01", unreal.Vector(sx, sy, gz))
-                anna_loc = get_cstate(sub, "citizen_anna_01").get_editor_property("world_location")
+                cit.set_citizen_position_for_test("citizen_anna_01", unreal.Vector(sx, sy, gz))
+                anna_loc = get_cstate(cit, "citizen_anna_01").get_editor_property("world_location")
                 if abs(anna_loc.z - exp_z) > 5.0:
                     raise RuntimeError(f"Citizen on Fläutendörper Steg off deck: {anna_loc.z:.1f} vs {exp_z:.1f}")
 
@@ -172,13 +175,13 @@ def tick(_delta_seconds):
             mid_exp_z = linear_bridge_z_cm(torbruecke, mid_x, mid_y)
             # Simulate a pre-11.1/v5 sunken save coordinate on Torbrücke (Z=120 cm down in canal)
             pawn.set_actor_location(unreal.Vector(mid_x, mid_y, 120.0), False, True)
-            sub.set_citizen_position_for_test("citizen_anna_01", unreal.Vector(mid_x, mid_y, 120.0))
-            if not sub.save_city_state(slot_name):
+            cit.set_citizen_position_for_test("citizen_anna_01", unreal.Vector(mid_x, mid_y, 120.0))
+            if not save.save_city_state(slot_name):
                 raise RuntimeError("SaveCityState failed on bridge save test")
-            if not sub.load_city_state(slot_name):
+            if not save.load_city_state(slot_name):
                 raise RuntimeError("LoadCityState failed on bridge save test")
             restored_p = pawn.get_actor_location()
-            restored_c = get_cstate(sub, "citizen_anna_01").get_editor_property("world_location")
+            restored_c = get_cstate(cit, "citizen_anna_01").get_editor_property("world_location")
             p_feet = restored_p.z - capsule_half_h
             save_bridge_dev_cm = max(abs(p_feet - mid_exp_z), abs(restored_c.z - mid_exp_z))
             if save_bridge_dev_cm > 12.0:

@@ -121,6 +121,7 @@ def build_edge_wall(meshes, side, water_area, z_bot, water_level, elevation, wal
         (na_x, na_y), (nb_x, nb_y) = normals[i], normals[i + 1]
         za, zb = float(top[i]), float(top[i + 1])
         inward = (-(na_x + nb_x) * 0.5, -(na_y + nb_y) * 0.5, 0.0)
+        outward = ((na_x + nb_x) * 0.5, (na_y + nb_y) * 0.5, 0.0)
         _faces(concrete, [orient([(a.x, a.y, z_bot), (b.x, b.y, z_bot), (b.x, b.y, zb - 0.18), (a.x, a.y, za - 0.18)], inward)])
         ia = (a.x - na_x * 0.05, a.y - na_y * 0.05)
         ib = (b.x - nb_x * 0.05, b.y - nb_y * 0.05)
@@ -128,9 +129,22 @@ def build_edge_wall(meshes, side, water_area, z_bot, water_level, elevation, wal
         ob = (b.x + nb_x * 0.6, b.y + nb_y * 0.6)
         _faces(coping, [
             orient([(*ia, za - 0.2), (*ib, zb - 0.2), (*ib, zb + 0.02), (*ia, za + 0.02)], inward),
+            orient([(*oa, za - 0.2), (*ob, zb - 0.2), (*ob, zb + 0.02), (*oa, za + 0.02)], outward),
             orient([(*ia, za + 0.02), (*ib, zb + 0.02), (*ob, zb + 0.02), (*oa, za + 0.02)], (0, 0, 1)),
             orient([(*ia, za - 0.2), (*ib, zb - 0.2), (*ob, zb - 0.2), (*oa, za - 0.2)], (0, 0, -1)),
         ])
+    # Solid end-caps at both ends of the edge wall (Sprint 15: closes hollow black ends on quay & lock walls)
+    for end_idx, adj_idx in ((0, 1), (n - 1, n - 2)):
+        pe, pa = pts[end_idx], pts[adj_idx]
+        nx, ny = normals[end_idx]
+        ze = float(top[end_idx])
+        tx, ty = pe.x - pa.x, pe.y - pa.y
+        tl = hypot(tx, ty) or 1.0
+        cap_out = (tx / tl, ty / tl, 0.0)
+        ie = (pe.x - nx * 0.05, pe.y - ny * 0.05)
+        oe = (pe.x + nx * 0.6, pe.y + ny * 0.6)
+        _faces(concrete, [orient([(pe.x, pe.y, z_bot), (*oe, z_bot), (*oe, ze - 0.18), (pe.x, pe.y, ze - 0.18)], cap_out)])
+        _faces(coping, [orient([(*ie, ze - 0.2), (*oe, ze - 0.2), (*oe, ze + 0.02), (*ie, ze + 0.02)], cap_out)])
     if ladders:
         spacing = float(cfg.get("ladder_spacing_m", 15.0))
         for s_l in np.arange(spacing * 0.5, side.length - 2.0, spacing):
@@ -160,7 +174,7 @@ def build_edge_wall(meshes, side, water_area, z_bot, water_level, elevation, wal
         def rail_z(x, y, _side=side, _top=top, _s=s_vals):
             return float(np.interp(_side.project(Point(x, y)), _s, _top)) + 0.02
 
-        _railing(railing_m, rail_pts[1:-1] if len(rail_pts) > 3 else rail_pts, rail_z)
+        _railing(railing_m, rail_pts[2:-2] if len(rail_pts) > 5 else (rail_pts[1:-1] if len(rail_pts) > 3 else rail_pts), rail_z)
     return step, top
 
 
@@ -184,9 +198,21 @@ def build_locks(meshes, scene_layers, water_surfaces, elevation, cfg: dict | Non
         gates = [(gid, g) for gid, g in gates_all if g.distance(ring) < 1.0]
         if len(gates) < 2:
             continue
-        gate_union = unary_union([g.buffer(0.3) for _, g in gates])
+        gate_union = unary_union([g.buffer(0.05) for _, g in gates])
         sides = linemerge(ring.difference(gate_union))
-        sides = [g for g in getattr(sides, "geoms", [sides]) if g.geom_type == "LineString" and g.length > 5.0]
+        raw_sides = [g for g in getattr(sides, "geoms", [sides]) if g.geom_type == "LineString" and g.length > 5.0]
+        # Extend each chamber wall 0.55 m into the concrete lock-head blocks at both gate heels so the
+        # WallStepLine keeps terrain cleanly depressed right up to and behind the mitre gate corners.
+        sides = []
+        for s_line in raw_sides:
+            sc = list(s_line.coords)
+            if len(sc) >= 2:
+                d0 = hypot(sc[1][0] - sc[0][0], sc[1][1] - sc[0][1]) or 1.0
+                d1 = hypot(sc[-1][0] - sc[-2][0], sc[-1][1] - sc[-2][1]) or 1.0
+                ext = 0.55
+                sc[0] = (sc[0][0] - (sc[1][0] - sc[0][0]) / d0 * ext, sc[0][1] - (sc[1][1] - sc[0][1]) / d0 * ext)
+                sc[-1] = (sc[-1][0] + (sc[-1][0] - sc[-2][0]) / d1 * ext, sc[-1][1] + (sc[-1][1] - sc[-2][1]) / d1 * ext)
+            sides.append(LineString(sc))
         lvl_chamber = _level_at(water_surfaces, chamber.representative_point().x, chamber.representative_point().y)
         c = chamber.centroid
         gate_info = []

@@ -10,7 +10,10 @@
 #include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
 #include "Components/VerticalBoxSlot.h"
+#include "Economy/DoemitzEconomySubsystem.h"
+#include "Simulation/DoemitzCitizenSubsystem.h"
 #include "Simulation/DoemitzSimulationSubsystem.h"
+#include "Tasks/DoemitzTaskSubsystem.h"
 #include "UI/DoemitzUiText.h"
 
 TSharedRef<SWidget> UDoemitzCitizenDialogWidget::RebuildWidget()
@@ -98,13 +101,16 @@ FString UDoemitzCitizenDialogWidget::GetActivityTextString() const
 void UDoemitzCitizenDialogWidget::RefreshContents()
 {
 	UDoemitzSimulationSubsystem* Subsystem = UDoemitzSimulationSubsystem::Get(this);
-	if (!Subsystem || CurrentCitizenId.IsNone() || !WidgetTree)
+	UDoemitzCitizenSubsystem* Citizens = UDoemitzCitizenSubsystem::Get(this);
+	UDoemitzEconomySubsystem* Economy = UDoemitzEconomySubsystem::Get(this);
+	UDoemitzTaskSubsystem* Tasks = UDoemitzTaskSubsystem::Get(this);
+	if (!Subsystem || !Citizens || CurrentCitizenId.IsNone() || !WidgetTree)
 	{
 		return;
 	}
 
 	FDoemitzCitizenState State;
-	if (!Subsystem->GetCitizenState(CurrentCitizenId, State))
+	if (!Citizens->GetCitizenState(CurrentCitizenId, State))
 	{
 		return;
 	}
@@ -137,14 +143,14 @@ void UDoemitzCitizenDialogWidget::RefreshContents()
 		TaskBox->ClearChildren();
 
 		FDoemitzTaskInstance ActiveFetch;
-		if (Subsystem->GetActiveFetchTaskForCitizen(CurrentCitizenId, ActiveFetch))
+		if (Tasks && Tasks->GetActiveFetchTaskForCitizen(CurrentCitizenId, ActiveFetch))
 		{
 			ActiveFetchTaskId = ActiveFetch.TaskId;
 			FDoemitzItemDefinition Item;
-			const FString ItemName = Subsystem->GetItemDefinition(ActiveFetch.RequestedItemId, Item)
+			const FString ItemName = (Economy && Economy->GetItemDefinition(ActiveFetch.RequestedItemId, Item))
 				? Item.DisplayName
 				: ActiveFetch.RequestedItemId.ToString();
-			const int32 OwnedQty = Subsystem->GetInventoryQuantity(ActiveFetch.RequestedItemId);
+			const int32 OwnedQty = Economy ? Economy->GetInventoryQuantity(ActiveFetch.RequestedItemId) : 0;
 
 			UTextBlock* Title = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
 			Title->SetText(FText::FromString(FString::Printf(
@@ -183,7 +189,7 @@ void UDoemitzCitizenDialogWidget::RefreshContents()
 		}
 
 		FDoemitzTaskInstance Offered;
-		if (Subsystem->GetTaskOfferedByCitizen(CurrentCitizenId, Offered))
+		if (Tasks && Tasks->GetTaskOfferedByCitizen(CurrentCitizenId, Offered))
 		{
 			OfferedTaskId = Offered.TaskId;
 			UTextBlock* OfferTitle = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
@@ -244,9 +250,9 @@ void UDoemitzCitizenDialogWidget::RefreshContents()
 
 void UDoemitzCitizenDialogWidget::HandleAcceptOfferedTaskClicked()
 {
-	if (UDoemitzSimulationSubsystem* Subsystem = UDoemitzSimulationSubsystem::Get(this))
+	if (UDoemitzTaskSubsystem* Tasks = UDoemitzTaskSubsystem::Get(this))
 	{
-		if (!OfferedTaskId.IsNone() && Subsystem->AcceptTask(OfferedTaskId))
+		if (!OfferedTaskId.IsNone() && Tasks->AcceptTask(OfferedTaskId))
 		{
 			RefreshContents();
 		}
@@ -255,9 +261,9 @@ void UDoemitzCitizenDialogWidget::HandleAcceptOfferedTaskClicked()
 
 void UDoemitzCitizenDialogWidget::HandleCompleteFetchClicked()
 {
-	if (UDoemitzSimulationSubsystem* Subsystem = UDoemitzSimulationSubsystem::Get(this))
+	if (UDoemitzTaskSubsystem* Tasks = UDoemitzTaskSubsystem::Get(this))
 	{
-		if (!ActiveFetchTaskId.IsNone() && Subsystem->CompleteFetchTask(ActiveFetchTaskId))
+		if (!ActiveFetchTaskId.IsNone() && Tasks->CompleteFetchTask(ActiveFetchTaskId))
 		{
 			RefreshContents();
 		}

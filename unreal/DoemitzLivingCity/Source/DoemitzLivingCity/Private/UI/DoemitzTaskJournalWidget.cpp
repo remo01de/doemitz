@@ -11,6 +11,7 @@
 #include "Components/VerticalBox.h"
 #include "Components/VerticalBoxSlot.h"
 #include "Simulation/DoemitzSimulationSubsystem.h"
+#include "Tasks/DoemitzTaskSubsystem.h"
 #include "UI/DoemitzUiText.h"
 
 TSharedRef<SWidget> UDoemitzTaskJournalWidget::RebuildWidget()
@@ -88,15 +89,16 @@ FString UDoemitzTaskJournalWidget::GetSummaryTextString() const
 void UDoemitzTaskJournalWidget::RefreshContents()
 {
 	const UDoemitzSimulationSubsystem* Subsystem = UDoemitzSimulationSubsystem::Get(this);
-	if (!Subsystem || !WidgetTree || !ListBox)
+	const UDoemitzTaskSubsystem* Tasks = UDoemitzTaskSubsystem::Get(this);
+	if (!Subsystem || !Tasks || !WidgetTree || !ListBox)
 	{
 		return;
 	}
 
-	const TArray<FDoemitzTaskInstance> Active = Subsystem->GetTasksByStatus(EDoemitzTaskStatus::Active);
-	const TArray<FDoemitzTaskInstance> Completed = Subsystem->GetTasksByStatus(EDoemitzTaskStatus::Completed);
-	const TArray<FDoemitzTaskInstance> Missed = Subsystem->GetTasksByStatus(EDoemitzTaskStatus::Missed);
-	const TArray<FDoemitzTaskInstance> Available = Subsystem->GetTasksByStatus(EDoemitzTaskStatus::Available);
+	const TArray<FDoemitzTaskInstance> Active = Tasks->GetTasksByStatus(EDoemitzTaskStatus::Active);
+	const TArray<FDoemitzTaskInstance> Completed = Tasks->GetTasksByStatus(EDoemitzTaskStatus::Completed);
+	const TArray<FDoemitzTaskInstance> Missed = Tasks->GetTasksByStatus(EDoemitzTaskStatus::Missed);
+	const TArray<FDoemitzTaskInstance> Available = Tasks->GetTasksByStatus(EDoemitzTaskStatus::Available);
 
 	if (SummaryText)
 	{

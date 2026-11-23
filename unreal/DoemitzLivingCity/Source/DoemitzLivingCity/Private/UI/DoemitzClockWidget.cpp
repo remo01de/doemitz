@@ -7,11 +7,14 @@
 #include "Components/CanvasPanelSlot.h"
 #include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
+#include "Economy/DoemitzEconomySubsystem.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "Interaction/DoemitzInteractionComponent.h"
 #include "Settings/DoemitzGraphicsSettings.h"
+#include "Simulation/DoemitzCitizenSubsystem.h"
 #include "Simulation/DoemitzSimulationSubsystem.h"
+#include "Tasks/DoemitzTaskSubsystem.h"
 #include "UI/DoemitzUiText.h"
 
 TSharedRef<SWidget> UDoemitzClockWidget::RebuildWidget()
@@ -117,9 +120,10 @@ void UDoemitzClockWidget::RefreshDisplay()
 	const int32 Hours = TotalMinutes / 60;
 	const int32 Minutes = TotalMinutes % 60;
 	const double Scale = Subsystem->GetTimeScale();
+	const double Multiplier = Subsystem->GetTimeScaleMultiplier();
 	const FString SpeedLabel = Scale <= 0.0
 		? TEXT("Pause")
-		: FString::Printf(TEXT("%.0fx"), FMath::Max(1.0, Scale / 60.0));
+		: FString::Printf(TEXT("%.0fx"), FMath::Max(1.0, Multiplier));
 	const FString DayShort = FDoemitzUiText::FormatWeekdayShort(Subsystem->GetDayOfWeek()).ToString();
 	LastClockText = FText::FromString(FString::Printf(
 		TEXT("%s, Tag %d  |  %02d:%02d  (%s)"),
@@ -129,12 +133,16 @@ void UDoemitzClockWidget::RefreshDisplay()
 		Minutes,
 		*SpeedLabel));
 
+	const UDoemitzCitizenSubsystem* Citizens = UDoemitzCitizenSubsystem::Get(this);
+	const UDoemitzEconomySubsystem* Economy = UDoemitzEconomySubsystem::Get(this);
+	const UDoemitzTaskSubsystem* Tasks = UDoemitzTaskSubsystem::Get(this);
+
 	int32 MovingCount = 0;
-	const TArray<FName> CitizenIds = Subsystem->GetAllCitizenIds();
+	const TArray<FName> CitizenIds = Citizens ? Citizens->GetAllCitizenIds() : TArray<FName>();
 	for (const FName& Id : CitizenIds)
 	{
 		FDoemitzCitizenState State;
-		if (Subsystem->GetCitizenState(Id, State) && State.bIsMoving)
+		if (Citizens && Citizens->GetCitizenState(Id, State) && State.bIsMoving)
 		{
 			MovingCount += 1;
 		}
@@ -143,19 +151,19 @@ void UDoemitzClockWidget::RefreshDisplay()
 		? UDoemitzGraphicsSettings::Get()->GetActiveProfileShortLabel()
 		: TEXT("Low");
 	LastStatusText = FText::FromString(FString::Printf(
-		TEXT("D\u00f6mitz Altstadt  |  %d Einwohner (%d unterwegs, %d nah)  |  Grafik: %s"),
+		TEXT("D\u00f6mitz  |  %d Einwohner (%d unterwegs, %d nah)  |  Grafik: %s"),
 		CitizenIds.Num(),
 		MovingCount,
-		Subsystem->GetActiveCitizenActorCount(),
+		Citizens ? Citizens->GetActiveCitizenActorCount() : 0,
 		*ProfileLabel));
 
 	LastMoneyText = FText::FromString(FString::Printf(
 		TEXT("Konto: %s%s"),
-		*FDoemitzUiText::FormatCentsEur(Subsystem->GetPlayerMoneyCents()).ToString(),
-		Subsystem->IsWorkingShift() ? TEXT("  |  Schicht aktiv") : TEXT("")));
+		*FDoemitzUiText::FormatCentsEur(Economy ? Economy->GetPlayerMoneyCents() : 0).ToString(),
+		(Economy && Economy->IsWorkingShift()) ? TEXT("  |  Schicht aktiv") : TEXT("")));
 
 	FDoemitzTaskInstance ActiveTask;
-	if (Subsystem->GetPrimaryActiveTask(ActiveTask))
+	if (Tasks && Tasks->GetPrimaryActiveTask(ActiveTask))
 	{
 		LastActiveTaskText = FDoemitzUiText::FormatActiveTaskHud(ActiveTask, Subsystem);
 	}
