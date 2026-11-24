@@ -184,9 +184,10 @@ def build_harbour(meshes, scene_layers, water_surfaces, elevation, cfg: dict | N
     # quay walls: water edges within 30 m of the jetties where the bank stands >= 1.2 m above the water
     steps, quays = [], []
     quay_profiles: list[tuple[LineString, np.ndarray, np.ndarray]] = []
-    jetty_zone = unary_union([g.buffer(30.0) for g in raw_deck_geoms]) if raw_deck_geoms else None
+    jetty_zone = unary_union([g.buffer(33.0) for g in raw_deck_geoms]) if raw_deck_geoms else None
     if jetty_zone is not None:
         walls_zone = unary_union([w.buffer(2.0) for w in existing_walls]) if existing_walls else None
+        skip_zone = unary_union([sw.buffer(0.15) for sw in skip_water]) if skip_water else None
         for poly, level in water_surfaces:
             if not poly.intersects(jetty_zone):
                 continue
@@ -195,6 +196,8 @@ def build_harbour(meshes, scene_layers, water_surfaces, elevation, cfg: dict | N
             edge = LineString(poly.exterior.coords).intersection(jetty_zone)
             if walls_zone is not None:
                 edge = edge.difference(walls_zone)
+            if skip_zone is not None:
+                edge = edge.difference(skip_zone)
             pieces = linemerge(edge) if edge.geom_type == "MultiLineString" else edge
             for piece in getattr(pieces, "geoms", [pieces]):
                 if piece.geom_type != "LineString" or piece.length < 6.0:

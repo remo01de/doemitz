@@ -45,6 +45,8 @@ GERMAN_NAMES = [
     "Marie", "Nils", "Olga", "Paul", "Petra", "Ralf", "Sabine", "Stefan",
     "Tanja", "Uwe", "Vera", "Walter", "Anja", "Bastian", "Claudia", "Dirk",
     "Eva", "Florian", "Gabi", "Heiko", "Iris", "Jonas",
+    "Katrin", "Lars", "Maren", "Nico", "Pia", "René", "Sven", "Tina",
+    "Ulrich", "Viktoria", "Wolfgang", "Yannick", "Zoe", "Achim", "Britta",
 ]
 
 
@@ -610,7 +612,7 @@ def build_citizens(
         osm_oh = entry.get("opening_hours") or (matching_poi["properties"].get("opening_hours") if matching_poi else None)
         register_place(
             place_id, entry["name"], building_id, entry["kind"],
-            buildings_by_id[building_id], osm_oh=osm_oh, on_pilot=True,
+            buildings_by_id[building_id], osm_oh=osm_oh, on_pilot=bool(entry.get("on_pilot", True)),
         )
 
     # 2. Register usable OSM POIs as work / shop / gastronomy / tourism places.

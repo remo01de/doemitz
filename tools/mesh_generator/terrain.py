@@ -21,59 +21,66 @@ DEFAULT_MAX_TRIANGLES = 150000
 
 
 def _clip_triangle_at_step(tri_xyz, clips):
-    """Split a terrain triangle crossed by a retaining wall line; new vertices take crest (high) or foot (low)."""
-    xs = [p[0] for p in tri_xyz]
-    ys = [p[1] for p in tri_xyz]
+    """Split a terrain triangle crossed by one or more retaining/quay wall lines; new vertices take crest or foot."""
+    pending = [tri_xyz]
+    clipped_any = False
     for step, line_prep, lb in clips:
-        if max(xs) < lb[0] or min(xs) > lb[2] or max(ys) < lb[1] or min(ys) > lb[3]:
-            continue
-        tri = Polygon([(p[0], p[1]) for p in tri_xyz])
-        if abs(tri.area) < 1e-9 or not line_prep.intersects(tri):
-            continue
-        # extend the line a little so it cuts through triangles at its ends
-        coords = list(step.line.coords)
-        (x0, y0), (x1, y1) = coords[0], coords[1]
-        (xa, ya), (xb, yb) = coords[-2], coords[-1]
-        d0 = hypot(x1 - x0, y1 - y0) or 1.0
-        d1 = hypot(xb - xa, yb - ya) or 1.0
-        ext = LineString([(x0 - (x1 - x0) / d0 * 0.5, y0 - (y1 - y0) / d0 * 0.5)] + coords +
-                         [(xb + (xb - xa) / d1 * 0.5, yb + (yb - ya) / d1 * 0.5)])
-        parts = shapely.ops.split(tri, ext)
-        if len(parts.geoms) < 2:
-            return None
-        (px0, py0, pz0), (px1, py1, pz1), (px2, py2, pz2) = tri_xyz
-        det = (py1 - py2) * (px0 - px2) + (px2 - px1) * (py0 - py2)
-
-        def plane(x, y):
-            if abs(det) < 1e-12:
-                return pz0
-            w0 = ((py1 - py2) * (x - px2) + (px2 - px1) * (y - py2)) / det
-            w1 = ((py2 - py0) * (x - px2) + (px0 - px2) * (y - py2)) / det
-            return w0 * pz0 + w1 * pz1 + (1.0 - w0 - w1) * pz2
-
-        originals = {(round(p[0], 6), round(p[1], 6)): p[2] for p in tri_xyz}
-        out = []
-        for part in parts.geoms:
-            if part.area < 1e-6:
+        next_pending = []
+        for cur in pending:
+            xs = [p[0] for p in cur]
+            ys = [p[1] for p in cur]
+            if max(xs) < lb[0] or min(xs) > lb[2] or max(ys) < lb[1] or min(ys) > lb[3]:
+                next_pending.append(cur)
                 continue
-            rp = part.representative_point()
-            high = step.side(rp.x, rp.y) > 0
-            for sub in orient_polygons(constrained_delaunay_triangles(part)).geoms:
-                pts = []
-                for x, y in list(sub.exterior.coords)[:3]:
-                    key = (round(x, 6), round(y, 6))
-                    if key in originals:
-                        z = originals[key]
-                    elif step.in_gap(x, y) or step.line.distance(Point(x, y)) > 0.05:
-                        z = plane(x, y)
-                    elif high:
-                        z = max(plane(x, y), step.at(step.top_z, x, y) - 0.03)
-                    else:
-                        z = min(plane(x, y), step.at(step.base_z, x, y) + 0.05)
-                    pts.append((round(x, 4), round(y, 4), round(z, 4)))
-                out.append(pts)
-        return out
-    return None
+            tri = Polygon([(p[0], p[1]) for p in cur])
+            if abs(tri.area) < 1e-9 or not line_prep.intersects(tri):
+                next_pending.append(cur)
+                continue
+            # extend the line a little so it cuts cleanly through triangles at wall ends / corners
+            coords = list(step.line.coords)
+            (x0, y0), (x1, y1) = coords[0], coords[1]
+            (xa, ya), (xb, yb) = coords[-2], coords[-1]
+            d0 = hypot(x1 - x0, y1 - y0) or 1.0
+            d1 = hypot(xb - xa, yb - ya) or 1.0
+            ext = LineString([(x0 - (x1 - x0) / d0 * 0.5, y0 - (y1 - y0) / d0 * 0.5)] + coords +
+                             [(xb + (xb - xa) / d1 * 0.5, yb + (yb - ya) / d1 * 0.5)])
+            parts = shapely.ops.split(tri, ext)
+            if len(parts.geoms) < 2:
+                next_pending.append(cur)
+                continue
+            clipped_any = True
+            (px0, py0, pz0), (px1, py1, pz1), (px2, py2, pz2) = cur
+            det = (py1 - py2) * (px0 - px2) + (px2 - px1) * (py0 - py2)
+
+            def plane(x, y):
+                if abs(det) < 1e-12:
+                    return pz0
+                w0 = ((py1 - py2) * (x - px2) + (px2 - px1) * (y - py2)) / det
+                w1 = ((py2 - py0) * (x - px2) + (px0 - px2) * (y - py2)) / det
+                return w0 * pz0 + w1 * pz1 + (1.0 - w0 - w1) * pz2
+
+            originals = {(round(p[0], 6), round(p[1], 6)): p[2] for p in cur}
+            for part in parts.geoms:
+                if part.area < 1e-6:
+                    continue
+                rp = part.representative_point()
+                high = step.side(rp.x, rp.y) > 0
+                for sub in orient_polygons(constrained_delaunay_triangles(part)).geoms:
+                    pts = []
+                    for x, y in list(sub.exterior.coords)[:3]:
+                        key = (round(x, 6), round(y, 6))
+                        if key in originals:
+                            z = originals[key]
+                        elif step.in_gap(x, y) or (high and step.line.distance(Point(x, y)) > 0.05) or ext.distance(Point(x, y)) > 0.05:
+                            z = plane(x, y)
+                        elif high:
+                            z = max(plane(x, y), step.at(step.top_z, x, y) - 0.03)
+                        else:
+                            z = min(plane(x, y), step.at(step.base_z, x, y) + 0.05)
+                        pts.append((round(x, 4), round(y, 4), round(z, 4)))
+                    next_pending.append(pts)
+        pending = next_pending
+    return pending if clipped_any else None
 
 
 def _clip_triangle_at_wall(tri_xyz, clips):
@@ -524,9 +531,15 @@ def build_terrain_tiles(
                     has_ceiling[r, c] = True
                     depressed[r, c] = True
 
-    # 3. Depress & cut out terrain strictly inside building footprints (inset 0.40 m so plinths meet ground seamlessly)
+    # 3. Depress & cut out terrain strictly inside building footprints (inset 0.40 m so plinths meet ground seamlessly).
+    # Skip walk-in interior footprints here: Step 3c clips every triangle cleanly outside their outer walls, whereas
+    # depressing interior grid cells to the lowest footing corner (b_min_z) on a sloped building creates a steep trench
+    # immediately outside an uphill entrance door.
+    interior_polys = [fpoly for fpoly, _ in (interior_floors or [])]
     building_cut_mask = np.zeros((max_gy + 1, max_gx + 1), dtype=np.bool_)
     for bpoly, b_min_z in building_entries:
+        if interior_polys and any(bpoly.equals(ip) for ip in interior_polys):
+            continue
         inset = bpoly.buffer(-0.40)
         if inset.is_empty:
             continue
@@ -559,7 +572,9 @@ def build_terrain_tiles(
         for fpoly, _ in (interior_floors or [])
     ]
     if interior_cuts:
-        building_cut_mask |= _rasterize_mask([c for c, _ in interior_cuts], e_coords, n_coords)
+        imask = _rasterize_mask([c for c, _ in interior_cuts], e_coords, n_coords)
+        building_cut_mask |= imask
+        depressed |= imask
 
     # Open terrain points: strictly non-depressed
     open_mask = ~depressed
@@ -767,3 +782,113 @@ def build_terrain_tiles(
             "outer_max_vertical_error_m": round(verified_max_open_err, 5)} if use_outer else {}),
     }
     return tile_meshes, report
+
+
+def build_horizon_skirt(
+    elevation: ElevationModel,
+    bounds: Polygon,
+    skirt_width_m: float = 2500.0,
+    edge_step_m: float = 16.0,
+    base_m: float = 0.0,
+) -> tuple[dict, dict]:
+    """
+    Build a lightweight procedural non-colliding terrain apron outside the clipped DGM1 bounds (Sprint 16).
+    Eliminates the sharp drop into the dark SkyAtmosphere lower hemisphere at the map border while keeping
+    all geometry strictly outside the playable bounds. Heights outside the DGM1 boundary are assumed smooth
+    Elbe lowlands blending from the exact DGM1 edge elevation toward the outer edge median.
+    """
+    min_e, min_n, max_e, max_n = bounds.bounds
+    w = max(500.0, float(skirt_width_m))
+
+    # Build ordered CCW perimeter vertices along the 4 edges of the rectangular bounds
+    nx = max(4, int(ceil((max_e - min_e) / edge_step_m)))
+    ny = max(4, int(ceil((max_n - min_n) / edge_step_m)))
+    xs_bot = np.linspace(min_e, max_e, nx + 1)
+    ys_right = np.linspace(min_n, max_n, ny + 1)
+    xs_top = np.linspace(max_e, min_e, nx + 1)
+    ys_left = np.linspace(max_n, min_n, ny + 1)
+
+    inner_xy: list[tuple[float, float]] = []
+    outer_xy: list[tuple[float, float]] = []
+    # Bottom edge (south): outward = (0, -w)
+    for x in xs_bot[:-1]:
+        t = (x - min_e) / max(max_e - min_e, 1e-6)
+        ox = (min_e - w) + t * ((max_e - min_e) + 2.0 * w)
+        inner_xy.append((float(x), float(min_n)))
+        outer_xy.append((float(ox), float(min_n - w)))
+    # Right edge (east): outward = (+w, 0)
+    for y in ys_right[:-1]:
+        t = (y - min_n) / max(max_n - min_n, 1e-6)
+        oy = (min_n - w) + t * ((max_n - min_n) + 2.0 * w)
+        inner_xy.append((float(max_e), float(y)))
+        outer_xy.append((float(max_e + w), float(oy)))
+    # Top edge (north): outward = (0, +w)
+    for x in xs_top[:-1]:
+        t = (max_e - x) / max(max_e - min_e, 1e-6)
+        ox = (max_e + w) - t * ((max_e - min_e) + 2.0 * w)
+        inner_xy.append((float(x), float(max_n)))
+        outer_xy.append((float(ox), float(max_n + w)))
+    # Left edge (west): outward = (-w, 0)
+    for y in ys_left[:-1]:
+        t = (max_n - y) / max(max_n - min_n, 1e-6)
+        oy = (max_n + w) - t * ((max_n - min_n) + 2.0 * w)
+        inner_xy.append((float(min_e), float(y)))
+        outer_xy.append((float(min_e - w), float(oy)))
+
+    n_ring = len(inner_xy)
+    if elevation.is_flat:
+        inner_z = np.full(n_ring, float(base_m) - 0.04, dtype=np.float64)
+        outer_z = np.full(n_ring, float(base_m) - 0.50, dtype=np.float64)
+    else:
+        ix = np.array([p[0] for p in inner_xy], dtype=np.float64)
+        iy = np.array([p[1] for p in inner_xy], dtype=np.float64)
+        edge_z = elevation.sample_array(ix, iy)
+        # Drop inner edge by 0.05 m to prevent Z-fighting with clipped outer terrain tile seams;
+        # gently settle outer horizon toward the Elbe lowland median (-0.6 m below median) so the
+        # distant horizon blends naturally into ExponentialHeightFog.
+        inner_z = edge_z - 0.05
+        outer_level = float(np.median(edge_z)) - 0.60
+        outer_z = np.full(n_ring, outer_level, dtype=np.float64)
+
+    # Use a 2-band ring (0 -> 250 m smooth transition, 250 m -> skirt_width_m far lowland plain)
+    mid_frac = min(0.12, 250.0 / w)
+    vertices: list[tuple[float, float, float]] = []
+    # Band 0: inner (0..n-1), Band 1: mid (n..2n-1), Band 2: outer (2n..3n-1)
+    for i in range(n_ring):
+        vertices.append((round(inner_xy[i][0], 4), round(inner_xy[i][1], 4), round(float(inner_z[i]), 4)))
+    for i in range(n_ring):
+        mx = inner_xy[i][0] + (outer_xy[i][0] - inner_xy[i][0]) * mid_frac
+        my = inner_xy[i][1] + (outer_xy[i][1] - inner_xy[i][1]) * mid_frac
+        mz = float(inner_z[i]) * 0.6 + float(outer_z[i]) * 0.4
+        vertices.append((round(mx, 4), round(my, 4), round(mz, 4)))
+    for i in range(n_ring):
+        vertices.append((round(outer_xy[i][0], 4), round(outer_xy[i][1], 4), round(float(outer_z[i]), 4)))
+
+    triangles: list[tuple[int, int, int]] = []
+    # Inner ring is CCW -> outer ring lies to the right of each segment (a -> b).
+    # For upward (+Z) normals in (east, north, up), CCW triangle is (a_in, a_out, b_out) and (a_in, b_out, b_in).
+    for band in (0, 1):
+        base_in = band * n_ring
+        base_out = (band + 1) * n_ring
+        for i in range(n_ring):
+            j = (i + 1) % n_ring
+            a_in, b_in = base_in + i, base_in + j
+            a_out, b_out = base_out + i, base_out + j
+            triangles.append((a_in, a_out, b_out))
+            triangles.append((a_in, b_out, b_in))
+
+    mesh = {
+        "material": "Terrain",
+        "collision": False,
+        "distance_field": False,
+        "vertices": vertices,
+        "triangles": triangles,
+    }
+    report = {
+        "width_m": round(w, 1),
+        "edge_step_m": round(float(edge_step_m), 1),
+        "vertex_count": len(vertices),
+        "triangle_count": len(triangles),
+        "source": "assumed_sprint16_horizon_skirt",
+    }
+    return mesh, report

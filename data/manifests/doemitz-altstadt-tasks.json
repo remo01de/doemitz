@@ -130,6 +130,64 @@
       "duration_minutes": 180,
       "reward_cents": 700,
       "reward_source": "assumed_fictional_task_reward"
+    },
+    {
+      "id": "task_tpl_errand_hafenrestaurant_hotel",
+      "type": "errand",
+      "title": "Menükarten fürs Hafenhotel",
+      "description": "Hole die neuen Menükarten im Dömitzer Hafen Restaurant ab und bringe sie zur Rezeption des Hotels Dömitzer Hafen.",
+      "pickup_place_id": "poi:osm:node:1125977013",
+      "delivery_place_id": "poi:osm:node:387219809",
+      "parcel_name": "Menükarten-Mappe",
+      "duration_minutes": 180,
+      "reward_cents": 900,
+      "reward_source": "assumed_fictional_task_reward"
+    },
+    {
+      "id": "task_tpl_errand_touristeninfo_hafenhotel",
+      "type": "errand",
+      "title": "Hafenprospekte ans Hotel liefern",
+      "description": "Hole ein Paket mit neuen Hafenprospekten in der Touristeninformation ab und liefere es im Hotel Dömitzer Hafen ab.",
+      "pickup_place_id": "poi:osm:node:2874556071",
+      "delivery_place_id": "poi:osm:node:387219809",
+      "parcel_name": "Prospektpaket",
+      "duration_minutes": 210,
+      "reward_cents": 1300,
+      "reward_source": "assumed_fictional_task_reward"
+    },
+    {
+      "id": "task_tpl_errand_apotheke_hafenrestaurant",
+      "type": "errand",
+      "title": "Verbandkasten fürs Hafenrestaurant",
+      "description": "Hole das aufgefüllte Erste-Hilfe-Set in der Fritz-Reuter-Apotheke ab und bringe es ins Dömitzer Hafen Restaurant.",
+      "pickup_place_id": "poi:osm:node:1794647095",
+      "delivery_place_id": "poi:osm:node:1125977013",
+      "parcel_name": "Erste-Hilfe-Set",
+      "duration_minutes": 210,
+      "reward_cents": 1350,
+      "reward_source": "assumed_fictional_task_reward"
+    },
+    {
+      "id": "task_tpl_fetch_fischbroetchen_hafen",
+      "type": "fetch",
+      "title": "Besorgung: Elb-Fischbrötchen vom Hafen",
+      "description": "Hole ein frisches Elb-Fischbrötchen im Dömitzer Hafen Restaurant und bringe es vorbei.",
+      "requested_item_id": "item_fischbroetchen",
+      "preferred_shop_place_id": "poi:osm:node:1125977013",
+      "duration_minutes": 210,
+      "reward_cents": 1150,
+      "reward_source": "assumed_fictional_task_reward"
+    },
+    {
+      "id": "task_tpl_fetch_hafenfuehrer",
+      "type": "fetch",
+      "title": "Besorgung: Wasserwanderkarte vom Hafen",
+      "description": "Kaufe eine Wasserwanderkarte Elde & Elbe an der Rezeption im Hotel Dömitzer Hafen und übergib sie persönlich.",
+      "requested_item_id": "item_hafenfuehrer",
+      "preferred_shop_place_id": "poi:osm:node:387219809",
+      "duration_minutes": 210,
+      "reward_cents": 1200,
+      "reward_source": "assumed_fictional_task_reward"
     }
   ]
 }

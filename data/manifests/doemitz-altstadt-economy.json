@@ -29,7 +29,8 @@
         { "id": "item_kaffee", "name": "Filterkaffee", "price_cents": 320, "price_source": "assumed_fictional_price" },
         { "id": "item_kuchen", "name": "Stück Apfelkuchen", "price_cents": 420, "price_source": "assumed_fictional_price" },
         { "id": "item_softeis", "name": "DDR-Softeis", "price_cents": 250, "price_source": "assumed_fictional_price" },
-        { "id": "item_fischbroetchen", "name": "Elb-Fischbrötchen", "price_cents": 580, "price_source": "assumed_fictional_price" }
+        { "id": "item_fischbroetchen", "name": "Elb-Fischbrötchen", "price_cents": 580, "price_source": "assumed_fictional_price" },
+        { "id": "item_matjesplatte", "name": "Matjes nach Hausfrauenart", "price_cents": 1190, "price_source": "assumed_fictional_price" }
       ]
     },
     {
@@ -37,7 +38,8 @@
       "items": [
         { "id": "item_stadtplan", "name": "Altstadt-Faltplan", "price_cents": 350, "price_source": "assumed_fictional_price" },
         { "id": "item_postkarte", "name": "Ansichtskarte Festung Dömitz", "price_cents": 150, "price_source": "assumed_fictional_price" },
-        { "id": "item_festungsfuehrer", "name": "Festungsführer", "price_cents": 890, "price_source": "assumed_fictional_price" }
+        { "id": "item_festungsfuehrer", "name": "Festungsführer", "price_cents": 890, "price_source": "assumed_fictional_price" },
+        { "id": "item_hafenfuehrer", "name": "Wasserwanderkarte Elde & Elbe", "price_cents": 750, "price_source": "assumed_fictional_price" }
       ]
     }
   ],
@@ -80,6 +82,26 @@
       "shift_end_minute": 720,
       "hourly_wage_cents": 1500,
       "work_days": [0, 1, 2, 3, 4],
+      "wage_source": "assumed_fictional_wage"
+    },
+    {
+      "id": "job_hafenhotel_rezeption",
+      "place_id": "poi:osm:node:387219809",
+      "title": "Rezeption Hotel Dömitzer Hafen",
+      "shift_start_minute": 540,
+      "shift_end_minute": 780,
+      "hourly_wage_cents": 1600,
+      "work_days": [0, 1, 2, 3, 4, 5, 6],
+      "wage_source": "assumed_fictional_wage"
+    },
+    {
+      "id": "job_hafenrestaurant_service",
+      "place_id": "poi:osm:node:1125977013",
+      "title": "Servicekraft Hafenrestaurant",
+      "shift_start_minute": 690,
+      "shift_end_minute": 930,
+      "hourly_wage_cents": 1520,
+      "work_days": [0, 1, 2, 3, 4, 5, 6],
       "wage_source": "assumed_fictional_wage"
     }
   ]

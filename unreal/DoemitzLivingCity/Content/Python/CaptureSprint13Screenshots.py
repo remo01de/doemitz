@@ -63,11 +63,19 @@ ALL_SHOTS = [
     ("32_weg_altstadt_hafen.png", ue_pos(420.0, -300.0, 8.0), ue_pos(640.0, -470.0, 2.0)),
     # Sprint 15: South marina quay landing + dual sloped gangways with handrails
     ("33_hafen_gangway.png", ue_pos(634.0, -533.0, 4.5), ue_pos(637.0, -548.5, 0.5)),
+    # Sprint 16: Distant view across harbour toward Altstadt & horizon (tests HLOD + horizon skirt + fog)
+    ("34_horizont_hafen_altstadt.png", ue_pos(720.0, -530.0, 22.0), ue_pos(120.0, -180.0, 8.0)),
 ]
 # Interior views (day and night), computed from the generated package: camera just inside the door
 _project = Path(unreal.Paths.convert_relative_path_to_full(unreal.Paths.project_dir()))
 _package = json.loads((_project.parents[1] / "data/processed/doemitz-altstadt/unreal-city-meshes.json").read_text(encoding="utf-8"))
-_INTERIOR_SLUGS = {"place_kaufhaus": "kaufhaus", "poi:osm:node:1794647095": "apotheke", "poi:osm:way:41020272": "buergerbuero"}
+_INTERIOR_SLUGS = {
+    "place_kaufhaus": "kaufhaus",
+    "poi:osm:node:1794647095": "apotheke",
+    "poi:osm:way:41020272": "buergerbuero",
+    "poi:osm:node:387219809": "hafen_hotel",
+    "poi:osm:node:1125977013": "hafen_restaurant",
+}
 _NIGHT = set()
 _idx = 12
 for _entry in _package.get("interiors", []):
@@ -96,7 +104,7 @@ SHOTS = [shot for shot in ALL_SHOTS if not _subset or shot[0].rsplit(".", 1)[0] 
 
 editor = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem)
 level = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
-deadline = monotonic() + 240
+deadline = monotonic() + 480
 shot_idx = 0
 state = "warmup"
 wait_ticks = 0
@@ -114,18 +122,24 @@ def _set_night(night):
     actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem).get_all_level_actors()
     sun = next((a for a in actors if a.get_actor_label() == "Altstadt Sun"), None)
     sky = next((a for a in actors if a.get_actor_label() == "Altstadt Skylight"), None)
+    fog = next((a for a in actors if a.get_actor_label() == "Altstadt Fog"), None)
     if sun is None or sky is None:
         return
     sky_comp = sky.get_component_by_class(unreal.SkyLightComponent)
+    fog_comp = fog.get_component_by_class(unreal.ExponentialHeightFogComponent) if fog is not None else None
     if _sun_rot is None:
         _sun_rot = sun.get_actor_rotation()
         _sky_int = sky_comp.intensity
     if night:
         sun.set_actor_rotation(unreal.Rotator(pitch=25.0, yaw=_sun_rot.yaw, roll=0.0), False)
         sky_comp.set_intensity(0.08)
+        if fog_comp is not None:
+            fog_comp.set_fog_inscattering_color(unreal.LinearColor(0.05, 0.08, 0.16, 1.0))
     else:
         sun.set_actor_rotation(_sun_rot, False)
         sky_comp.set_intensity(_sky_int)
+        if fog_comp is not None:
+            fog_comp.set_fog_inscattering_color(unreal.LinearColor(0.62, 0.74, 0.88, 1.0))
 
 
 def finish(msg, ok):

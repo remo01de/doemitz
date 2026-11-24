@@ -99,7 +99,7 @@ class Sprint08PipelineTests(unittest.TestCase):
         )
         self.assertEqual(pkg1["citizens"], pkg2["citizens"])
         cit = pkg1["citizens"]
-        self.assertEqual(len(cit["citizens"]), 30)
+        self.assertEqual(len(cit["citizens"]), citizens_cfg["population"]["target_count"])
         ids = {c["id"] for c in cit["citizens"]}
         for legacy in ("citizen_anna_01", "citizen_bernd_02", "citizen_clara_03", "citizen_dieter_04"):
             self.assertIn(legacy, ids)

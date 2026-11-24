@@ -1,8 +1,17 @@
 #include "World/DoemitzWorldTools.h"
 
+#include "AssetRegistry/AssetRegistryModule.h"
 #include "Engine/Engine.h"
+#include "Engine/StaticMeshActor.h"
 #include "Engine/World.h"
+#include "EngineUtils.h"
+#include "Misc/PackageName.h"
+#include "UObject/SavePackage.h"
 #include "UObject/UnrealType.h"
+#include "WorldPartition/HLOD/HLODActor.h"
+#include "WorldPartition/HLOD/HLODLayer.h"
+#include "WorldPartition/RuntimeHashSet/RuntimePartitionLHGrid.h"
+#include "WorldPartition/RuntimeHashSet/WorldPartitionRuntimeHashSet.h"
 #include "WorldPartition/WorldPartition.h"
 #include "WorldPartition/WorldPartitionSubsystem.h"
 
@@ -114,7 +123,211 @@ FString UDoemitzWorldTools::DescribeStreamingGrid(UObject* WorldContextObject)
 		Report += FString::Printf(TEXT(" %s cell=%s range=%s;"), *Name,
 			Cell ? *NumberValue(Cell, Container) : TEXT("-"), Range ? *NumberValue(Range, Container) : TEXT("-"));
 	});
+#if WITH_EDITORONLY_DATA
+	if (const FArrayProperty* Partitions = FindFProperty<FArrayProperty>(Hash->GetClass(), TEXT("RuntimePartitions")))
+	{
+		FScriptArrayHelper Helper(Partitions, Partitions->ContainerPtrToValuePtr<void>(Hash));
+		for (int32 Index = 0; Index < Helper.Num(); ++Index)
+		{
+			const FRuntimePartitionDesc* Desc = reinterpret_cast<const FRuntimePartitionDesc*>(Helper.GetRawPtr(Index));
+			if (!Desc)
+			{
+				continue;
+			}
+			for (const FRuntimePartitionHLODSetup& HLOD : Desc->HLODSetups)
+			{
+				if (HLOD.PartitionLayer)
+				{
+					const FProperty* Cell = HLOD.PartitionLayer->GetClass()->FindPropertyByName(TEXT("CellSize"));
+					const FProperty* Range = HLOD.PartitionLayer->GetClass()->FindPropertyByName(TEXT("LoadingRange"));
+					Report += FString::Printf(TEXT(" HLOD[%s] cell=%s range=%s layers=%d;"),
+						*HLOD.Name.ToString(),
+						Cell ? *NumberValue(Cell, HLOD.PartitionLayer) : TEXT("-"),
+						Range ? *NumberValue(Range, HLOD.PartitionLayer) : TEXT("-"),
+						HLOD.HLODLayers.Num());
+				}
+			}
+		}
+	}
+#endif
+	int32 HLODActorCount = 0;
+	for (TActorIterator<AWorldPartitionHLOD> It(World); It; ++It)
+	{
+		if (IsValid(*It))
+		{
+			++HLODActorCount;
+		}
+	}
+	Report += FString::Printf(TEXT(" hlod_actors=%d;"), HLODActorCount);
 	return Report;
+}
+
+FString UDoemitzWorldTools::ConfigureHLODSetup(UObject* WorldContextObject, const FString& HLODLayerAssetPath, int32 HLODCellSizeCm, int32 HLODLoadingRangeCm)
+{
+#if WITH_EDITOR
+	UWorld* World = GEngine ? GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::ReturnNull) : nullptr;
+	UWorldPartition* WorldPartition = World ? World->GetWorldPartition() : nullptr;
+	if (!WorldPartition)
+	{
+		return TEXT("ERROR: no World Partition");
+	}
+	if (HLODLayerAssetPath.IsEmpty())
+	{
+		return TEXT("ERROR: empty HLODLayerAssetPath");
+	}
+
+	const FString PackagePath = FPackageName::ObjectPathToPackageName(HLODLayerAssetPath);
+	const FString AssetName = FPackageName::GetLongPackageAssetName(PackagePath);
+	UHLODLayer* HLODLayer = LoadObject<UHLODLayer>(nullptr, *FString::Printf(TEXT("%s.%s"), *PackagePath, *AssetName));
+	if (!HLODLayer)
+	{
+		UPackage* LayerPackage = CreatePackage(*PackagePath);
+		if (!LayerPackage)
+		{
+			return TEXT("ERROR: could not create HLODLayer package");
+		}
+		LayerPackage->FullyLoad();
+		HLODLayer = NewObject<UHLODLayer>(LayerPackage, *AssetName, RF_Public | RF_Standalone);
+		if (!HLODLayer)
+		{
+			return TEXT("ERROR: could not create UHLODLayer object");
+		}
+		FAssetRegistryModule::AssetCreated(HLODLayer);
+	}
+
+	HLODLayer->Modify();
+	HLODLayer->SetLayerType(EHLODLayerType::Instancing);
+	HLODLayer->MarkPackageDirty();
+
+	// Save the HLODLayer asset package immediately so WorldPartitionHLODsBuilder can load it from disk.
+	UPackage* LayerPackage = HLODLayer->GetOutermost();
+	const FString PackageFilename = FPackageName::LongPackageNameToFilename(LayerPackage->GetName(), FPackageName::GetAssetPackageExtension());
+	FSavePackageArgs SaveArgs;
+	SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
+	SaveArgs.SaveFlags = SAVE_NoError;
+	if (!UPackage::SavePackage(LayerPackage, HLODLayer, *PackageFilename, SaveArgs))
+	{
+		return FString::Printf(TEXT("ERROR: could not save HLODLayer to %s"), *PackageFilename);
+	}
+
+	UWorldPartitionRuntimeHashSet* HashSet = Cast<UWorldPartitionRuntimeHashSet>(GetRuntimeHash(World));
+	if (!HashSet)
+	{
+		return TEXT("ERROR: expected UWorldPartitionRuntimeHashSet");
+	}
+	const FArrayProperty* PartitionsProp = FindFProperty<FArrayProperty>(HashSet->GetClass(), TEXT("RuntimePartitions"));
+	if (!PartitionsProp)
+	{
+		return TEXT("ERROR: RuntimePartitions property not found");
+	}
+
+	WorldPartition->Modify();
+	WorldPartition->SetDefaultHLODLayer(HLODLayer);
+	HashSet->Modify();
+
+	FScriptArrayHelper Helper(PartitionsProp, PartitionsProp->ContainerPtrToValuePtr<void>(HashSet));
+	if (Helper.Num() == 0)
+	{
+		return TEXT("ERROR: RuntimePartitions is empty");
+	}
+
+	FRuntimePartitionDesc* MainDesc = reinterpret_cast<FRuntimePartitionDesc*>(Helper.GetRawPtr(0));
+	if (!MainDesc || !MainDesc->MainLayer)
+	{
+		return TEXT("ERROR: MainPartition has no MainLayer");
+	}
+
+	MainDesc->HLODSetups.Reset();
+	FRuntimePartitionHLODSetup& Setup = MainDesc->HLODSetups.AddDefaulted_GetRef();
+	Setup.Name = HLODLayer->GetFName();
+	Setup.RowDisplayName = HLODLayer->GetFName();
+	Setup.HLODLayers.Add(HLODLayer);
+	Setup.bIsSpatiallyLoaded = true;
+
+	URuntimePartitionLHGrid* HLODGrid = NewObject<URuntimePartitionLHGrid>(HashSet, NAME_None);
+	HLODGrid->SetDefaultValues();
+	HLODGrid->Name = Setup.Name;
+	HLODGrid->bBlockOnSlowStreaming = false;
+	HLODGrid->bClientOnlyVisible = true;
+	HLODGrid->Priority = 0;
+	HLODGrid->HLODIndex = 0;
+	HLODGrid->LoadingRange = FMath::Max(HLODLoadingRangeCm, 51200);
+	if (const FProperty* CellProp = HLODGrid->GetClass()->FindPropertyByName(TEXT("CellSize")))
+	{
+		SetNumber(CellProp, HLODGrid, FMath::Max(HLODCellSizeCm, 25600));
+	}
+	Setup.PartitionLayer = HLODGrid;
+
+	WorldPartition->MarkPackageDirty();
+	HashSet->MarkPackageDirty();
+	return FString::Printf(
+		TEXT("HLOD_SETUP_OK: layer=%s cell=%d range=%d"),
+		*HLODLayer->GetName(),
+		FMath::Max(HLODCellSizeCm, 25600),
+		FMath::Max(HLODLoadingRangeCm, 51200));
+#else
+	return TEXT("ERROR: editor only");
+#endif
+}
+
+void UDoemitzWorldTools::GetStreamingActorCounts(
+	UObject* WorldContextObject,
+	int32& OutLoadedTerrainTiles,
+	int32& OutLoadedCellMeshes,
+	int32& OutLoadedHLODActors,
+	TArray<FString>& OutLoadedCellKeys)
+{
+	OutLoadedTerrainTiles = 0;
+	OutLoadedCellMeshes = 0;
+	OutLoadedHLODActors = 0;
+	OutLoadedCellKeys.Reset();
+
+	UWorld* World = GEngine ? GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::ReturnNull) : nullptr;
+	if (!World)
+	{
+		return;
+	}
+
+	TSet<FString> UniqueCells;
+	for (TActorIterator<AStaticMeshActor> It(World); It; ++It)
+	{
+		const AStaticMeshActor* Actor = *It;
+		if (!IsValid(Actor))
+		{
+			continue;
+		}
+		const UStaticMeshComponent* SMC = Actor->GetStaticMeshComponent();
+		const UStaticMesh* Mesh = SMC ? SMC->GetStaticMesh() : nullptr;
+		if (!Mesh)
+		{
+			continue;
+		}
+		const FString MeshName = Mesh->GetName();
+		if (MeshName.StartsWith(TEXT("SM_Terrain_")))
+		{
+			++OutLoadedTerrainTiles;
+		}
+		else
+		{
+			const int32 CellPos = MeshName.Find(TEXT("__c"));
+			if (CellPos != INDEX_NONE)
+			{
+				++OutLoadedCellMeshes;
+				UniqueCells.Add(MeshName.Mid(CellPos + 2)); // "cX_Y"
+			}
+		}
+	}
+
+	for (TActorIterator<AWorldPartitionHLOD> It(World); It; ++It)
+	{
+		if (IsValid(*It))
+		{
+			++OutLoadedHLODActors;
+		}
+	}
+
+	OutLoadedCellKeys = UniqueCells.Array();
+	OutLoadedCellKeys.Sort();
 }
 
 FString UDoemitzWorldTools::ConfigureStreamingGrid(UObject* WorldContextObject, int32 CellSizeCm, int32 LoadingRangeCm)

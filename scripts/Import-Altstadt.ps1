@@ -1,6 +1,7 @@
 param(
     [string] $EngineRoot = 'C:\Program Files\Epic Games\UE_5.8',
-    [string] $PythonExe
+    [string] $PythonExe,
+    [switch] $SkipHLOD
 )
 
 $ErrorActionPreference = 'Stop'
@@ -12,6 +13,7 @@ $project = Join-Path $repository 'unreal\DoemitzLivingCity\DoemitzLivingCity.upr
 $editor = Join-Path $EngineRoot 'Engine\Binaries\Win64\UnrealEditor-Cmd.exe'
 $importScript = Join-Path (Split-Path -Parent $project) 'Content\Python\import_altstadt.py'
 $log = Join-Path (Split-Path -Parent $project) 'Saved\Logs\AltstadtImport.log'
+$hlodLog = Join-Path (Split-Path -Parent $project) 'Saved\Logs\AltstadtHLOD.log'
 
 Push-Location -LiteralPath $repository
 try {
@@ -42,6 +44,34 @@ try {
         throw "Unreal import has no completion marker. See $log"
     }
     $result.Line
+
+    if (!$SkipHLOD) {
+        Remove-Item -LiteralPath $hlodLog -Force -ErrorAction SilentlyContinue
+        $hlodArguments = @(
+            ('"{0}"' -f $project)
+            '/Game/Maps/DoemitzAltstadt'
+            '-run=WorldPartitionBuilderCommandlet'
+            '-Builder=WorldPartitionHLODsBuilder'
+            '-SetupHLODs'
+            '-BuildHLODs'
+            '-AllowCommandletRendering'
+            '-unattended'
+            '-nosplash'
+            '-NoSound'
+            '-NoLiveCoding'
+            ('-abslog="{0}"' -f $hlodLog)
+        )
+        Write-Host 'Building World Partition HLODs for /Game/Maps/DoemitzAltstadt ...'
+        $hlodProc = Start-Process -FilePath $editor -ArgumentList $hlodArguments -WindowStyle Hidden -PassThru -Wait
+        if ($hlodProc.ExitCode -ne 0) {
+            Get-Content -LiteralPath $hlodLog -Tail 40 -ErrorAction SilentlyContinue
+            throw "World Partition HLOD build exited with code $($hlodProc.ExitCode). See $hlodLog"
+        }
+        $hlodSummary = Select-String -LiteralPath $hlodLog -SimpleMatch 'World contains' | Select-Object -Last 1
+        if ($hlodSummary) {
+            $hlodSummary.Line
+        }
+    }
 }
 finally {
     Pop-Location

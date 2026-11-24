@@ -84,10 +84,13 @@ def check(_delta_seconds):
             raise RuntimeError(f"unexpected map attribution (missing OSM or GeoBasis 2025/2026): {attr!r}")
 
         # Verify marker counts come from simulation state
-        if map_widget.get_citizen_marker_count() != 30:
-            raise RuntimeError(f"expected 30 citizen markers, got {map_widget.get_citizen_marker_count()}")
-        if map_widget.get_vehicle_marker_count() != 8:
-            raise RuntimeError(f"expected 8 vehicle markers, got {map_widget.get_vehicle_marker_count()}")
+        trf = unreal.DoemitzTrafficSubsystem.get(world)
+        expected_citizens = cit.get_citizen_count()
+        expected_vehicles = trf.get_vehicle_count() if trf is not None else 12
+        if map_widget.get_citizen_marker_count() != expected_citizens:
+            raise RuntimeError(f"expected {expected_citizens} citizen markers, got {map_widget.get_citizen_marker_count()}")
+        if map_widget.get_vehicle_marker_count() != expected_vehicles:
+            raise RuntimeError(f"expected {expected_vehicles} vehicle markers, got {map_widget.get_vehicle_marker_count()}")
         if map_widget.get_parking_marker_count() < 9:
             raise RuntimeError(f"expected >=9 parking markers, got {map_widget.get_parking_marker_count()}")
         if map_widget.get_place_marker_count() < 25:
@@ -124,7 +127,7 @@ def check(_delta_seconds):
 
         done = True
         finish(
-            f"DOEMITZ_MAP_PIE_OK: {MAP_PX}x{MAP_PX} texture loaded, 30 citizens / 8 vehicles / "
+            f"DOEMITZ_MAP_PIE_OK: {MAP_PX}x{MAP_PX} texture loaded, {expected_citizens} citizens / {expected_vehicles} vehicles / "
             f"{map_widget.get_parking_marker_count()} parking lots / {map_widget.get_place_marker_count()} places, "
             f"player_uv=({actual_player_uv.x:.3f},{actual_player_uv.y:.3f}), "
             f"off_pool_citizen={far_cid} uv=({actual_far_uv.x:.3f},{actual_far_uv.y:.3f}), attribution OK",

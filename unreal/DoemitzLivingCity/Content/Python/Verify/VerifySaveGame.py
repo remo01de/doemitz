@@ -237,7 +237,7 @@ def check(_delta_seconds):
             finish(
                 f"DOEMITZ_SAVEGAME_PIE_OK: v7 saved & restored time={restored_min:.1f}m, "
                 f"money={saved_money}ct, inv={saved_qty}, job={saved_job}, active_task={accepted_task_id}, "
-                f"30 citizens, 8 vehicles, v4->v7, v5->v7 terrain height and v6->v7 interior migration, "
+                f"{cit.get_citizen_count()} citizens, {trf.get_vehicle_count()} vehicles, v4->v7, v5->v7 terrain height and v6->v7 interior migration, "
                 f"removed-interior fallback to entrance, "
                 f"(player_z={mig_player_z:.1f}cm, citizen_z={mig_anna_z:.1f}cm) verified",
                 True,

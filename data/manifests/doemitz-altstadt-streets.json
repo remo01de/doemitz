@@ -76,6 +76,30 @@
         "start_edge_id": "edge:osm:way:104838487:0:0:fwd",
         "start_distance_m": 25.0,
         "body_color": [0.54, 0.36, 0.20]
+      },
+      {
+        "id": "altstadt_vehicle_09",
+        "start_edge_id": "edge:osm:way:42707474:0:1:fwd",
+        "start_distance_m": 30.0,
+        "body_color": [0.14, 0.30, 0.50]
+      },
+      {
+        "id": "altstadt_vehicle_10",
+        "start_edge_id": "edge:osm:way:45239596:0:2:fwd",
+        "start_distance_m": 25.0,
+        "body_color": [0.66, 0.70, 0.74]
+      },
+      {
+        "id": "altstadt_vehicle_11",
+        "start_edge_id": "edge:osm:way:42707474:0:2:rev",
+        "start_distance_m": 15.0,
+        "body_color": [0.82, 0.64, 0.18]
+      },
+      {
+        "id": "altstadt_vehicle_12",
+        "start_edge_id": "edge:osm:way:42707495:0:0:fwd",
+        "start_distance_m": 20.0,
+        "body_color": [0.18, 0.42, 0.28]
       }
     ]
   }

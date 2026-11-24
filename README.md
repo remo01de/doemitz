@@ -32,7 +32,7 @@ Kartendaten © OpenStreetMap contributors, ODbL 1.0 ([OpenStreetMap – Urheberr
 
 ## Projektstand
 
-Das Unreal-Projekt öffnet die Stadt-Karte (`DoemitzAltstadt`) als Startlevel. Im Editor startet **Play** die Third-Person-Figur an der Goethestraße auf realem DGM1-Gelände (2 LAiV-Kacheln, 352 64-m-Kacheln) mit LoD2-Gebäuden, Wahrzeichen, Festungs- und Hafenanlagen, 3 begehbaren Innenräumen, 6 modularen C++-Domain-Subsystemen, Hybrid-Zeitskala (`BaseTimeScale = 20.0`, 1 Tag = 72 Echtzeit-Minuten), 30 Einwohnern, vernetztem Straßenverkehr (303 Kanten, 15 Parkplätze), 4096-px-Stadtkarte und SaveGame v7. [Unreal-Projekt](unreal/DoemitzLivingCity/DoemitzLivingCity.uproject) · [Unreal-Einrichtung und Kartenimport](unreal/README.md)
+Das Unreal-Projekt öffnet die Stadt-Karte (`DoemitzAltstadt`) als Startlevel. Im Editor startet **Play** die Third-Person-Figur an der Goethestraße auf realem DGM1-Gelände (2 LAiV-Kacheln, 352 64-m-Kacheln + Horizont-Schürze) mit World-Partition-Streaming (450 m, 38 HLOD-Actors), `ExponentialHeightFog`, LoD2-Gebäuden, Wahrzeichen, Festungs- und Hafenanlagen, 5 begehbaren Innenräumen (inkl. Hotel Dömitzer Hafen & Hafen-Restaurant), 6 modularen C++-Domain-Subsystemen, Hybrid-Zeitskala (`BaseTimeScale = 20.0`, 1 Tag = 72 Echtzeit-Minuten), 45 Einwohnern, vernetztem Straßenverkehr (12 Fahrzeuge, 303 Kanten, 15 Parkplätze), 4096-px-Stadtkarte und SaveGame v7 mit asynchronem Streaming-Restore. [Unreal-Projekt](unreal/DoemitzLivingCity/DoemitzLivingCity.uproject) · [Unreal-Einrichtung und Kartenimport](unreal/README.md)
 
 - [Produktanforderungen](docs/PRD.md)
 - [Technische Architektur](docs/ARCHITECTURE.md)
@@ -54,3 +54,4 @@ Das Unreal-Projekt öffnet die Stadt-Karte (`DoemitzAltstadt`) als Startlevel. I
 - [Sprint 13.1 – Kollision der Stadtmöbel und Festungstor nach Fotos](docs/SPRINT_13_1.md)
 - [Sprint 14 – Stadtgebiet bis Hafen und Schleuse](docs/SPRINT_14.md)
 - [Sprint 15 – Fundament, Architektur & Durchgängige Stadt](docs/SPRINT_15.md)
+- [Sprint 16 – Streaming, Horizont & Lebendiger Hafen](docs/SPRINT_16.md)

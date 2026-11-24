@@ -22,7 +22,8 @@ param(
         'VerifyPropCollision.py',
         'VerifyStreaming.py',
         'VerifySaveGame.py',
-        'VerifySprint15.py'
+        'VerifySprint15.py',
+        'VerifySprint16.py'
     )
 )
 
@@ -57,6 +58,7 @@ $expectedMarkers = @{
     'VerifyStreaming.py'      = 'DOEMITZ_STREAMING_PIE_OK:'
     'VerifySaveGame.py'       = 'DOEMITZ_SAVEGAME_PIE_OK:'
     'VerifySprint15.py'       = 'DOEMITZ_SPRINT15_PIE_OK:'
+    'VerifySprint16.py'       = 'DOEMITZ_SPRINT16_PIE_OK:'
 }
 
 $results = @()

@@ -32,6 +32,8 @@ target_idx = 0
 wait_start = 0.0
 hits = []
 max_wait = 0.0
+west_stats = None
+east_stats = None
 walk_idx = 0
 min_walk_feet = None
 # across the upper gate: head block A -> heel A -> mitre -> heel B -> head block B
@@ -58,7 +60,7 @@ def ground_hit(world, pawn, x, y):
 
 
 def tick(_dt):
-    global phase, target_idx, wait_start, max_wait, walk_idx, min_walk_feet
+    global phase, target_idx, wait_start, max_wait, walk_idx, min_walk_feet, west_stats, east_stats
     try:
         if monotonic() > deadline:
             raise RuntimeError(f"timed out in phase {phase} at target {target_idx}/{len(targets)}")
@@ -74,6 +76,8 @@ def tick(_dt):
             want = f"range={int(float(cells['loading_range_m']) * 100)}"
             if want not in desc.replace(".0;", ";"):
                 raise RuntimeError(f"runtime grid not configured ({want} expected): {desc}")
+            if cells.get("hlod_enabled") and "HLOD[" not in desc:
+                raise RuntimeError(f"World Partition HLOD setup missing in runtime grid: {desc}")
             for (ae, an), (be, bn) in zip(WAYPOINTS, WAYPOINTS[1:]):
                 d = hypot(be - ae, bn - an)
                 n = max(1, int(d // STEP_M))
@@ -106,10 +110,39 @@ def tick(_dt):
             if h is None:
                 raise RuntimeError(f"no ground below the player at local ({e:.0f}, {n:.0f}) after streaming")
             hits.append((targets[target_idx], h["hit_actor"].get_actor_label() if h["hit_actor"] else "?"))
+            # Sprint 16: capture loaded cell sets at west start (Altstadt) and east end (Harbour)
+            # to prove genuine World Partition cell unloading & reloading at 450 m LoadingRange.
+            if target_idx == 0:
+                t_cnt, c_cnt, h_cnt, c_keys = unreal.DoemitzWorldTools.get_streaming_actor_counts(world)
+                west_stats = (t_cnt, c_cnt, h_cnt, set(c_keys))
+                unreal.log(f"DOEMITZ_STREAMING_WEST: terrain={t_cnt}, cell_meshes={c_cnt}, hlods={h_cnt}, cells={sorted(c_keys)}")
+            elif target_idx == len(targets) - 1:
+                t_cnt, c_cnt, h_cnt, c_keys = unreal.DoemitzWorldTools.get_streaming_actor_counts(world)
+                east_stats = (t_cnt, c_cnt, h_cnt, set(c_keys))
+                unreal.log(f"DOEMITZ_STREAMING_EAST: terrain={t_cnt}, cell_meshes={c_cnt}, hlods={h_cnt}, cells={sorted(c_keys)}")
             target_idx += 1
             phase = "move"
             return
         if phase == "lock":
+            # Verify genuine cell unloading/reloading and active HLOD actors across the 450 m range
+            if west_stats is None or east_stats is None:
+                raise RuntimeError("missing west/east streaming stats")
+            wt, wc, wh, wcells = west_stats
+            et, ec, eh, ecells = east_stats
+            unloaded_west = sorted(wcells - ecells)
+            loaded_east = sorted(ecells - wcells)
+            if len(unloaded_west) < 3 or len(loaded_east) < 3:
+                raise RuntimeError(
+                    f"expected real cell unload/reload between Altstadt and Harbour at 450 m range: "
+                    f"west={sorted(wcells)}, east={sorted(ecells)}, unloaded={unloaded_west}, newly_loaded={loaded_east}"
+                )
+            total_terrain = int(package["terrain"]["mesh"]["tile_count"])
+            if wt >= total_terrain or et >= total_terrain:
+                raise RuntimeError(
+                    f"all {total_terrain} terrain tiles stayed loaded simultaneously (west={wt}, east={et})"
+                )
+            if cells.get("hlod_enabled") and max(wh, eh) < 1:
+                raise RuntimeError(f"expected built World Partition HLOD actors in PIE, got west={wh}, east={eh}")
             # stand on the upper gate walkway of the lock (middle of the eastern leaf) and let gravity act
             z_walk = float(lock["walkway_z_m"])
             cm = pawn.get_editor_property("character_movement")
@@ -146,9 +179,13 @@ def tick(_dt):
                 walk_idx += 1
                 if walk_idx >= len(GATE_WALK):
                     labels = sorted({lbl.split("__")[0] for _, lbl in hits})
+                    wt, _, wh, wcells = west_stats
+                    et, _, eh, ecells = east_stats
                     finish(
                         f"DOEMITZ_STREAMING_PIE_OK: {len(hits)} positions Rathaus->Schleuse->Hafen streamed with "
-                        f"ground (max wait {max_wait:.1f}s), ground actors {labels[:8]}, crossed the lock on the "
+                        f"ground (max wait {max_wait:.1f}s), west_terrain={wt}/east_terrain={et}, "
+                        f"unloaded={len(wcells - ecells)} cells / newly_loaded={len(ecells - wcells)} cells, "
+                        f"hlod_actors={max(wh, eh)}, ground actors {labels[:8]}, crossed the lock on the "
                         f"upper gate walkway (lowest feet {min_walk_feet:.2f} m, walkway {float(lock['walkway_z_m']):.2f} m)",
                         True,
                     )

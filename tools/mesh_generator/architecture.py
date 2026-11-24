@@ -361,7 +361,13 @@ def add_stylized_building(
 
     door_placed = interior is not None
     if interior is not None:
-        interior.ceiling_z = base_m + floor_h - 0.16
+        raw_ceil = base_m + floor_h - 0.16
+        min_ceil = interior.floor_z + interior.min_ceiling_height_m
+        max_building_ceil = base_m + height_m - 0.25
+        ceil_z = min(max_building_ceil, max(raw_ceil, min_ceil))
+        if interior.max_ceiling_height_m is not None:
+            ceil_z = min(ceil_z, interior.floor_z + interior.max_ceiling_height_m)
+        interior.ceiling_z = round(ceil_z, 4)
         interior.add_door_frame(stone_mesh)
     ring = list(polygon.exterior.coords)
     for edge_idx, (start, end) in enumerate(zip(ring, ring[1:])):
@@ -386,6 +392,8 @@ def add_stylized_building(
         belt_mesh = timber_mesh if has_timber_framing else stone_mesh
         for level in range(1, floors + 1):
             z = base_m + level * floor_h
+            if interior is not None and level < floors and z < interior.ceiling_z + 0.10:
+                z = min(base_m + height_m - 0.25, interior.ceiling_z + 0.14)
             _add_box_on_wall(belt_mesh, start[0], start[1], tx, ty, nx, ny, 0.0, length, z - 0.14, z + 0.04, 0.0, 0.08)
 
         # Corner timber posts / quoins
@@ -411,8 +419,16 @@ def add_stylized_building(
                     continue
 
                 win_w = 1.05
-                win_z0 = z_floor + max(plinth_h + 0.25, 0.95) if fl == 0 else max(plinth_top_m + 0.20, z_floor + 0.85)
-                win_z1 = min(z_floor + floor_h - 0.35, win_z0 + 1.35)
+                if interior is not None and fl == 0:
+                    if edge_idx in interior.blocked_edges:
+                        continue
+                    win_z0 = max(interior.floor_z + 0.85, plinth_top_m + 0.12)
+                    win_z1 = min(interior.ceiling_z - 0.35, win_z0 + 1.45)
+                else:
+                    win_z0 = z_floor + max(plinth_h + 0.25, 0.95) if fl == 0 else max(plinth_top_m + 0.20, z_floor + 0.85)
+                    if interior is not None and fl >= 1:
+                        win_z0 = max(win_z0, interior.ceiling_z + 0.45)
+                    win_z1 = min(z_floor + floor_h - 0.35, win_z0 + 1.35)
                 if win_z1 - win_z0 < 0.6:
                     continue
 

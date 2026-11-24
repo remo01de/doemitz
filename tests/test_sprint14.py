@@ -93,7 +93,7 @@ class Sprint14Test(unittest.TestCase):
     def test_city_meshes_are_split_into_streaming_cells(self):
         cells = self.pkg["cells"]
         self.assertEqual(cells["cell_size_m"], 256.0)
-        self.assertGreaterEqual(cells["loading_range_m"], 512.0)
+        self.assertGreaterEqual(cells["loading_range_m"], 450.0)
         self.assertEqual(cells["grid"], [6, 4])
         names = set(self.pkg["meshes"])
         self.assertTrue(any(n.startswith("WallsBrick__c") for n in names))

@@ -61,12 +61,17 @@ def _edge_frame(ring, idx):
 class InteriorShell:
     """Door, window openings and storey heights shared by the exterior builder and build_interior()."""
 
-    def __init__(self, cfg: dict, polygon: Polygon, base_m: float, ground_z_fn, assumptions: dict):
+    def __init__(self, cfg: dict, polygon: Polygon, base_m: float, ground_z_fn, assumptions: dict,
+                 blocked_edges: set[int] | None = None):
         self.cfg = cfg
         self.id = cfg["id"]
         self.polygon = orient_polygons(polygon)
         self.ring = list(self.polygon.exterior.coords)
         self.base_m = float(base_m)
+        self.blocked_edges: set[int] = set(blocked_edges or ())
+        self.min_ceiling_height_m = float(cfg.get("min_ceiling_height_m", 2.8))
+        raw_max_ceil = cfg.get("max_ceiling_height_m")
+        self.max_ceiling_height_m = float(raw_max_ceil) if raw_max_ceil is not None else None
         self.wall_thickness_m = float(cfg.get("wall_thickness_m", assumptions.get("wall_thickness_m", 0.4)))
         self.door_width_m = float(cfg.get("door_width_m", assumptions.get("door_width_m", 1.2)))
         self.door_height_m = float(cfg.get("door_height_m", assumptions.get("door_height_m", 2.3)))
@@ -117,7 +122,9 @@ class InteriorShell:
         return rng is not None and u1 > rng[0] and u0 < rng[1]
 
     def add_window(self, edge_idx: int, u0: float, u1: float, z0: float, z1: float) -> bool:
-        """Register a ground-floor window opening; returns False if it collides with the door."""
+        """Register a ground-floor window opening; returns False if it collides with the door or a party wall."""
+        if edge_idx in self.blocked_edges:
+            return False
         if self.overlaps_door(edge_idx, u0, u1):
             return False
         top = z1 if self.ceiling_z is None else min(z1, self.ceiling_z - 0.08)
@@ -550,6 +557,42 @@ def build_interior(meshes, shell: InteriorShell, template: dict) -> dict:
                 _add_block(furn_mesh, (center[0], center[1]), t, g_len * 0.5, 0.03, floor_z, floor_z + g_h)
                 stand_spots.append({"xy": front, "yaw": _yaw_deg(front, center), "role": "gondola"})
 
+    # Free-standing dining / lounge table groups (Sprint 16: harbour hotel & restaurant)
+    tables_cfg = template.get("center_tables")
+    if tables_cfg:
+        mrr = room.minimum_rotated_rectangle
+        coords = list(mrr.exterior.coords)
+        e0 = (coords[1][0] - coords[0][0], coords[1][1] - coords[0][1])
+        e1 = (coords[2][0] - coords[1][0], coords[2][1] - coords[1][1])
+        axis = e0 if hypot(*e0) >= hypot(*e1) else e1
+        al = hypot(*axis)
+        t = (axis[0] / al, axis[1] / al)
+        n = (-t[1], t[0])
+        cen = room.centroid
+        t_len = float(tables_cfg.get("length_m", 1.5))
+        t_dep = float(tables_cfg.get("depth_m", 0.9))
+        t_h = float(tables_cfg.get("height_m", 0.76))
+        max_tables = int(tables_cfg.get("max_count", 6))
+        placed_tables = 0
+        for u_off in tables_cfg.get("along_offsets_m", [-5.0, -1.8, 1.8, 5.0]):
+            for v_off in tables_cfg.get("across_offsets_m", [-1.6, 1.6]):
+                if placed_tables >= max_tables:
+                    break
+                center = (cen.x + t[0] * u_off + n[0] * v_off, cen.y + t[1] * u_off + n[1] * v_off)
+                rect = _rect(center, t, t_len * 0.5 + 0.35, t_dep * 0.5 + 0.35)
+                front = (center[0] + n[0] * (t_dep * 0.5 + 0.75), center[1] + n[1] * (t_dep * 0.5 + 0.75))
+                if (
+                    hypot(center[0] - door_in[0], center[1] - door_in[1]) < door_clear
+                    or not clear_room.contains(rect)
+                    or any(f.footprint.buffer(0.95).intersects(rect) for f in furniture)
+                ):
+                    continue
+                if all(walk.reachable([f.footprint for f in furniture] + [rect], door_in, required_points + [front])):
+                    furniture.append(_Furniture("table_group", rect, front, _yaw_deg(front, center)))
+                    _add_table_group(meshes, center, t, n, t_len, t_dep, t_h, floor_z, four_chairs=True)
+                    stand_spots.append({"xy": front, "yaw": _yaw_deg(front, center), "role": "guest"})
+                    placed_tables += 1
+
     max_spots = int(template.get("max_visible_citizens", 6))
     stand_spots = stand_spots[:max_spots]
 
@@ -637,10 +680,46 @@ def build_interior(meshes, shell: InteriorShell, template: dict) -> dict:
     return entry
 
 
+def _add_table_group(meshes, center, t, n_in, t_len, t_dep, height, floor_z, four_chairs: bool = False):
+    """Stylized wooden table with chairs (Sprint 16: restaurant dining tables & hotel lounge tables)."""
+    furn = meshes["InteriorFurniture"]
+    goods = meshes["InteriorGoods"]
+    # Table top + subtle light table runner / centerpiece
+    _add_block(furn, center, t, t_len * 0.5, t_dep * 0.5, floor_z + height - 0.05, floor_z + height, add_bottom=True)
+    _add_block(goods, center, t, t_len * 0.28, t_dep * 0.25, floor_z + height, floor_z + height + 0.04)
+    for sx in (-t_len * 0.42, t_len * 0.42):
+        for sy in (-t_dep * 0.40, t_dep * 0.40):
+            leg = (center[0] + t[0] * sx + n_in[0] * sy, center[1] + t[1] * sx + n_in[1] * sy)
+            _add_block(furn, leg, t, 0.035, 0.035, floor_z, floor_z + height - 0.05)
+    # Chairs along sides of the table
+    chair_specs = []
+    if four_chairs:
+        for side in (-1.0, 1.0):
+            for u_off in (-t_len * 0.26, t_len * 0.26):
+                chair_specs.append((u_off, side * (t_dep * 0.5 + 0.16), side))
+    else:
+        for u_off in (-t_len * 0.26, t_len * 0.26):
+            chair_specs.append((u_off, t_dep * 0.5 + 0.14, 1.0))
+    for u_off, v_off, side in chair_specs:
+        c = (center[0] + t[0] * u_off + n_in[0] * v_off, center[1] + t[1] * u_off + n_in[1] * v_off)
+        _add_block(furn, c, t, 0.20, 0.20, floor_z + 0.42, floor_z + 0.46)
+        back = (c[0] + n_in[0] * (side * 0.18), c[1] + n_in[1] * (side * 0.18))
+        _add_block(furn, back, t, 0.20, 0.03, floor_z + 0.46, floor_z + 0.90)
+        for lx in (-0.16, 0.16):
+            for ly in (-0.16, 0.16):
+                leg = (c[0] + t[0] * lx + n_in[0] * ly, c[1] + t[1] * lx + n_in[1] * ly)
+                _add_block(furn, leg, t, 0.022, 0.022, floor_z, floor_z + 0.42)
+
+
 def _add_wall_unit(meshes, unit, center, t, n_in, u_len, depth, height, floor_z):
     furn = meshes["InteriorFurniture"]
     goods = meshes["InteriorGoods"]
     kind = unit["kind"]
+    if kind == "table_group":
+        t_dep = max(0.55, min(0.75, depth - 0.36))
+        t_center = (center[0] - n_in[0] * 0.16, center[1] - n_in[1] * 0.16)
+        _add_table_group(meshes, t_center, t, n_in, u_len, t_dep, min(height, 0.78), floor_z, four_chairs=False)
+        return
     if kind == "chair_row":
         count = int(unit.get("chairs", 4))
         pitch = u_len / count

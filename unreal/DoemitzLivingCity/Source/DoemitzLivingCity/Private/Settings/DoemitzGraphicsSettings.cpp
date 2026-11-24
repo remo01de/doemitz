@@ -15,7 +15,7 @@ namespace
 	{
 		if (IConsoleVariable* Var = IConsoleManager::Get().FindConsoleVariable(Name))
 		{
-			Var->Set(Value, ECVF_SetByGameSetting);
+			Var->Set(Value, ECVF_SetByCode);
 		}
 	}
 
@@ -23,7 +23,7 @@ namespace
 	{
 		if (IConsoleVariable* Var = IConsoleManager::Get().FindConsoleVariable(Name))
 		{
-			Var->Set(Value, ECVF_SetByGameSetting);
+			Var->Set(Value, ECVF_SetByCode);
 		}
 	}
 }

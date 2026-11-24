@@ -75,15 +75,15 @@ def tick(_dt):
         interaction = pawn.get_interaction_component()
 
         if state == "init":
-            if sub.get_interior_count() != 3:
-                raise RuntimeError(f"expected 3 interiors, got {sub.get_interior_count()}")
-            # Sprint 15 M4: DoemitzLow must NEVER hide interior ceiling lights (only street lamps are throttled).
+            if sub.get_interior_count() != 5:
+                raise RuntimeError(f"expected 5 interiors (3 Altstadt + 2 Harbour), got {sub.get_interior_count()}")
+            # Sprint 15/16: DoemitzLow must NEVER hide interior ceiling lights (only street lamps are throttled).
             interior_lights = [
                 act for act in unreal.GameplayStatics.get_all_actors_of_class(world, unreal.PointLight)
                 if act.get_actor_label().startswith("Altstadt InteriorLight ")
             ]
-            if len(interior_lights) < 18:
-                raise RuntimeError(f"expected >=18 interior ceiling lights, found {len(interior_lights)}")
+            if len(interior_lights) < 30:
+                raise RuntimeError(f"expected >=30 interior ceiling lights across 5 interiors, found {len(interior_lights)}")
             hidden_lights = [
                 act.get_actor_label() for act in interior_lights
                 if act.get_editor_property("hidden") or not act.get_component_by_class(unreal.PointLightComponent).is_visible()

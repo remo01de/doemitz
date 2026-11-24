@@ -1,9 +1,11 @@
 #include "World/DoemitzDayNightController.h"
 
 #include "Components/DirectionalLightComponent.h"
+#include "Components/ExponentialHeightFogComponent.h"
 #include "Components/PointLightComponent.h"
 #include "Components/SkyLightComponent.h"
 #include "Engine/DirectionalLight.h"
+#include "Engine/ExponentialHeightFog.h"
 #include "Engine/PointLight.h"
 #include "Engine/SkyLight.h"
 #include "Simulation/DoemitzSimulationSubsystem.h"
@@ -73,6 +75,20 @@ void ADoemitzDayNightController::UpdateLightingFromSimulation()
 		{
 			const float SkyIntensity = bIsDay ? FMath::Lerp(0.45f, 1.35f, DaylightAlpha) : 0.22f;
 			SkyComp->SetIntensity(SkyIntensity);
+		}
+	}
+
+	if (HeightFog)
+	{
+		if (UExponentialHeightFogComponent* FogComp = HeightFog->GetComponent())
+		{
+			const FLinearColor WarmHorizonFog(0.76f, 0.62f, 0.50f);
+			const FLinearColor ClearDayFog(0.62f, 0.74f, 0.88f);
+			const FLinearColor NightFog(0.05f, 0.08f, 0.16f);
+			const FLinearColor TargetFog = bIsDay
+				? FMath::Lerp(WarmHorizonFog, ClearDayFog, FMath::Sqrt(DaylightAlpha))
+				: NightFog;
+			FogComp->SetFogInscatteringColor(TargetFog);
 		}
 	}
 

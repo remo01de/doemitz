@@ -230,7 +230,7 @@ class Sprint13Test(unittest.TestCase):
                     )
                     packages.append(json.dumps(pkg, sort_keys=True))
                 self.assertEqual(packages[0], packages[1], f"not deterministic in {mode} mode")
-                self.assertEqual(len(json.loads(packages[0])["interiors"]), 3)
+                self.assertEqual(len(json.loads(packages[0])["interiors"]), len(self.interiors_cfg["interiors"]))
 
 
 if __name__ == "__main__":

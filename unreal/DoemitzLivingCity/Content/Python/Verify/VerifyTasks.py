@@ -106,10 +106,10 @@ def check(_delta_seconds):
                     raise RuntimeError(f"citizen did not resume moving after dialog closed (moved={moved_after:.1f} cm)")
                 return
 
-            # Switch to Monday 10:30 so all shops, pharmacies, and offices are open for Errand & Fetch verification
+            # Switch to Monday 11:30 so all shops, pharmacies, offices, tourism and gastronomy are open
             unreal.GameplayStatics.set_global_time_dilation(world, 1.0)
             sub.set_day_number(1)
-            sub.set_time_of_day_minutes(630.0)
+            sub.set_time_of_day_minutes(690.0)
             sub.set_time_scale(sub.get_base_time_scale())
 
             avail = tsk.get_tasks_by_status(unreal.DoemitzTaskStatus.AVAILABLE)

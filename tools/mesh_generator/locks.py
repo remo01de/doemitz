@@ -81,7 +81,7 @@ def _railing(mesh, pts, z_fn, height=1.05, post_spacing=2.0):
 
 
 def build_edge_wall(meshes, side, water_area, z_bot, water_level, elevation, wall_id, min_top=None, cfg=None,
-                    ladders=True, bollards=True, railing=True, bank_search=(1.5, 3.5)):
+                    ladders=True, bollards=True, railing=True, bank_search=(1.5, 3.5), step_extend_m=0.0):
     """
     Vertical concrete wall on a water edge (lock chamber or harbour quay): face toward the water from z_bot to the
     bank, coping, ladder recesses, bollards and a railing set back from the edge. Returns (WallStepLine, top array)
@@ -114,8 +114,26 @@ def build_edge_wall(meshes, side, water_area, z_bot, water_level, elevation, wal
     dx, dy = p1.x - p0.x, p1.y - p0.y
     nx0, ny0 = normals[0]
     high_sign = 1.0 if (dy * nx0 - dx * ny0) > 0 else -1.0  # right of the direction is (dy, -dx)
-    step = WallStepLine(wall_id=wall_id, line=side, s_vals=s_vals, top_z=top + 0.0, base_z=base,
-                        high_sign=high_sign, gaps=[], fill_band_m=3.0, low_band_m=1.8)
+    step_line = side
+    step_s = s_vals
+    step_top = top + 0.0
+    step_base = base
+    if step_extend_m > 0.0 and len(pts) >= 2:
+        # Sprint 16: extend the terrain step line across the full lock-head concrete block so terrain
+        # triangles at the lower/upper gate heels are cleanly clipped down to z_bot on the water side.
+        sc = list(side.coords)
+        d0 = hypot(sc[1][0] - sc[0][0], sc[1][1] - sc[0][1]) or 1.0
+        d1 = hypot(sc[-1][0] - sc[-2][0], sc[-1][1] - sc[-2][1]) or 1.0
+        p_pre = (sc[0][0] - (sc[1][0] - sc[0][0]) / d0 * step_extend_m,
+                 sc[0][1] - (sc[1][1] - sc[0][1]) / d0 * step_extend_m)
+        p_post = (sc[-1][0] + (sc[-1][0] - sc[-2][0]) / d1 * step_extend_m,
+                  sc[-1][1] + (sc[-1][1] - sc[-2][1]) / d1 * step_extend_m)
+        step_line = LineString([p_pre, *sc, p_post])
+        step_s = np.concatenate(([0.0], s_vals + step_extend_m, [side.length + 2.0 * step_extend_m]))
+        step_top = np.concatenate(([top[0]], top, [top[-1]]))
+        step_base = np.full_like(step_top, z_bot)
+    step = WallStepLine(wall_id=wall_id, line=step_line, s_vals=step_s, top_z=step_top, base_z=step_base,
+                        high_sign=high_sign, gaps=[], fill_band_m=3.0, low_band_m=2.2)
     for i in range(n - 1):
         a, b = pts[i], pts[i + 1]
         (na_x, na_y), (nb_x, nb_y) = normals[i], normals[i + 1]
@@ -248,7 +266,7 @@ def build_locks(meshes, scene_layers, water_surfaces, elevation, cfg: dict | Non
                 tl = hypot(tx, ty) or 1.0
                 t = (tx / tl, ty / tl)
                 nrm = (t[1], -t[0])
-                _faces(gate_m, frame_box(heel, t, nrm, 0.0, tl, -0.25, 0.25, z_bot, z_walk - 0.12))
+                _faces(gate_m, frame_box(heel, t, nrm, -0.35, tl, -0.25, 0.25, z_bot, z_walk - 0.12))
                 _faces(coping, frame_box(heel, t, nrm, -0.1, tl + 0.05, -0.55, 0.55, z_walk - 0.12, z_walk))
                 for side_off in (-0.5, 0.5):
                     a = (heel[0] + nrm[0] * side_off, heel[1] + nrm[1] * side_off)

@@ -43,6 +43,36 @@
       "door_width_m": 1.6,
       "door_height_m": 2.6,
       "min_floor_above_base_m": 0.45
+    },
+    {
+      "id": "interior:hotel_doemitzer_hafen",
+      "name": "Hotel Dömitzer Hafen – Lobby",
+      "building_id": "osm:way:1355844634",
+      "place_id": "poi:osm:node:387219809",
+      "room_type": "hotel",
+      "template": "hotel_lobby",
+      "door_local_m": [654.0, -604.13],
+      "door_source": "assumed_sprint16_harbour_entrance",
+      "layout_source": "assumed_sprint16_interior_layout",
+      "door_width_m": 1.6,
+      "door_height_m": 2.5,
+      "min_ceiling_height_m": 3.4,
+      "max_ceiling_height_m": 4.2
+    },
+    {
+      "id": "interior:hafen_restaurant",
+      "name": "Dömitzer Hafen Restaurant – Gastraum",
+      "building_id": "osm:way:1355844633",
+      "place_id": "poi:osm:node:1125977013",
+      "room_type": "restaurant",
+      "template": "restaurant",
+      "door_local_m": [674.57, -592.80],
+      "door_source": "assumed_sprint16_harbour_entrance",
+      "layout_source": "assumed_sprint16_interior_layout",
+      "door_width_m": 1.4,
+      "door_height_m": 2.4,
+      "min_ceiling_height_m": 3.1,
+      "max_ceiling_height_m": 3.8
     }
   ],
   "templates": {
@@ -77,6 +107,31 @@
       "door_clearance_m": 2.6,
       "light_spacing_m": 4.5,
       "max_lights": 4,
+      "max_visible_citizens": 6
+    },
+    "hotel_lobby": {
+      "counter": {"length_m": 3.0, "depth_m": 0.75, "height_m": 1.05, "distance_from_door_m": 2.4, "lateral_offset_m": 2.8},
+      "wall_units": [
+        {"kind": "chair_row", "length_m": 2.4, "depth_m": 0.55, "height_m": 0.95, "chairs": 4, "gap_m": 0.8, "max_count": 4},
+        {"kind": "table_group", "length_m": 1.4, "depth_m": 1.1, "height_m": 0.76, "gap_m": 0.8, "max_count": 3},
+        {"kind": "shelf", "length_m": 1.6, "depth_m": 0.45, "height_m": 1.9, "levels": 4, "gap_m": 0.4, "max_count": 4}
+      ],
+      "center_tables": {"length_m": 1.5, "depth_m": 0.85, "height_m": 0.76, "along_offsets_m": [-10.0, -4.5, 4.5, 10.0], "across_offsets_m": [0.0], "max_count": 4},
+      "door_clearance_m": 2.6,
+      "light_spacing_m": 6.0,
+      "max_lights": 6,
+      "max_visible_citizens": 6
+    },
+    "restaurant": {
+      "counter": {"length_m": 2.8, "depth_m": 0.75, "height_m": 1.05, "distance_from_door_m": 3.2, "lateral_offset_m": 2.0},
+      "wall_units": [
+        {"kind": "table_group", "length_m": 1.5, "depth_m": 1.1, "height_m": 0.76, "gap_m": 0.7, "max_count": 6},
+        {"kind": "shelf", "length_m": 1.6, "depth_m": 0.45, "height_m": 1.85, "levels": 4, "gap_m": 0.4, "max_count": 3, "stand_spot": false}
+      ],
+      "center_tables": {"length_m": 1.6, "depth_m": 0.9, "height_m": 0.76, "along_offsets_m": [-6.0, -2.0, 2.0, 6.0], "across_offsets_m": [-1.8, 1.8], "max_count": 6},
+      "door_clearance_m": 2.6,
+      "light_spacing_m": 5.5,
+      "max_lights": 6,
       "max_visible_citizens": 6
     }
   }

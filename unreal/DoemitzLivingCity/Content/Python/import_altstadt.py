@@ -191,8 +191,9 @@ def material(name, color):
         emissive.set_editor_property("constant", unreal.LinearColor(*emissive_color, 1))
         unreal.MaterialEditingLibrary.connect_material_property(emissive, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
 
-    if name.startswith("Prop"):
-        asset.set_editor_property("used_with_instanced_static_meshes", True)
+    # Sprint 15/16: enable ISM usage on generated materials so both HISM props and World Partition
+    # Instancing HLOD actors render with their proper material in packaged Win64 builds.
+    asset.set_editor_property("used_with_instanced_static_meshes", True)
 
     unreal.MaterialEditingLibrary.recompile_material(asset)
     if not EDITOR.save_loaded_asset(asset):
@@ -271,7 +272,7 @@ def is_streamed_mesh(name, source):
     return name.startswith("Terrain_") or (source.get("cell", "lm") != "lm")
 
 
-def place(existing, name, actor_class, position, rotation=None, spatially_loaded=False):
+def place(existing, name, actor_class, position, rotation=None, spatially_loaded=False, hlod_relevant=None):
     rotation = rotation or unreal.Rotator()
     actor = existing.get(name)
     if actor is None:
@@ -288,6 +289,8 @@ def place(existing, name, actor_class, position, rotation=None, spatially_loaded
         actor.set_actor_rotation(rotation, False)
     actor.modify()
     actor.set_editor_property("is_spatially_loaded", bool(spatially_loaded))
+    if hlod_relevant is not None:
+        actor.set_editor_property("enable_auto_lod_generation", bool(hlod_relevant))
     return actor
 
 
@@ -363,7 +366,9 @@ def place_instanced_props(existing, prop_instances, cells=None):
         if not transforms:
             continue
         active_labels.add(label)
-        actor = place(existing, label, hism_class, unreal.Vector(), spatially_loaded=streamed)
+        # Include trees, bushes and boats in World Partition HLODs; skip tiny street furniture (lamps, benches, bollards)
+        prop_hlod = bool(streamed) and any(tag in label for tag in (" Trees ", " Bushes ", " Boats "))
+        actor = place(existing, label, hism_class, unreal.Vector(), spatially_loaded=streamed, hlod_relevant=prop_hlod)
         hism_comp = actor.get_editor_property("hism_component")
         if mesh_name not in prepared:
             asset = static_mesh(mesh_name, mesh_data)
@@ -903,22 +908,37 @@ def import_level(package):
     assets = {name: static_mesh(name, source) for name, source in package["meshes"].items()}
     if EDITOR.does_asset_exist(MAP):
         loaded = LEVELS.load_level(MAP)
+        if loaded:
+            import doemitz_wp
+            doemitz_wp.load_all_actors()
     else:
         loaded = LEVELS.new_level(MAP, is_partitioned_world=True)
     if not loaded:
         raise RuntimeError(f"Could not open {MAP}")
     existing = {}
-    for actor in ACTORS.get_all_level_actors():
+    duplicates_removed = 0
+    for actor in list(ACTORS.get_all_level_actors()):
         if actor.actor_has_tag(GENERATOR_TAG):
             name = actor.get_actor_label()
             if name in existing:
-                raise RuntimeError(f"Duplicate generated actor {name}")
+                if not ACTORS.destroy_actor(actor):
+                    raise RuntimeError(f"Could not destroy duplicate generated actor {name}")
+                duplicates_removed += 1
+                continue
             existing[name] = actor
+    if duplicates_removed:
+        unreal.log(f"DOEMITZ_DEDUP_OK: removed {duplicates_removed} duplicate generated actors")
 
     mesh_actors = {}
     for name, asset in assets.items():
-        actor = place(existing, f"Altstadt {name}", unreal.StaticMeshActor, unreal.Vector(),
-                      spatially_loaded=is_streamed_mesh(name, package["meshes"][name]))
+        streamed = is_streamed_mesh(name, package["meshes"][name])
+        hlod_relevant = streamed and not (
+            name.startswith("Interior") or name.startswith("Notice") or name.startswith("WindowGlassClear")
+        )
+        actor = place(
+            existing, f"Altstadt {name}", unreal.StaticMeshActor, unreal.Vector(),
+            spatially_loaded=streamed, hlod_relevant=hlod_relevant,
+        )
         mesh_actors[name] = actor
         component = actor.static_mesh_component
         actor.modify()
@@ -954,10 +974,20 @@ def import_level(package):
     if cells.get("spatial_meshes"):
         world = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_editor_world()
         grid_report = unreal.DoemitzWorldTools.configure_streaming_grid(
-            world, int(float(cells["cell_size_m"]) * 100), int(float(cells.get("loading_range_m", 1000.0)) * 100))
+            world, int(float(cells["cell_size_m"]) * 100), int(float(cells.get("loading_range_m", 450.0)) * 100))
         if grid_report.startswith("ERROR"):
             raise RuntimeError(f"World Partition streaming grid: {grid_report}")
         unreal.log(f"DOEMITZ_STREAMING_GRID_OK: {grid_report} ({cells['spatial_meshes']} cell meshes)")
+        if cells.get("hlod_enabled"):
+            hlod_report = unreal.DoemitzWorldTools.configure_hlod_setup(
+                world,
+                f"{ASSETS}/HLOD_DoemitzCity",
+                int(float(cells.get("hlod_cell_size_m", 512.0)) * 100),
+                int(float(cells.get("hlod_loading_range_m", 1600.0)) * 100),
+            )
+            if hlod_report.startswith("ERROR"):
+                raise RuntimeError(f"World Partition HLOD setup: {hlod_report}")
+            unreal.log(f"DOEMITZ_HLOD_SETUP_OK: {hlod_report}")
     for actor in ACTORS.get_all_level_actors():
         if actor.get_actor_label() == "Altstadt Simulation Config":
             actor.modify()
@@ -989,6 +1019,16 @@ def import_level(package):
     sky_component.set_intensity(1.3)
     sky_component.set_editor_property("real_time_capture", True)
 
+    # Sprint 16: ExponentialHeightFog blends the distant HLODs and procedural horizon skirt smoothly into the sky
+    fog = place(existing, "Altstadt Fog", unreal.ExponentialHeightFog, unreal.Vector(0.0, 0.0, 0.0))
+    fog_component = fog.get_component_by_class(unreal.ExponentialHeightFogComponent)
+    fog_component.set_editor_property("fog_density", 0.0022)
+    fog_component.set_editor_property("fog_height_falloff", 0.15)
+    fog_component.set_editor_property("start_distance", 18000.0)
+    fog_component.set_editor_property("fog_max_opacity", 0.65)
+    fog_component.set_editor_property("enable_volumetric_fog", False)
+    fog_component.set_fog_inscattering_color(unreal.LinearColor(0.62, 0.74, 0.88, 1.0))
+
     street_lights = []
     lamp_positions = package.get("props", {}).get("lamp_lights_m", [])
     active_lamp_labels = set()
@@ -1014,6 +1054,7 @@ def import_level(package):
     day_night = place(existing, "Altstadt Day Night Controller", day_night_class, unreal.Vector())
     day_night.set_editor_property("sun_light", sun)
     day_night.set_editor_property("sky_light", skylight)
+    day_night.set_editor_property("height_fog", fog)
     day_night.set_editor_property("street_lights", street_lights)
 
     direction = unreal.Vector(second.x - first.x, second.y - first.y, 0.0)
@@ -1122,7 +1163,10 @@ def import_level(package):
                 )
         bridge_result = f", {len(bridges)} bridges collision passed"
 
-    # World Partition actors are separate content packages.
+    # World Partition actors are separate content packages; save_current_level() also deletes empty
+    # external actor packages on disk after destroy_actor() removes duplicate or obsolete actors.
+    if not unreal.EditorLoadingAndSavingUtils.save_current_level():
+        raise RuntimeError(f"Could not save level {MAP}")
     if not unreal.EditorLoadingAndSavingUtils.save_dirty_packages(True, True):
         raise RuntimeError(f"Could not save {MAP}")
     sidewalk_result = ", sidewalk collision passed" if sidewalk else ""

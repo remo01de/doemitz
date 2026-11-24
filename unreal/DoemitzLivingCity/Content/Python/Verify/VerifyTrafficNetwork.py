@@ -7,7 +7,7 @@ editor = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem)
 level = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
 vehicle_class = unreal.load_class(None, "/Script/DoemitzLivingCity.DoemitzTrafficVehicle")
 
-EXPECTED_IDS = [f"altstadt_vehicle_0{i}" for i in range(1, 9)]
+EXPECTED_IDS = [f"altstadt_vehicle_{i:02d}" for i in range(1, 13)]
 # Real 90-degree Altstadt junction (Fritz-Reuter-Strasse / Goethestrasse):
 # Edge A approaches from left and must yield to Edge B approaching from the right (dot = 1.0).
 RVL_NODE = "osm:node:277309010"
@@ -49,9 +49,9 @@ def check(_delta_seconds):
         if sub is None or sub.get_vehicle_count() == 0:
             return
         actors = unreal.GameplayStatics.get_all_actors_of_class(world, vehicle_class)
-        if len(actors) != 8:
+        if len(actors) != len(EXPECTED_IDS):
             details = [(a.get_name(), str(a.get_vehicle_id())) for a in actors]
-            raise RuntimeError(f"expected 8 traffic vehicle actors, found {len(actors)}: {details}")
+            raise RuntimeError(f"expected {len(EXPECTED_IDS)} traffic vehicle actors, found {len(actors)}: {details}")
 
         if phase == "drive_network":
             unreal.GameplayStatics.set_global_time_dilation(world, 8.0)
@@ -103,7 +103,7 @@ def check(_delta_seconds):
                     for vid in EXPECTED_IDS
                 }
                 finish(
-                    f"DOEMITZ_TRAFFIC_NETWORK_PIE_OK: 8 vehicles, decisions={decisions_summary}, "
+                    f"DOEMITZ_TRAFFIC_NETWORK_PIE_OK: {len(EXPECTED_IDS)} vehicles, decisions={decisions_summary}, "
                     f"min_pair_dist={min_pair_dist_cm:.1f} cm, rvl_node={RVL_NODE} holder={holder} left_yielded=True",
                     True,
                 )

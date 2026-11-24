@@ -76,6 +76,11 @@ def tick(_dt):
         if pawn is None:
             return
         if phase == "init":
+            # Pause at 02:00 so citizens working at the fortress entrance don't stand squarely on waypoint 7 during this geometry walk check.
+            sub = unreal.DoemitzSimulationSubsystem.get(world)
+            if sub is not None:
+                sub.set_time_scale(0.0)
+                sub.set_time_of_day_minutes(120.0)
             start = ue(south_abutment)
             pawn.set_actor_location(start + unreal.Vector(0, 0, CAPSULE_HALF_H + 30.0), False, True)
             walk_start = monotonic()

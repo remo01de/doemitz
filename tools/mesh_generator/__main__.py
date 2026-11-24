@@ -44,6 +44,7 @@ from tools.mesh_generator.terrain import (
     DEFAULT_MAX_ERROR_M,
     DEFAULT_MAX_TRIANGLES,
     DEFAULT_TILE_SIZE_M,
+    build_horizon_skirt,
     build_terrain_tiles,
 )
 from tools.mesh_generator.traffic import build_vehicle_route
@@ -532,7 +533,33 @@ def build(
             shell = None
             if icfg is not None:
                 ground_fn = (lambda x, y: base_m) if elevation.is_flat else (lambda x, y: float(elevation.sample(x, y)))
-                shell = InteriorShell(icfg, polygon, round(b_min_z, 4), ground_fn, interior_assumptions)
+                # Detect shared party walls with adjacent buildings so ground-floor interior windows only cut exterior facades
+                poly_ccw = orient_polygons(polygon)
+                ring_pts = list(poly_ccw.exterior.coords)
+                neighbor_geoms = [
+                    shape(other["geometry"])
+                    for other in scene["layers"]["buildings"]
+                    if other["id"] != feature["id"]
+                ]
+                nearby_neighbors = [g for g in neighbor_geoms if g.distance(poly_ccw) < 1.2]
+                blocked_edges: set[int] = set()
+                if nearby_neighbors:
+                    for e_idx in range(len(ring_pts) - 1):
+                        ea, eb = ring_pts[e_idx], ring_pts[e_idx + 1]
+                        seg = LineString([ea, eb])
+                        slen = seg.length
+                        if slen < 1e-6:
+                            continue
+                        nx_e = (eb[1] - ea[1]) / slen
+                        ny_e = -(eb[0] - ea[0]) / slen
+                        mid_e = seg.interpolate(0.5, normalized=True)
+                        probe = Point(mid_e.x + nx_e * 0.65, mid_e.y + ny_e * 0.65)
+                        if any(ng.contains(probe) or ng.intersection(seg).length > 1.2 for ng in nearby_neighbors):
+                            blocked_edges.add(e_idx)
+                shell = InteriorShell(
+                    icfg, polygon, round(b_min_z, 4), ground_fn, interior_assumptions,
+                    blocked_edges=blocked_edges,
+                )
             if lm_cfg is not None:
                 tri_before = {n: len(m.triangles) for n, m in meshes.items()}
                 peak_h = add_landmark_building(
@@ -792,6 +819,12 @@ def build(
             outer_max_error_m=float(outer_max_error_m) if outer_max_error_m is not None else None,
         )
 
+    # Sprint 16: procedural non-colliding terrain horizon skirt outside the clipped bounds
+    horizon_skirt_mesh, horizon_skirt_report = build_horizon_skirt(
+        elevation=elevation, bounds=bounds, skirt_width_m=2500.0, edge_step_m=16.0, base_m=base_m,
+    )
+    terrain_mesh_report["horizon_skirt"] = horizon_skirt_report
+
     road_z_resolver = road_network.road_surface_z if not elevation.is_flat else (base_m + ROAD_ELEVATION_M)
     sidewalk_z_resolver = road_network.sidewalk_surface_z if not elevation.is_flat else (base_m + ROAD_ELEVATION_M + CURB_HEIGHT_M)
     terrain_z_resolver = elevation.sample if not elevation.is_flat else base_m
@@ -1026,6 +1059,14 @@ def build(
             "vertices": tile_data["vertices"],
             "triangles": tile_data["triangles"],
         }
+    compiled_meshes["TerrainHorizonSkirt"] = {
+        "color": PALETTE["Terrain"],
+        "material": "Terrain",
+        "collision": False,
+        "distance_field": False,
+        "vertices": horizon_skirt_mesh["vertices"],
+        "triangles": horizon_skirt_mesh["triangles"],
+    }
     if bridges_mesh is not None:
         compiled_meshes["Bridges"] = bridges_mesh
 
@@ -1147,7 +1188,9 @@ def build(
     }
 
 
-STREAMING_LOADING_RANGE_M = 1000.0
+STREAMING_LOADING_RANGE_M = 450.0
+HLOD_CELL_SIZE_M = 512.0
+HLOD_LOADING_RANGE_M = 1600.0
 
 
 def _split_meshes_into_cells(compiled, landmark_ranges, bounds_xy, cell_size, keep_whole):
@@ -1200,6 +1243,9 @@ def _split_meshes_into_cells(compiled, landmark_ranges, bounds_xy, cell_size, ke
     report = {
         "cell_size_m": cell_size,
         "loading_range_m": STREAMING_LOADING_RANGE_M,
+        "hlod_enabled": True,
+        "hlod_cell_size_m": HLOD_CELL_SIZE_M,
+        "hlod_loading_range_m": HLOD_LOADING_RANGE_M,
         "grid": [nx, ny],
         "origin_m": [round(min_e, 3), round(min_n, 3)],
         "spatial_meshes": spatial,

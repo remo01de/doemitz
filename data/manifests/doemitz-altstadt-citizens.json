@@ -6,7 +6,7 @@
     "time_scale": 20.0
   },
   "population": {
-    "target_count": 30,
+    "target_count": 45,
     "seed": 202608
   },
   "places": [
@@ -39,6 +39,20 @@
       "name": "Kaufhaus Goethestraße",
       "building_id": "osm:way:168171467",
       "kind": "shop"
+    },
+    {
+      "id": "place_hafen_home_nord",
+      "name": "Wohnhaus Am Floßgraben",
+      "building_id": "osm:way:198152908",
+      "kind": "home",
+      "on_pilot": false
+    },
+    {
+      "id": "place_hafen_home_sued",
+      "name": "Wohnhaus Hafenplatz",
+      "building_id": "osm:way:198152888",
+      "kind": "home",
+      "on_pilot": false
     }
   ],
   "citizens": [
@@ -144,6 +158,110 @@
         { "start_minute": 0, "activity": "Home", "place_id": "place_goethe_home_east" },
         { "start_minute": 600, "activity": "Strolling", "place_id": "place_goethe_pension" },
         { "start_minute": 840, "activity": "Home", "place_id": "place_goethe_home_east" }
+      ]
+    },
+    {
+      "id": "citizen_hafen_01",
+      "name": "Hanna",
+      "home_place_id": "place_hafen_home_nord",
+      "work_place_id": "poi:osm:node:387219809",
+      "walk_speed_mps": 1.35,
+      "coat_color": [0.18, 0.42, 0.56],
+      "schedule": [
+        { "start_minute": 0, "activity": "Home", "place_id": "place_hafen_home_nord" },
+        { "start_minute": 465, "activity": "Working", "place_id": "poi:osm:node:387219809" },
+        { "start_minute": 750, "activity": "Shopping", "place_id": "poi:osm:node:1125977013" },
+        { "start_minute": 815, "activity": "Working", "place_id": "poi:osm:node:387219809" },
+        { "start_minute": 1030, "activity": "Home", "place_id": "place_hafen_home_nord" }
+      ],
+      "saturday_schedule": [
+        { "start_minute": 0, "activity": "Home", "place_id": "place_hafen_home_nord" },
+        { "start_minute": 540, "activity": "Working", "place_id": "poi:osm:node:387219809" },
+        { "start_minute": 780, "activity": "Strolling", "place_id": "poi:osm:node:1276975274" },
+        { "start_minute": 930, "activity": "Home", "place_id": "place_hafen_home_nord" }
+      ],
+      "sunday_schedule": [
+        { "start_minute": 0, "activity": "Home", "place_id": "place_hafen_home_nord" },
+        { "start_minute": 630, "activity": "Strolling", "place_id": "poi:osm:node:4573634033" },
+        { "start_minute": 840, "activity": "Home", "place_id": "place_hafen_home_nord" }
+      ]
+    },
+    {
+      "id": "citizen_hafen_02",
+      "name": "Knut",
+      "home_place_id": "place_hafen_home_sued",
+      "work_place_id": "poi:osm:node:1125977013",
+      "walk_speed_mps": 1.30,
+      "coat_color": [0.66, 0.28, 0.18],
+      "schedule": [
+        { "start_minute": 0, "activity": "Home", "place_id": "place_hafen_home_sued" },
+        { "start_minute": 510, "activity": "Working", "place_id": "poi:osm:node:1125977013" },
+        { "start_minute": 790, "activity": "Strolling", "place_id": "poi:osm:node:387219809" },
+        { "start_minute": 850, "activity": "Working", "place_id": "poi:osm:node:1125977013" },
+        { "start_minute": 1110, "activity": "Home", "place_id": "place_hafen_home_sued" }
+      ],
+      "saturday_schedule": [
+        { "start_minute": 0, "activity": "Home", "place_id": "place_hafen_home_sued" },
+        { "start_minute": 570, "activity": "Working", "place_id": "poi:osm:node:1125977013" },
+        { "start_minute": 840, "activity": "Strolling", "place_id": "poi:osm:node:4573634033" },
+        { "start_minute": 1020, "activity": "Home", "place_id": "place_hafen_home_sued" }
+      ],
+      "sunday_schedule": [
+        { "start_minute": 0, "activity": "Home", "place_id": "place_hafen_home_sued" },
+        { "start_minute": 600, "activity": "Working", "place_id": "poi:osm:node:1125977013" },
+        { "start_minute": 900, "activity": "Home", "place_id": "place_hafen_home_sued" }
+      ]
+    },
+    {
+      "id": "citizen_hafen_03",
+      "name": "Maja",
+      "home_place_id": "place_hafen_home_sued",
+      "work_place_id": "poi:osm:node:387219809",
+      "walk_speed_mps": 1.40,
+      "coat_color": [0.76, 0.55, 0.16],
+      "schedule": [
+        { "start_minute": 0, "activity": "Home", "place_id": "place_hafen_home_sued" },
+        { "start_minute": 495, "activity": "Working", "place_id": "poi:osm:node:387219809" },
+        { "start_minute": 730, "activity": "Shopping", "place_id": "poi:osm:node:1125977013" },
+        { "start_minute": 800, "activity": "Working", "place_id": "poi:osm:node:387219809" },
+        { "start_minute": 1060, "activity": "Home", "place_id": "place_hafen_home_sued" }
+      ],
+      "saturday_schedule": [
+        { "start_minute": 0, "activity": "Home", "place_id": "place_hafen_home_sued" },
+        { "start_minute": 560, "activity": "Shopping", "place_id": "poi:osm:way:273649207" },
+        { "start_minute": 680, "activity": "Strolling", "place_id": "poi:osm:node:1125977013" },
+        { "start_minute": 900, "activity": "Home", "place_id": "place_hafen_home_sued" }
+      ],
+      "sunday_schedule": [
+        { "start_minute": 0, "activity": "Home", "place_id": "place_hafen_home_sued" },
+        { "start_minute": 660, "activity": "Strolling", "place_id": "poi:osm:node:1276975274" },
+        { "start_minute": 870, "activity": "Home", "place_id": "place_hafen_home_sued" }
+      ]
+    },
+    {
+      "id": "citizen_hafen_04",
+      "name": "Torsten",
+      "home_place_id": "place_hafen_home_nord",
+      "work_place_id": "poi:osm:node:1125977013",
+      "walk_speed_mps": 1.35,
+      "coat_color": [0.22, 0.48, 0.30],
+      "schedule": [
+        { "start_minute": 0, "activity": "Home", "place_id": "place_hafen_home_nord" },
+        { "start_minute": 530, "activity": "Working", "place_id": "poi:osm:node:1125977013" },
+        { "start_minute": 780, "activity": "Shopping", "place_id": "poi:osm:node:1276975274" },
+        { "start_minute": 845, "activity": "Working", "place_id": "poi:osm:node:1125977013" },
+        { "start_minute": 1090, "activity": "Home", "place_id": "place_hafen_home_nord" }
+      ],
+      "saturday_schedule": [
+        { "start_minute": 0, "activity": "Home", "place_id": "place_hafen_home_nord" },
+        { "start_minute": 600, "activity": "Working", "place_id": "poi:osm:node:1125977013" },
+        { "start_minute": 860, "activity": "Strolling", "place_id": "poi:osm:node:387219809" },
+        { "start_minute": 1000, "activity": "Home", "place_id": "place_hafen_home_nord" }
+      ],
+      "sunday_schedule": [
+        { "start_minute": 0, "activity": "Home", "place_id": "place_hafen_home_nord" },
+        { "start_minute": 640, "activity": "Strolling", "place_id": "poi:osm:node:1125977013" },
+        { "start_minute": 880, "activity": "Home", "place_id": "place_hafen_home_nord" }
       ]
     }
   ]

@@ -7,6 +7,7 @@
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "GameFramework/Character.h"
+#include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
@@ -18,6 +19,7 @@
 #include "Traffic/DoemitzTrafficSubsystem.h"
 #include "Traffic/DoemitzTrafficVehicle.h"
 #include "World/DoemitzDayNightController.h"
+#include "World/DoemitzWorldTools.h"
 
 namespace
 {
@@ -114,6 +116,210 @@ bool UDoemitzSaveSubsystem::ShouldCreateSubsystem(UObject* Outer) const
 	}
 	const UWorld* World = Cast<UWorld>(Outer);
 	return World != nullptr && World->IsGameWorld();
+}
+
+TStatId UDoemitzSaveSubsystem::GetStatId() const
+{
+	RETURN_QUICK_DECLARE_CYCLE_STAT(UDoemitzSaveSubsystem, STATGROUP_Tickables);
+}
+
+void UDoemitzSaveSubsystem::CancelPendingRestore()
+{
+	if (!PendingRestore.bActive)
+	{
+		return;
+	}
+	if (PendingRestore.bRestoreGravity)
+	{
+		if (UWorld* World = GetWorld())
+		{
+			if (APlayerController* PC = World->GetFirstPlayerController())
+			{
+				if (ACharacter* Char = Cast<ACharacter>(PC->GetPawn()))
+				{
+					if (UCharacterMovementComponent* Move = Char->GetCharacterMovement())
+					{
+						Move->GravityScale = PendingRestore.SavedGravityScale;
+					}
+				}
+			}
+		}
+	}
+	PendingRestore = FPendingStreamingRestore();
+}
+
+void UDoemitzSaveSubsystem::FinalizeLoadedGroundSnap()
+{
+	UWorld* World = GetWorld();
+	UDoemitzSimulationSubsystem* Sim = World ? World->GetSubsystem<UDoemitzSimulationSubsystem>() : nullptr;
+	if (!World || !Sim)
+	{
+		CancelPendingRestore();
+		return;
+	}
+
+	if (PendingRestore.bHasPlayerTransform)
+	{
+		if (APlayerController* PC = World->GetFirstPlayerController())
+		{
+			if (APawn* Pawn = PC->GetPawn())
+			{
+				FVector RestoredPlayerLoc = PendingRestore.TargetPlayerLocation;
+				double GroundZ = RestoredPlayerLoc.Z;
+				double HalfHeight = 96.0;
+				if (const ACharacter* Char = Cast<ACharacter>(Pawn))
+				{
+					if (const UCapsuleComponent* Cap = Char->GetCapsuleComponent())
+					{
+						HalfHeight = Cap->GetScaledCapsuleHalfHeight() + 4.0;
+					}
+				}
+				LastLoadedPlayerInteriorId = NAME_None;
+
+				if (PendingRestore.bRemovedInteriorFallback)
+				{
+					FDoemitzPlaceDefinition Place;
+					if (Sim->GetPlaceDefinition(PendingRestore.PlayerInteriorPlaceId, Place))
+					{
+						RestoredPlayerLoc = !Place.EntranceLocation.IsNearlyZero() ? Place.EntranceLocation : Place.AccessLocation;
+					}
+					if (TraceStaticGroundZ(World, RestoredPlayerLoc.X, RestoredPlayerLoc.Y, RestoredPlayerLoc.Z, GroundZ))
+					{
+						RestoredPlayerLoc.Z = GroundZ + HalfHeight;
+					}
+				}
+				else if (PendingRestore.bHasSavedInterior)
+				{
+					const FDoemitzInteriorDefinition& SavedInterior = PendingRestore.SavedInterior;
+					RestoredPlayerLoc.Z = FMath::Max(SavedInterior.FloorZ + HalfHeight, FMath::Min(RestoredPlayerLoc.Z, SavedInterior.CeilingZ - 20.0));
+					FHitResult FloorHit;
+					FCollisionQueryParams FloorParams(SCENE_QUERY_STAT(DoemitzInteriorLoadTrace), false, Pawn);
+					if (World->LineTraceSingleByChannel(
+						FloorHit,
+						FVector(RestoredPlayerLoc.X, RestoredPlayerLoc.Y, SavedInterior.CeilingZ - 15.0),
+						FVector(RestoredPlayerLoc.X, RestoredPlayerLoc.Y, SavedInterior.FloorZ - 100.0),
+						ECC_Visibility,
+						FloorParams) && FloorHit.ImpactNormal.Z > 0.5f)
+					{
+						RestoredPlayerLoc.Z = FloorHit.ImpactPoint.Z + HalfHeight;
+					}
+					else
+					{
+						RestoredPlayerLoc.Z = SavedInterior.FloorZ + HalfHeight;
+					}
+					LastLoadedPlayerInteriorId = PendingRestore.PlayerInteriorId;
+				}
+				else if (PendingRestore.bMigratingFromPreV6)
+				{
+					if (TraceStaticGroundZ(World, RestoredPlayerLoc.X, RestoredPlayerLoc.Y, RestoredPlayerLoc.Z, GroundZ))
+					{
+						RestoredPlayerLoc.Z = GroundZ + HalfHeight;
+					}
+				}
+				else if (TraceStaticGroundZ(World, RestoredPlayerLoc.X, RestoredPlayerLoc.Y, RestoredPlayerLoc.Z, GroundZ) && GroundZ > RestoredPlayerLoc.Z + 25.0)
+				{
+					RestoredPlayerLoc.Z = GroundZ + HalfHeight;
+				}
+
+				Pawn->SetActorLocationAndRotation(RestoredPlayerLoc, PendingRestore.TargetPlayerRotation, false, nullptr, ETeleportType::TeleportPhysics);
+				if (ACharacter* Char = Cast<ACharacter>(Pawn))
+				{
+					if (UCharacterMovementComponent* Move = Char->GetCharacterMovement())
+					{
+						if (PendingRestore.bRestoreGravity)
+						{
+							Move->GravityScale = PendingRestore.SavedGravityScale;
+						}
+						Move->StopMovementImmediately();
+					}
+				}
+			}
+		}
+	}
+
+	if (UDoemitzCitizenSubsystem* Citizens = World->GetSubsystem<UDoemitzCitizenSubsystem>())
+	{
+		Citizens->UpdateCitizenLodPool();
+		Citizens->SyncAllActiveCitizenActors();
+	}
+
+	const double Elapsed = PendingRestore.ElapsedSeconds;
+	const FString Slot = PendingRestore.SlotName;
+	PendingRestore = FPendingStreamingRestore();
+	if (Elapsed > 0.0)
+	{
+		UE_LOG(LogTemp, Display, TEXT("Doemitz save load streaming finalized for slot '%s' after %.2fs"), *Slot, Elapsed);
+	}
+}
+
+void UDoemitzSaveSubsystem::Tick(float DeltaTime)
+{
+	Super::Tick(DeltaTime);
+	if (!PendingRestore.bActive)
+	{
+		return;
+	}
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		CancelPendingRestore();
+		return;
+	}
+	PendingRestore.ElapsedSeconds += FMath::Max(0.0, static_cast<double>(DeltaTime));
+
+	const bool bStreamingReady = UDoemitzWorldTools::IsStreamingCompleted(World);
+	bool bGroundReady = false;
+	if (bStreamingReady)
+	{
+		double ProbeZ = 0.0;
+		if (PendingRestore.bHasSavedInterior)
+		{
+			FHitResult FloorHit;
+			FCollisionQueryParams FloorParams(SCENE_QUERY_STAT(DoemitzInteriorLoadReady), false);
+			if (APlayerController* PC = World->GetFirstPlayerController())
+			{
+				if (APawn* Pawn = PC->GetPawn())
+				{
+					FloorParams.AddIgnoredActor(Pawn);
+				}
+			}
+			bGroundReady = World->LineTraceSingleByChannel(
+				FloorHit,
+				FVector(PendingRestore.TargetPlayerLocation.X, PendingRestore.TargetPlayerLocation.Y, PendingRestore.SavedInterior.CeilingZ - 15.0),
+				FVector(PendingRestore.TargetPlayerLocation.X, PendingRestore.TargetPlayerLocation.Y, PendingRestore.SavedInterior.FloorZ - 100.0),
+				ECC_Visibility,
+				FloorParams) && FloorHit.ImpactNormal.Z > 0.5f;
+		}
+		else
+		{
+			bGroundReady = TraceStaticGroundZ(
+				World,
+				PendingRestore.TargetPlayerLocation.X,
+				PendingRestore.TargetPlayerLocation.Y,
+				PendingRestore.TargetPlayerLocation.Z,
+				ProbeZ);
+		}
+	}
+
+	if ((bStreamingReady && bGroundReady) || PendingRestore.ElapsedSeconds >= PendingRestore.MaxWaitSeconds)
+	{
+		if (PendingRestore.bMigratingFromPreV6 && !PendingRestore.SlotName.IsEmpty())
+		{
+			if (const UDoemitzSaveGame* SaveObj = Cast<UDoemitzSaveGame>(UGameplayStatics::LoadGameFromSlot(PendingRestore.SlotName, 0)))
+			{
+				if (UDoemitzCitizenSubsystem* Citizens = World->GetSubsystem<UDoemitzCitizenSubsystem>())
+				{
+					Citizens->RestoreSaveState(
+						SaveObj,
+						true,
+						[World](double X, double Y, double RefZ, double& OutZ) {
+							return TraceStaticGroundZ(World, X, Y, RefZ, OutZ);
+						});
+				}
+			}
+		}
+		FinalizeLoadedGroundSnap();
+	}
 }
 
 UDoemitzSaveSubsystem* UDoemitzSaveSubsystem::Get(const UObject* WorldContextObject)
@@ -265,70 +471,92 @@ bool UDoemitzSaveSubsystem::LoadCityState(const FString& SlotName)
 
 	if (SaveObj->bHasPlayerTransform)
 	{
+		CancelPendingRestore();
 		if (APlayerController* PC = World->GetFirstPlayerController())
 		{
 			if (APawn* Pawn = PC->GetPawn())
 			{
-				FVector RestoredPlayerLoc = SaveObj->PlayerLocation;
-				double GroundZ = RestoredPlayerLoc.Z;
-				double HalfHeight = 96.0;
-				if (const ACharacter* Char = Cast<ACharacter>(Pawn))
-				{
-					if (const UCapsuleComponent* Cap = Char->GetCapsuleComponent())
-					{
-						HalfHeight = Cap->GetScaledCapsuleHalfHeight() + 4.0;
-					}
-				}
-				LastLoadedPlayerInteriorId = NAME_None;
 				FDoemitzInteriorDefinition SavedInterior;
 				const bool bHasSavedInterior = SaveObj->SaveSchemaVersion >= 7 &&
 					!SaveObj->PlayerInteriorId.IsNone() &&
 					Sim->GetInteriorById(SaveObj->PlayerInteriorId, SavedInterior);
+				const bool bRemovedInteriorFallback = SaveObj->SaveSchemaVersion >= 7 &&
+					!SaveObj->PlayerInteriorId.IsNone() && !bHasSavedInterior;
 
-				if (SaveObj->SaveSchemaVersion >= 7 && !SaveObj->PlayerInteriorId.IsNone() && !bHasSavedInterior)
+				FVector TargetLoc = SaveObj->PlayerLocation;
+				if (bRemovedInteriorFallback)
 				{
 					FDoemitzPlaceDefinition Place;
 					if (Sim->GetPlaceDefinition(SaveObj->PlayerInteriorPlaceId, Place))
 					{
-						RestoredPlayerLoc = !Place.EntranceLocation.IsNearlyZero() ? Place.EntranceLocation : Place.AccessLocation;
-					}
-					if (TraceStaticGroundZ(World, RestoredPlayerLoc.X, RestoredPlayerLoc.Y, RestoredPlayerLoc.Z, GroundZ))
-					{
-						RestoredPlayerLoc.Z = GroundZ + HalfHeight;
+						TargetLoc = !Place.EntranceLocation.IsNearlyZero() ? Place.EntranceLocation : Place.AccessLocation;
 					}
 				}
-				else if (bHasSavedInterior)
+
+				const double JumpDistCm = FVector::Dist2D(Pawn->GetActorLocation(), TargetLoc);
+				// Move player immediately so World Partition updates streaming sources around the destination cell.
+				Pawn->SetActorLocationAndRotation(TargetLoc, SaveObj->PlayerRotation, false, nullptr, ETeleportType::TeleportPhysics);
+
+				PendingRestore = FPendingStreamingRestore();
+				PendingRestore.bActive = true;
+				PendingRestore.SlotName = SlotName;
+				PendingRestore.SaveSchemaVersion = SaveObj->SaveSchemaVersion;
+				PendingRestore.bHasPlayerTransform = true;
+				PendingRestore.TargetPlayerLocation = TargetLoc;
+				PendingRestore.TargetPlayerRotation = SaveObj->PlayerRotation;
+				PendingRestore.bHasSavedInterior = bHasSavedInterior;
+				PendingRestore.SavedInterior = SavedInterior;
+				PendingRestore.bRemovedInteriorFallback = bRemovedInteriorFallback;
+				PendingRestore.PlayerInteriorId = SaveObj->PlayerInteriorId;
+				PendingRestore.PlayerInteriorPlaceId = SaveObj->PlayerInteriorPlaceId;
+				PendingRestore.bMigratingFromPreV6 = bMigratingFromPreV6;
+				PendingRestore.ElapsedSeconds = 0.0;
+
+				// Check if destination ground/interior is already loaded in World Partition (same cell / within LoadingRange).
+				const bool bStreamingReady = UDoemitzWorldTools::IsStreamingCompleted(World);
+				bool bDestinationLoaded = false;
+				if (bStreamingReady && JumpDistCm < 25000.0)
 				{
-					RestoredPlayerLoc.Z = FMath::Max(SavedInterior.FloorZ + HalfHeight, FMath::Min(RestoredPlayerLoc.Z, SavedInterior.CeilingZ - 20.0));
-					FHitResult FloorHit;
-					FCollisionQueryParams FloorParams(SCENE_QUERY_STAT(DoemitzInteriorLoadTrace), false, Pawn);
-					if (World->LineTraceSingleByChannel(
-						FloorHit,
-						FVector(RestoredPlayerLoc.X, RestoredPlayerLoc.Y, SavedInterior.CeilingZ - 15.0),
-						FVector(RestoredPlayerLoc.X, RestoredPlayerLoc.Y, SavedInterior.FloorZ - 100.0),
-						ECC_Visibility,
-						FloorParams) && FloorHit.ImpactNormal.Z > 0.5f)
+					if (bHasSavedInterior)
 					{
-						RestoredPlayerLoc.Z = FloorHit.ImpactPoint.Z + HalfHeight;
+						FHitResult FloorHit;
+						FCollisionQueryParams FloorParams(SCENE_QUERY_STAT(DoemitzInteriorLoadProbe), false, Pawn);
+						bDestinationLoaded = World->LineTraceSingleByChannel(
+							FloorHit,
+							FVector(TargetLoc.X, TargetLoc.Y, SavedInterior.CeilingZ - 15.0),
+							FVector(TargetLoc.X, TargetLoc.Y, SavedInterior.FloorZ - 100.0),
+							ECC_Visibility,
+							FloorParams) && FloorHit.ImpactNormal.Z > 0.5f;
 					}
 					else
 					{
-						RestoredPlayerLoc.Z = SavedInterior.FloorZ + HalfHeight;
+						double ProbeZ = 0.0;
+						bDestinationLoaded = TraceStaticGroundZ(World, TargetLoc.X, TargetLoc.Y, TargetLoc.Z, ProbeZ);
 					}
-					LastLoadedPlayerInteriorId = SaveObj->PlayerInteriorId;
 				}
-				else if (bMigratingFromPreV6)
+
+				if (bDestinationLoaded)
 				{
-					if (TraceStaticGroundZ(World, RestoredPlayerLoc.X, RestoredPlayerLoc.Y, RestoredPlayerLoc.Z, GroundZ))
+					FinalizeLoadedGroundSnap();
+				}
+				else
+				{
+					// Cross-cell load (Sprint 16): suspend gravity until World Partition finishes streaming destination cells,
+					// then snap cleanly onto the loaded terrain/interior floor in Tick().
+					if (ACharacter* Char = Cast<ACharacter>(Pawn))
 					{
-						RestoredPlayerLoc.Z = GroundZ + HalfHeight;
+						if (UCharacterMovementComponent* Move = Char->GetCharacterMovement())
+						{
+							PendingRestore.SavedGravityScale = Move->GravityScale;
+							PendingRestore.bRestoreGravity = true;
+							Move->GravityScale = 0.0f;
+							Move->StopMovementImmediately();
+						}
 					}
+					LastLoadedPlayerInteriorId = bHasSavedInterior ? SaveObj->PlayerInteriorId : NAME_None;
+					UE_LOG(LogTemp, Display, TEXT("Doemitz save load waiting for World Partition streaming (jump %.0f cm, slot '%s')"),
+						JumpDistCm, *SlotName);
 				}
-				else if (TraceStaticGroundZ(World, RestoredPlayerLoc.X, RestoredPlayerLoc.Y, RestoredPlayerLoc.Z, GroundZ) && GroundZ > RestoredPlayerLoc.Z + 25.0)
-				{
-					RestoredPlayerLoc.Z = GroundZ + HalfHeight;
-				}
-				Pawn->SetActorLocationAndRotation(RestoredPlayerLoc, SaveObj->PlayerRotation, false, nullptr, ETeleportType::TeleportPhysics);
 			}
 		}
 	}

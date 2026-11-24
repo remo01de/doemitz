@@ -5,6 +5,7 @@
 #include "DoemitzDayNightController.generated.h"
 
 class ADirectionalLight;
+class AExponentialHeightFog;
 class APointLight;
 class ASkyLight;
 
@@ -34,6 +35,9 @@ public:
 
 	const TArray<TObjectPtr<APointLight>>& GetStreetLights() const { return StreetLights; }
 
+	UFUNCTION(BlueprintPure, Category = "Environment")
+	AExponentialHeightFog* GetHeightFog() const { return HeightFog; }
+
 protected:
 	virtual void BeginPlay() override;
 
@@ -43,6 +47,9 @@ private:
 
 	UPROPERTY(EditInstanceOnly, Category = "Environment")
 	TObjectPtr<ASkyLight> SkyLight;
+
+	UPROPERTY(EditInstanceOnly, Category = "Environment")
+	TObjectPtr<AExponentialHeightFog> HeightFog;
 
 	UPROPERTY(EditInstanceOnly, Category = "Environment")
 	TArray<TObjectPtr<APointLight>> StreetLights;
